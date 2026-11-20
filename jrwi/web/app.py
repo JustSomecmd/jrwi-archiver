@@ -1,0 +1,550 @@
+"""The web server: the JSON API for the apps, the archive website and the admin pages."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import logging
+import math
+import os
+import secrets
+import threading
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+from pathlib import Path
+from urllib.parse import quote
+from xml.sax.saxutils import escape
+
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+from .. import NAME, VERSION
+from ..config import SITE_BASE, Paths, new_token
+from ..crawler import Archiver
+from ..db import Db, now
+from ..organize import TABS, classify_all, reorganize
+from ..scheduler import Scheduler
+from .serialize import Serializer, clean_html, files_url, iso, safe_join, tab_name
+
+log = logging.getLogger("jrwi.web")
+HERE = Path(__file__).parent
+
+
+# --------------------------------------------------------------------------- passwords
+
+def hash_password(pw: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 240_000).hex()
+    return f"pbkdf2${salt}${digest}"
+
+
+def check_password(pw: str, stored: str) -> bool:
+    try:
+        _, salt, digest = stored.split("$")
+    except ValueError:
+        return False
+    test = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 240_000).hex()
+    return hmac.compare_digest(test, digest)
+
+
+def human_size(n) -> str:
+    if n is None:
+        return "?"
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def human_duration(s) -> str:
+    if not s:
+        return ""
+    s = int(s)
+    h, m, sec = s // 3600, s % 3600 // 60, s % 60
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+# --------------------------------------------------------------------------- app factory
+
+def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> FastAPI:
+    paths = paths or Paths.from_env()
+    db = Db(paths.data / "jrwi.db")
+    for key in ("api_token", "session_secret"):
+        if not db.setting(key):
+            db.set_setting(key, new_token())
+    env_pw = os.environ.get("JRWI_WEB_PASSWORD")
+    if env_pw and not db.setting("web_password_hash"):
+        db.set_setting("web_password_hash", hash_password(env_pw))
+
+    archiver = Archiver(db, paths)
+    scheduler = Scheduler(archiver, db)
+    ser = Serializer(db, paths)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if start_scheduler:
+            scheduler.start()
+        yield
+
+    app = FastAPI(title="JRWI archiver", version=VERSION, docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=lifespan)
+    app.add_middleware(SessionMiddleware, secret_key=db.setting("session_secret"), max_age=60 * 60 * 24 * 30,
+                       same_site="lax", session_cookie="jrwi_session")
+    app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+    templates = Jinja2Templates(directory=HERE / "templates")
+    templates.env.globals.update(files_url=files_url, human_size=human_size, human_duration=human_duration,
+                                 tab_name=tab_name, version=VERSION, quote=quote)
+    app.state.db, app.state.archiver, app.state.scheduler = db, archiver, scheduler
+
+    # ------------------------------------------------------------------ auth
+
+    def session_ok(request: Request) -> bool:
+        return bool(request.session.get("auth")) and request.session.get("pw") == (db.setting("web_password_hash") or "")[-12:]
+
+    def token_ok(request: Request) -> bool:
+        token = db.setting("api_token")
+        given = request.query_params.get("token")
+        header = request.headers.get("Authorization", "")
+        if header.lower().startswith(("token ", "bearer ")):
+            given = header.split(" ", 1)[1].strip()
+        return bool(token and given and hmac.compare_digest(given, token))
+
+    def api_auth(request: Request) -> None:
+        if not (token_ok(request) or session_ok(request)):
+            raise HTTPException(401, "missing or wrong API token")
+
+    class NeedLogin(Exception):
+        pass
+
+    def web_auth(request: Request) -> None:
+        if not session_ok(request):
+            raise NeedLogin()
+
+    @app.exception_handler(NeedLogin)
+    def _need_login(request: Request, exc: NeedLogin):
+        if not db.setting("web_password_hash"):
+            return RedirectResponse("/setup", 303)
+        return RedirectResponse(f"/login?next={quote(str(request.url.path))}", 303)
+
+    @app.exception_handler(HTTPException)
+    def _http_error(request: Request, exc: HTTPException):
+        if request.url.path.startswith(("/api/", "/files/")):
+            return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+        return HTMLResponse(f"<h1>{exc.status_code}</h1><p>{escape(str(exc.detail))}</p><p><a href='/'>Home</a></p>",
+                            status_code=exc.status_code)
+
+    def render(request: Request, name: str, **ctx) -> HTMLResponse:
+        shows = db.q("SELECT id, name FROM shows ORDER BY sort, name")
+        return templates.TemplateResponse(request, name, {
+            "shows_nav": shows, "logo": files_url(db.setting("site_logo")), "status": archiver.status.snapshot(),
+            **ctx})
+
+    # ------------------------------------------------------------------ API
+
+    def status_obj() -> dict:
+        snap = archiver.status.snapshot()
+        last = db.one("SELECT * FROM runs WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1")
+        counts = db.one("SELECT COUNT(*) AS items, SUM(status IN ('complete','partial')) AS archived, "
+                        "SUM(status='locked') AS locked, SUM(json_array_length(problems) > 0) AS problems FROM posts")
+        return {
+            "running": snap["running"], "phase": snap["phase"], "detail": snap["detail"],
+            "progress": {"done": snap["done"], "total": snap["total"]},
+            "last_check_started": last["started"] if last else None,
+            "last_check_finished": last["finished"] if last else None,
+            "next_check": scheduler.next_check.isoformat(timespec="seconds") if scheduler.next_check else None,
+            "last_result": last["result"] if last else None, "message": last["message"] if last else None,
+            "login_ok": (last["result"] != "login_failed") if last else None,
+            "counts": {k: int(counts[k] or 0) for k in ("items", "archived", "locked", "problems")},
+            "disk": scheduler.disk(),
+        }
+
+    def paged(rows_sql: str, args: list, page: int, page_size: int) -> dict:
+        page, page_size = max(1, page), max(1, min(page_size, 200))
+        total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
+        rows = db.q(f"{rows_sql} LIMIT ? OFFSET ?", args + [page_size, (page - 1) * page_size])
+        return {"items": [ser.summary(r) for r in rows], "page": page, "page_size": page_size, "total": total}
+
+    def item_query(show=None, tab=None, kind=None, q=None, order="desc", include_locked=False) -> tuple[str, list]:
+        where, args = ["pair_id IS NULL", "status != 'gone'"], []
+        if not include_locked:
+            where.append("status != 'locked'")
+        if show:
+            where.append("show_id = ?")
+            args.append(show)
+        if tab:
+            where.append("tab = ?")
+            args.append(tab)
+        if kind:
+            where.append({"video": "(json_extract(media,'$.video.path') IS NOT NULL OR path_kind IN ('videos','video_embeds'))",
+                          "audio": "(path_kind = 'audio' OR json_extract(media,'$.audio.path') IS NOT NULL "
+                                   "OR id IN (SELECT pair_id FROM posts WHERE path_kind='audio'))",
+                          "post": "path_kind = 'posts'"}.get(kind, "1=1"))
+        if q:
+            where.append("(title LIKE ? OR body_text LIKE ?)")
+            args += [f"%{q}%", f"%{q}%"]
+        direction = "ASC" if order == "asc" else "DESC"
+        if tab == "episodes":
+            order_by = f"episode {direction}, published {direction}, id {direction}"
+        else:
+            order_by = f"published {direction}, id {direction}"
+        return f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY {order_by}", args
+
+    @app.get("/api/ping")
+    def api_ping():
+        return {"name": NAME, "version": VERSION}
+
+    @app.get("/api/status", dependencies=[Depends(api_auth)])
+    def api_status():
+        return status_obj()
+
+    @app.post("/api/check", dependencies=[Depends(api_auth)])
+    def api_check(full: bool = False):
+        if scheduler.check_now(full=full):
+            return JSONResponse({"started": True}, status_code=202)
+        return JSONResponse({"error": "a check is already running"}, status_code=409)
+
+    @app.get("/api/shows", dependencies=[Depends(api_auth)])
+    def api_shows(include_empty: bool = False):
+        out = [ser.show(r) for r in db.q("SELECT * FROM shows ORDER BY sort, name")]
+        return [s for s in out if s["item_count"] or include_empty]
+
+    @app.get("/api/shows/{show_id}", dependencies=[Depends(api_auth)])
+    def api_show(show_id: str):
+        row = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
+        if not row:
+            raise HTTPException(404, "no such show")
+        return ser.show(row, with_tabs=True)
+
+    @app.get("/api/shows/{show_id}/items", dependencies=[Depends(api_auth)])
+    def api_show_items(show_id: str, tab: str | None = None, order: str = "desc", page: int = 1, page_size: int = 50,
+                       include_locked: bool = False):
+        sql, args = item_query(show=show_id, tab=tab, order=order, include_locked=include_locked)
+        return paged(sql, args, page, page_size)
+
+    @app.get("/api/items", dependencies=[Depends(api_auth)])
+    def api_items(q: str | None = None, show: str | None = None, tab: str | None = None, kind: str | None = None,
+                  order: str = "desc", page: int = 1, page_size: int = 50, include_locked: bool = False):
+        sql, args = item_query(show=show, tab=tab, kind=kind, q=q, order=order, include_locked=include_locked)
+        return paged(sql, args, page, page_size)
+
+    @app.get("/api/latest", dependencies=[Depends(api_auth)])
+    def api_latest(limit: int = 20):
+        sql, args = item_query()
+        return [ser.summary(r) for r in db.q(f"{sql} LIMIT ?", args + [max(1, min(limit, 100))])]
+
+    def get_primary(post_id: int) -> dict:
+        p = ser.primary_of(post_id)
+        if not p:
+            raise HTTPException(404, "no such item")
+        return p
+
+    @app.get("/api/items/{post_id}", dependencies=[Depends(api_auth)])
+    def api_item(post_id: int):
+        return ser.full(get_primary(post_id))
+
+    @app.get("/api/items/{post_id}/comments", dependencies=[Depends(api_auth)])
+    def api_comments(post_id: int, page: int = 1, page_size: int = 50):
+        return ser.comments(get_primary(post_id), max(1, page), max(1, min(page_size, 200)))
+
+    @app.get("/api/audio/{post_id}", dependencies=[Depends(api_auth)])
+    def api_audio(post_id: int):
+        p = db.post(post_id)
+        audio = (p or {}).get("media", {}).get("audio") if p else None
+        f = safe_join(paths.archive, audio["path"]) if audio else None
+        if not f or not f.exists():
+            raise HTTPException(404, "no audio for this post")
+        return FileResponse(f, media_type=audio.get("mime") or "audio/mp4", filename=f.name,
+                            content_disposition_type="inline")
+
+    @app.get("/api/video/{post_id}", dependencies=[Depends(api_auth)])
+    def api_video(post_id: int):
+        p = db.post(post_id)
+        video = (p or {}).get("media", {}).get("video") if p else None
+        f = safe_join(paths.media, video["path"]) if video else None
+        if not f or not f.exists():
+            raise HTTPException(404, "no video for this post")
+        return FileResponse(f, media_type="video/mp4", filename=f.name, content_disposition_type="inline")
+
+    @app.get("/api/progress/{post_id}", dependencies=[Depends(api_auth)])
+    def api_progress(post_id: int):
+        row = db.one("SELECT * FROM progress WHERE post_id=?", (post_id,))
+        if not row:
+            return {"position": 0, "duration": None, "finished": False, "updated_at": None}
+        return {"position": row["position"], "duration": row["duration"], "finished": bool(row["finished"]),
+                "updated_at": row["updated_at"]}
+
+    @app.put("/api/progress/{post_id}", dependencies=[Depends(api_auth)])
+    async def api_set_progress(post_id: int, request: Request):
+        body = await request.json()
+        if not db.post(post_id):
+            raise HTTPException(404, "no such post")
+        db.upsert("progress", "post_id", {"post_id": post_id, "position": float(body.get("position") or 0),
+                                          "duration": body.get("duration"), "finished": bool(body.get("finished")),
+                                          "updated_at": now()})
+        return api_progress(post_id)
+
+    @app.get("/api/events", dependencies=[Depends(api_auth)])
+    def api_events(since: str | None = None):
+        if not since:
+            since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+        rows = db.q("SELECT * FROM events WHERE at > ? ORDER BY id", (since,))
+        return [{"type": r["type"], "at": r["at"], "post_id": r["post_id"], "title": r["title"],
+                 "message": r["message"]} for r in rows]
+
+    @app.get("/api/problems", dependencies=[Depends(api_auth)])
+    def api_problems():
+        rows = db.q("SELECT id, title, problems, status FROM posts WHERE json_array_length(problems) > 0 "
+                    "ORDER BY published DESC")
+        return [{"post_id": r["id"], "title": r["title"], "status": r["status"], "problems": r["problems"]} for r in rows]
+
+    @app.get("/api/feed.xml", dependencies=[Depends(api_auth)])
+    def api_feed(request: Request):
+        base = (db.setting("public_url") or str(request.base_url)).rstrip("/")
+        token = db.setting("api_token")
+        rows = db.q("SELECT * FROM posts WHERE json_extract(media,'$.audio.path') IS NOT NULL "
+                    "ORDER BY published DESC, id DESC")
+        logo = db.setting("site_logo")
+        items = []
+        for r in rows:
+            a = r["media"]["audio"]
+            date = r["published"] or r["first_seen"]
+            try:
+                pub = format_datetime(datetime.fromisoformat(iso(date)))
+            except (TypeError, ValueError):
+                pub = ""
+            items.append(
+                f"<item><title>{escape(r['title'])}</title><guid isPermaLink=\"false\">jrwi-{r['id']}</guid>"
+                f"<pubDate>{pub}</pubDate><description>{escape(r['body_text'] or '')}</description>"
+                f"<enclosure url=\"{escape(f'{base}/api/audio/{r['id']}?token={token}')}\" "
+                f"length=\"{a.get('size') or 0}\" type=\"{escape(a.get('mime') or 'audio/mp4')}\"/>"
+                + (f"<itunes:duration>{r['duration']}</itunes:duration>" if r["duration"] else "")
+                + "</item>")
+        image = f"<itunes:image href=\"{escape(base + files_url(logo) + '?token=' + token)}\"/>" if logo else ""
+        xml = ('<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0" '
+               'xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>'
+               "<title>Just Roll With It (members archive)</title>"
+               f"<link>{escape(SITE_BASE)}/supporters</link><description>Private archive</description>"
+               f"<itunes:block>Yes</itunes:block>{image}" + "".join(items) + "</channel></rss>")
+        return Response(xml, media_type="application/rss+xml")
+
+    @app.get("/files/{rel:path}", dependencies=[Depends(api_auth)])
+    def files(rel: str):
+        f = safe_join(paths.archive, rel)
+        if not f or not f.is_file():
+            raise HTTPException(404, "not found")
+        return FileResponse(f)
+
+    # ------------------------------------------------------------------ login
+
+    @app.get("/setup", response_class=HTMLResponse)
+    def setup_page(request: Request):
+        if db.setting("web_password_hash"):
+            return RedirectResponse("/login", 303)
+        return templates.TemplateResponse(request, "login.html", {"setup": True, "error": None, "next": "/admin/settings"})
+
+    @app.post("/setup")
+    def setup_post(request: Request, password: str = Form(...), password2: str = Form(...)):
+        if db.setting("web_password_hash"):
+            return RedirectResponse("/login", 303)
+        if len(password) < 8 or password != password2:
+            return templates.TemplateResponse(request, "login.html", {
+                "setup": True, "next": "/admin/settings",
+                "error": "Use at least 8 characters, and type the same password twice."}, status_code=400)
+        db.set_setting("web_password_hash", hash_password(password))
+        request.session.update(auth=True, pw=db.setting("web_password_hash")[-12:])
+        return RedirectResponse("/admin/settings", 303)
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request, next: str = "/"):
+        if not db.setting("web_password_hash"):
+            return RedirectResponse("/setup", 303)
+        return templates.TemplateResponse(request, "login.html", {"setup": False, "error": None, "next": next})
+
+    @app.post("/login")
+    def login_post(request: Request, password: str = Form(...), next: str = Form("/")):
+        stored = db.setting("web_password_hash") or ""
+        if not check_password(password, stored):
+            return templates.TemplateResponse(request, "login.html", {
+                "setup": False, "error": "That password isn't right.", "next": next}, status_code=401)
+        request.session.update(auth=True, pw=stored[-12:])
+        return RedirectResponse(next if next.startswith("/") and not next.startswith("//") else "/", 303)
+
+    @app.get("/logout")
+    def logout(request: Request):
+        request.session.clear()
+        return RedirectResponse("/login", 303)
+
+    # ------------------------------------------------------------------ archive website
+
+    @app.get("/", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def home(request: Request):
+        sql, args = item_query()
+        latest = [ser.summary(r) for r in db.q(f"{sql} LIMIT 12", args)]
+        shows = [ser.show(r) for r in db.q("SELECT * FROM shows ORDER BY sort, name")]
+        shows = [s for s in shows if s["item_count"]]
+        return render(request, "home.html", latest=latest, shows=shows)
+
+    @app.get("/shows/{show_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def show_page(request: Request, show_id: str, tab: str | None = None, page: int = 1, order: str = "desc"):
+        row = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
+        if not row:
+            raise HTTPException(404, "No such show")
+        show = ser.show(row, with_tabs=True)
+        tab = tab or (show["tabs"][0]["id"] if show["tabs"] else None)
+        sql, args = item_query(show=show_id, tab=tab, order=order)
+        data = paged(sql, args, page, 48)
+        return render(request, "show.html", show=show, tab=tab, data=data, order=order,
+                      pages=math.ceil(data["total"] / data["page_size"]) or 1)
+
+    @app.get("/feed", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def feed(request: Request, q: str | None = None, page: int = 1, locked: bool = False):
+        where, args = ["status != 'gone'"], []
+        if not locked:
+            where.append("status != 'locked'")
+        if q:
+            where.append("(title LIKE ? OR body_text LIKE ?)")
+            args += [f"%{q}%", f"%{q}%"]
+        rows_sql = f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY published DESC, id DESC"
+        total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
+        rows = db.q(f"{rows_sql} LIMIT 20 OFFSET ?", args + [(max(1, page) - 1) * 20])
+        posts = []
+        for r in rows:
+            full = ser.full(ser.primary_of(r["id"]) or r) if not r["pair_id"] else ser.full(r)
+            full["self_id"] = r["id"]
+            full["self_title"] = r["title"]
+            posts.append(full)
+        return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
+                      pages=math.ceil(total / 20) or 1, locked=locked)
+
+    @app.get("/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def item_page(request: Request, post_id: int):
+        primary = get_primary(post_id)
+        item = ser.full(primary)
+        comments = ser.comments(primary, 1, 1000)
+        show = db.one("SELECT id, name FROM shows WHERE id=?", (item["show"],))
+        progress = api_progress(item["audio"]["post_id"]) if item["audio"] else None
+        return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=progress)
+
+    @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def pages_index(request: Request):
+        return render(request, "pages.html", pages=db.q("SELECT path, title, fetched FROM pages ORDER BY path"))
+
+    @app.get("/page/{path:path}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def page_view(request: Request, path: str):
+        row = db.one("SELECT * FROM pages WHERE path=?", ("/" + path.strip("/"),))
+        if not row:
+            raise HTTPException(404, "That page hasn't been saved")
+        return render(request, "page.html", page=row, html=clean_html(row["main_html"]))
+
+    # ------------------------------------------------------------------ admin
+
+    @app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin(request: Request):
+        runs = db.q("SELECT * FROM runs ORDER BY id DESC LIMIT 15")
+        events = db.q("SELECT * FROM events ORDER BY id DESC LIMIT 20")
+        return render(request, "admin.html", st=status_obj(), runs=runs, events=events,
+                      configured=bool(db.setting("site_email") or os.environ.get("JRWI_EMAIL")))
+
+    @app.post("/admin/check", dependencies=[Depends(web_auth)])
+    def admin_check(full: str = Form("")):
+        scheduler.check_now(full=bool(full))
+        return RedirectResponse("/admin", 303)
+
+    @app.post("/admin/stop", dependencies=[Depends(web_auth)])
+    def admin_stop():
+        scheduler.stop()
+        return RedirectResponse("/admin", 303)
+
+    @app.get("/admin/problems", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin_problems(request: Request):
+        return render(request, "problems.html", rows=api_problems())
+
+    @app.get("/admin/settings", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin_settings(request: Request, saved: bool = False):
+        return render(request, "settings.html", s=db.settings(), saved=saved,
+                      env_login=bool(os.environ.get("JRWI_EMAIL")))
+
+    @app.post("/admin/settings", dependencies=[Depends(web_auth)])
+    async def admin_settings_post(request: Request):
+        form = await request.form()
+        s = db.settings()
+        for key in ("site_email", "notify_url", "public_url"):
+            db.set_setting(key, (form.get(key) or "").strip())
+        if form.get("site_password"):
+            db.set_setting("site_password", form["site_password"])
+            archiver.client.clear_cookies()
+        for key, cast in (("check_interval_hours", float), ("max_height", int), ("comment_refresh_days", int),
+                          ("request_delay", float)):
+            try:
+                db.set_setting(key, cast(form.get(key) or s[key]))
+            except ValueError:
+                pass
+        for key in ("video", "audio", "images", "attachments", "comments", "google_docs", "public_pages",
+                    "youtube_embeds"):
+            db.set_setting(key, form.get(key) == "on")
+        if form.get("new_web_password"):
+            if len(form["new_web_password"]) >= 8:
+                db.set_setting("web_password_hash", hash_password(form["new_web_password"]))
+                request.session.update(auth=True, pw=db.setting("web_password_hash")[-12:])
+        if form.get("regenerate_token"):
+            db.set_setting("api_token", new_token())
+        return RedirectResponse("/admin/settings?saved=1", 303)
+
+    @app.get("/admin/shows", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin_shows(request: Request):
+        return render(request, "admin_shows.html", rows=[{**r, **ser.show(r)} for r in
+                                                          db.q("SELECT * FROM shows ORDER BY sort, name")])
+
+    @app.post("/admin/shows", dependencies=[Depends(web_auth)])
+    async def admin_shows_post(request: Request):
+        form = await request.form()
+        for r in db.q("SELECT id FROM shows"):
+            if f"aliases_{r['id']}" in form:
+                aliases = [a.strip() for a in form[f"aliases_{r['id']}"].split(",") if a.strip()]
+                db.update("shows", "id", r["id"], {"aliases": aliases})
+        classify_all(db)
+        reorganize(db, paths)
+        return RedirectResponse("/admin/shows", 303)
+
+    @app.get("/admin/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin_item(request: Request, post_id: int):
+        p = db.post(post_id)
+        if not p:
+            raise HTTPException(404, "No such post")
+        return render(request, "admin_item.html", p=p, shows=db.q("SELECT id, name FROM shows ORDER BY sort"),
+                      tabs=TABS)
+
+    @app.post("/admin/items/{post_id}", dependencies=[Depends(web_auth)])
+    async def admin_item_post(request: Request, post_id: int):
+        form = await request.form()
+        fields = {"show_override": form.get("show_override") or None, "tab_override": form.get("tab_override") or None}
+        ep = (form.get("episode_override") or "").strip()
+        fields["episode_override"] = int(ep) if ep.isdigit() else None
+        if form.get("rearchive"):
+            fields["status"] = "new"
+        db.update("posts", "id", post_id, fields)
+        classify_all(db)
+        reorganize(db, paths)
+        return RedirectResponse(f"/admin/items/{post_id}", 303)
+
+    @app.post("/admin/reparse", dependencies=[Depends(web_auth)])
+    def admin_reparse():
+        if not archiver.status.running:
+            def work():
+                archiver.status.set(running=True, phase="re-reading saved pages", detail="", started=now())
+                try:
+                    archiver.reparse()
+                except Exception:
+                    log.exception("re-reading failed")
+                finally:
+                    archiver.status.set(running=False, phase="idle", detail="")
+            threading.Thread(target=work, name="jrwi-reparse", daemon=True).start()
+        return RedirectResponse("/admin", 303)
+
+    return app

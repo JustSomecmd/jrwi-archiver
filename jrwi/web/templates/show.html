@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% from "macros.html" import item_card, pager %}
+{% block title %}{{ show.name }} · JRWI archive{% endblock %}
+{% block content %}
+{% if show.banner %}<div class="banner" style="background-image:url('{{ show.banner }}')"></div>{% endif %}
+<h1>{{ show.name }}</h1>
+{% if show.description %}<p class="muted">{{ show.description }}</p>{% endif %}
+<div class="tabs">
+  {% for t in show.tabs %}
+    <a href="/shows/{{ show.id }}?tab={{ t.id }}" {% if t.id == tab %}class="on"{% endif %}>{{ t.name }} · {{ t.count }}</a>
+  {% endfor %}
+  <a href="/shows/{{ show.id }}?tab={{ tab }}&order={{ 'asc' if order == 'desc' else 'desc' }}" class="ghost">
+    {{ 'Oldest first' if order == 'desc' else 'Newest first' }}</a>
+</div>
+{% if data['items'] %}
+<div class="grid">{% for it in data['items'] %}{{ item_card(it) }}{% endfor %}</div>
+{% else %}<p class="muted">Nothing here yet.</p>{% endif %}
+{{ pager(data.page, pages, '/shows/' ~ show.id ~ '?tab=' ~ tab ~ '&order=' ~ order ~ '&') }}
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% from "macros.html" import pager %}
+{% set active = 'feed' %}
+{% block title %}Feed · JRWI archive{% endblock %}
+{% block content %}
+<form class="searchbar" method="get" action="/feed">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search titles and text">
+  <label class="check small"><input type="checkbox" name="locked" {% if locked %}checked{% endif %}> Show locked</label>
+  <button type="submit">Search</button>
+</form>
+{% for p in posts %}
+<div class="post {% if p.locked %}locked{% endif %}">
+  <div class="meta">
+    <span>{{ (p.date or '')[:10] }}</span><span>{{ tab_name(p.tab) }}</span>
+    {% if p.like_count is not none %}<span>♥ {{ p.like_count }}</span>{% endif %}
+    {% if p.comment_count %}<span>{{ p.comment_count }} comments</span>{% endif %}
+    {% if p.locked %}<span class="badge">Not in your tier</span>{% endif %}
+  </div>
+  <h2><a href="/items/{{ p.self_id }}">{{ p.self_title }}</a></h2>
+  {% if p.thumbnail and (p.video or p.audio) %}<a href="/items/{{ p.self_id }}"><img src="{{ p.thumbnail }}" alt="" style="max-width:420px;border-radius:8px"></a>{% endif %}
+  <div class="rich">{{ p.body_html | safe }}</div>
+  {% if p.images %}<div class="gallery">{% for i in p.images[:8] %}<img loading="lazy" src="{{ i.url }}" alt="">{% endfor %}</div>{% endif %}
+  {% if p.attachments %}<div class="files">{% for f in p.attachments %}<a href="{{ f.url }}" download>📎 {{ f.name }}</a>{% endfor %}</div>{% endif %}
+</div>
+{% else %}
+<p class="muted">Nothing found.</p>
+{% endfor %}
+{{ pager(page, pages, '/feed?q=' ~ (q|urlencode) ~ ('&locked=on' if locked else '') ~ '&') }}
+{% endblock %}

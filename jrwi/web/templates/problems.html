@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}Problems · JRWI archive{% endblock %}
+{% block content %}
+<p class="small"><a href="/admin">Admin</a></p>
+<h1>Problems</h1>
+<p class="muted">Failed downloads are tried again on the next check. Notes (like a private Google Doc) stay until the post changes.</p>
+<div class="panel"><table>
+  <tr><th>Post</th><th>Status</th><th>What happened</th></tr>
+  {% for r in rows %}
+  <tr><td><a href="/items/{{ r.post_id }}">{{ r.title }}</a></td><td>{{ r.status }}</td>
+      <td>{% for p in r.problems %}<div class="small">{{ p }}</div>{% endfor %}</td></tr>
+  {% else %}<tr><td colspan="3" class="muted">No problems.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

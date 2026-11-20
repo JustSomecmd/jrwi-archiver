@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}Admin · JRWI archive{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+<p class="small"><a href="/admin/settings">Settings</a> · <a href="/admin/shows">Shows</a> ·
+  <a href="/admin/problems">Problems ({{ st.counts.problems }})</a></p>
+{% if not configured %}
+  <div class="notice">Add your jrwishow.com email and password in <a href="/admin/settings">Settings</a> before the first check.</div>
+{% endif %}
+{% if st.last_result in ('login_failed', 'blocked', 'error') %}
+  <div class="notice">The last check ended with <b>{{ st.last_result.replace('_', ' ') }}</b>: {{ st.message }}</div>
+{% endif %}
+
+<div class="panel" data-live-status data-was-running="{{ '1' if st.running else '0' }}">
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:center">
+    <div>
+      <b data-phase>{{ st.phase if st.running else 'Idle' }}</b>
+      <span class="muted small" data-count></span>
+      <div class="muted small" data-detail>{{ st.detail if st.running else '' }}</div>
+    </div>
+    <div>
+      {% if st.running %}
+        <form class="inline" method="post" action="/admin/stop"><button class="danger">Stop</button></form>
+      {% else %}
+        <form class="inline" method="post" action="/admin/check"><button>Check now</button></form>
+        <form class="inline" method="post" action="/admin/check"><input type="hidden" name="full" value="1">
+          <button class="ghost" title="Reads the whole feed instead of stopping at posts it already has">Full check</button></form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="bar" {% if not (st.running and st.progress.total) %}hidden{% endif %}><i data-bar style="width:0"></i></div>
+</div>
+
+<div class="stats">
+  <div class="stat"><b>{{ st.counts.archived }}</b><span class="muted small">posts archived</span></div>
+  <div class="stat"><b>{{ st.counts['items'] }}</b><span class="muted small">posts seen</span></div>
+  <div class="stat"><b>{{ st.counts.locked }}</b><span class="muted small">above your tier</span></div>
+  <div class="stat"><b>{{ human_size(st.disk.archive_bytes) }}</b><span class="muted small">archive size</span></div>
+  <div class="stat"><b>{{ human_size(st.disk.free_bytes) }}</b><span class="muted small">free space</span></div>
+  <div class="stat"><b>{{ (st.next_check or 'manual only')[:16].replace('T', ' ') }}</b><span class="muted small">next check (UTC)</span></div>
+</div>
+
+<div class="cols" style="margin-top:1rem">
+  <div class="panel">
+    <h3>Recent checks</h3>
+    <table>
+      <tr><th>Started (UTC)</th><th>Result</th><th>New</th><th>Archived</th></tr>
+      {% for r in runs %}
+      <tr><td>{{ (r.started or '')[:16].replace('T', ' ') }}</td>
+          <td class="result-{{ r.result }}" title="{{ r.message or '' }}">{{ (r.result or '').replace('_', ' ') }}</td>
+          <td>{{ r.new_items or 0 }}</td><td>{{ r.archived or 0 }}</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">No checks yet.</td></tr>{% endfor %}
+    </table>
+  </div>
+  <div class="panel">
+    <h3>Events</h3>
+    <table>
+      {% for e in events %}
+      <tr><td class="muted small">{{ (e.at or '')[:16].replace('T', ' ') }}</td>
+          <td>{% if e.post_id %}<a href="/items/{{ e.post_id }}">{{ e.title }}</a>{% else %}{{ e.type.replace('_', ' ') }}: {{ e.message }}{% endif %}</td></tr>
+      {% else %}<tr><td class="muted">Nothing yet.</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>Re-read saved pages</h3>
+  <p class="muted small">Every post page and comment thread is saved as it was downloaded. After an update to this app,
+    this reads them again with the newer rules without downloading anything.</p>
+  <form method="post" action="/admin/reparse"><button class="ghost" {% if st.running %}disabled{% endif %}>Re-read saved pages</button></form>
+</div>
+{% endblock %}

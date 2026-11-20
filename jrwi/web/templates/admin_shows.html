@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}Shows · JRWI archive{% endblock %}
+{% block content %}
+<p class="small"><a href="/admin">Admin</a></p>
+<h1>Shows</h1>
+<p class="muted">Posts are sorted into shows by matching the show's name, or one of its other names, in the title or tags.
+  Add other names here (comma separated) if posts land in the wrong place. For a single post, use Edit on its page.</p>
+<form method="post" action="/admin/shows">
+<div class="panel"><table>
+  <tr><th>Show</th><th>Items</th><th>Other names</th></tr>
+  {% for r in rows %}
+  <tr><td><a href="/shows/{{ r.id }}">{{ r.name }}</a><div class="muted small">{{ r.id }}</div></td>
+      <td>{{ r.item_count }}</td>
+      <td>{% if r.id != 'other' %}<input type="text" name="aliases_{{ r.id }}" value="{{ (r.aliases or []) | join(', ') }}">{% endif %}</td></tr>
+  {% endfor %}
+</table></div>
+<p><button type="submit">Save and re-sort</button></p>
+</form>
+{% endblock %}

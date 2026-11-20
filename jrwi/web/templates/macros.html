@@ -1,0 +1,39 @@
+{% macro item_card(it) %}
+<a class="card {% if it.locked %}locked{% endif %}" href="/items/{{ it.id }}">
+  <div class="thumb" {% if it.thumbnail %}style="background-image:url('{{ it.thumbnail }}')"{% endif %}>
+    <div class="badges">
+      {% if it.episode and it.tab == 'episodes' %}<span class="badge acc">#{{ it.episode }}</span>{% endif %}
+      {% if it.video %}<span class="badge">Video</span>{% endif %}
+      {% if it.audio %}<span class="badge">Audio</span>{% endif %}
+      {% if it.locked %}<span class="badge">Locked</span>{% endif %}
+    </div>
+    {% if it.duration %}<span class="dur">{{ human_duration(it.duration) }}</span>{% endif %}
+  </div>
+  <div class="body">
+    <div class="title">{{ it.title }}</div>
+    <div class="muted small">{{ (it.date or '')[:10] }}{% if it.comment_count %} · {{ it.comment_count }} comments{% endif %}</div>
+  </div>
+</a>
+{% endmacro %}
+
+{% macro comment_tree(c) %}
+<div class="comment">
+  <div class="av" {% if c.author.avatar %}style="background-image:url('{{ c.author.avatar }}')"{% endif %}></div>
+  <div style="flex:1">
+    <div><span class="who">{{ c.author.name or 'Member' }}</span><span class="when">{{ c.date_text or (c.date or '')[:10] }}</span>
+      {% if c.like_count %}<span class="when">♥ {{ c.like_count }}</span>{% endif %}</div>
+    <div class="rich">{{ c.body_html | safe if c.body_html else c.body_text }}</div>
+    {% if c.replies %}<div class="replies">{% for r in c.replies %}{{ comment_tree(r) }}{% endfor %}</div>{% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{% macro pager(page, pages, base) %}
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a href="{{ base }}page={{ page - 1 }}">Newer</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="{{ base }}page={{ page + 1 }}">Older</a>{% endif %}
+</div>
+{% endif %}
+{% endmacro %}

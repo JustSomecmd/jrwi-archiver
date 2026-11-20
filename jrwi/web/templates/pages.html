@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% set active = 'pages' %}
+{% block title %}Pages · JRWI archive{% endblock %}
+{% block content %}
+<h1>Site pages</h1>
+<p class="muted">Copies of the site's own pages, refreshed once a day.</p>
+{% if pages %}
+<div class="panel"><table>
+  <tr><th>Page</th><th>Address</th><th>Saved</th></tr>
+  {% for p in pages %}
+  <tr><td><a href="/page{{ p.path }}">{{ p.title or p.path }}</a></td><td class="muted">{{ p.path }}</td>
+      <td class="muted">{{ (p.fetched or '')[:16].replace('T', ' ') }}</td></tr>
+  {% endfor %}
+</table></div>
+{% else %}<p class="muted">No pages saved yet. They're saved during each check.</p>{% endif %}
+{% endblock %}

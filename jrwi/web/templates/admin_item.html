@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}Edit · {{ p.title }}{% endblock %}
+{% block content %}
+<p class="small"><a href="/items/{{ p.id }}">Back to the post</a></p>
+<h1>{{ p.title }}</h1>
+<div class="cols">
+<form class="panel" method="post" action="/admin/items/{{ p.id }}">
+  <h3>Placement</h3>
+  <p class="muted small">Sorted automatically as <b>{{ p.show_id }}</b> / <b>{{ tab_name(p.tab or 'posts') }}</b>
+    {% if p.episode %}/ episode {{ p.episode }}{% endif %}. Choose something here to override it. Videos move in Jellyfin to match.</p>
+  <label for="show">Show</label>
+  <select id="show" name="show_override"><option value="">Automatic</option>
+    {% for s in shows %}<option value="{{ s.id }}" {% if p.show_override == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select>
+  <label for="tab">Tab</label>
+  <select id="tab" name="tab_override"><option value="">Automatic</option>
+    {% for t, name in tabs %}<option value="{{ t }}" {% if p.tab_override == t %}selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+  <label for="ep">Episode number</label>
+  <input id="ep" type="number" name="episode_override" value="{{ p.episode_override if p.episode_override is not none else '' }}" placeholder="Automatic">
+  <label class="check"><input type="checkbox" name="rearchive"> Download this post again on the next check</label>
+  <p><button type="submit">Save</button></p>
+</form>
+<div class="panel">
+  <h3>Details</h3>
+  <table>
+    <tr><th>Post ID</th><td>{{ p.id }}</td></tr>
+    <tr><th>Status</th><td>{{ p.status }}</td></tr>
+    <tr><th>Type</th><td>{{ p.path_kind }}</td></tr>
+    <tr><th>Visible to</th><td>{{ p.access }}</td></tr>
+    <tr><th>Original</th><td><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.url }}</a></td></tr>
+    <tr><th>Video file</th><td class="small">{{ (p.media or {}).get('video', {}).get('path', '') }}</td></tr>
+    <tr><th>Audio file</th><td class="small">{{ (p.media or {}).get('audio', {}).get('path', '') }}</td></tr>
+    <tr><th>Grouped with</th><td>{% if p.pair_id %}<a href="/admin/items/{{ p.pair_id }}">{{ p.pair_id }}</a>{% endif %}</td></tr>
+    <tr><th>Last read</th><td>{{ p.last_fetched or '' }}</td></tr>
+    <tr><th>Problems</th><td class="small">{% for x in p.problems %}<div>{{ x }}</div>{% endfor %}</td></tr>
+  </table>
+</div>
+</div>
+{% endblock %}

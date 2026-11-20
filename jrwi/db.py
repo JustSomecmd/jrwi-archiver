@@ -1,0 +1,167 @@
+"""SQLite storage. One connection shared between the web server and the checker, behind a lock."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from .config import DEFAULTS
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+
+CREATE TABLE IF NOT EXISTS posts (
+    id INTEGER PRIMARY KEY,
+    url TEXT, path_kind TEXT, title TEXT,
+    published TEXT, date_text TEXT,
+    access TEXT, locked INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0,
+    tag_ids TEXT DEFAULT '[]', duration INTEGER,
+    like_count INTEGER, comment_count INTEGER,
+    body_html TEXT, body_text TEXT,
+    links TEXT DEFAULT '[]', images TEXT DEFAULT '[]', attachments TEXT DEFAULT '[]',
+    documents TEXT DEFAULT '[]', embeds TEXT DEFAULT '[]', media TEXT DEFAULT '{}',
+    thumbnail TEXT, files TEXT DEFAULT '{}',
+    show_id TEXT, tab TEXT, episode INTEGER, special INTEGER, pair_id INTEGER,
+    show_override TEXT, tab_override TEXT, episode_override INTEGER,
+    status TEXT DEFAULT 'new', problems TEXT DEFAULT '[]', skipped TEXT DEFAULT '[]',
+    first_seen TEXT, last_fetched TEXT, comments_fetched TEXT
+);
+CREATE INDEX IF NOT EXISTS posts_show ON posts(show_id, tab);
+CREATE INDEX IF NOT EXISTS posts_published ON posts(published);
+
+CREATE TABLE IF NOT EXISTS comments (
+    id TEXT PRIMARY KEY, post_id INTEGER, parent_id TEXT,
+    author_name TEXT, author_avatar TEXT, date TEXT, date_text TEXT,
+    body_html TEXT, body_text TEXT, like_count INTEGER, position INTEGER,
+    raw TEXT
+);
+CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id, position);
+
+CREATE TABLE IF NOT EXISTS shows (
+    id TEXT PRIMARY KEY, name TEXT, description TEXT, page_url TEXT,
+    poster TEXT, banner TEXT, sort INTEGER, aliases TEXT DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS tags (id TEXT PRIMARY KEY, name TEXT, count INTEGER);
+
+CREATE TABLE IF NOT EXISTS pages (
+    path TEXT PRIMARY KEY, title TEXT, file TEXT, fetched TEXT, main_html TEXT
+);
+
+CREATE TABLE IF NOT EXISTS progress (
+    post_id INTEGER PRIMARY KEY, position REAL, duration REAL, finished INTEGER, updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, at TEXT, post_id INTEGER, title TEXT, message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, started TEXT, finished TEXT, result TEXT, message TEXT,
+    new_items INTEGER DEFAULT 0, archived INTEGER DEFAULT 0
+);
+"""
+
+JSON_FIELDS = {"tag_ids", "links", "images", "attachments", "documents", "embeds", "media", "files",
+               "problems", "skipped", "aliases"}
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class Db:
+    def __init__(self, path: Path) -> None:
+        self.lock = threading.RLock()
+        self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
+        self.conn.row_factory = sqlite3.Row
+        with self.lock:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA foreign_keys=ON")
+            self.conn.executescript(SCHEMA)
+
+    # ------------------------------------------------------------------ basics
+
+    def q(self, sql: str, args: Iterable = ()) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(sql, tuple(args)).fetchall()
+        return [self._decode(r) for r in rows]
+
+    def one(self, sql: str, args: Iterable = ()) -> dict | None:
+        rows = self.q(sql, args)
+        return rows[0] if rows else None
+
+    def x(self, sql: str, args: Iterable = ()) -> int:
+        with self.lock:
+            cur = self.conn.execute(sql, tuple(args))
+            return cur.lastrowid
+
+    @staticmethod
+    def _decode(row: sqlite3.Row) -> dict:
+        d = dict(row)
+        for k in JSON_FIELDS & d.keys():
+            if isinstance(d[k], str):
+                try:
+                    d[k] = json.loads(d[k])
+                except ValueError:
+                    pass
+        return d
+
+    @staticmethod
+    def _encode(v: Any) -> Any:
+        if isinstance(v, (list, dict)):
+            return json.dumps(v, ensure_ascii=False)
+        if isinstance(v, bool):
+            return int(v)
+        return v
+
+    def upsert(self, table: str, key: str, row: dict) -> None:
+        cols = list(row.keys())
+        vals = [self._encode(row[c]) for c in cols]
+        updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c != key)
+        sql = (f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
+               f"ON CONFLICT({key}) DO " + (f"UPDATE SET {updates}" if updates else "NOTHING"))
+        self.x(sql, vals)
+
+    def update(self, table: str, key: str, key_value: Any, fields: dict) -> None:
+        if not fields:
+            return
+        sets = ", ".join(f"{c}=?" for c in fields)
+        self.x(f"UPDATE {table} SET {sets} WHERE {key}=?", [self._encode(v) for v in fields.values()] + [key_value])
+
+    # ------------------------------------------------------------------ settings
+
+    def setting(self, key: str) -> Any:
+        row = self.one("SELECT value FROM settings WHERE key=?", (key,))
+        if row is None:
+            return DEFAULTS.get(key)
+        try:
+            return json.loads(row["value"])
+        except ValueError:
+            return row["value"]
+
+    def settings(self) -> dict:
+        out = dict(DEFAULTS)
+        for r in self.q("SELECT key, value FROM settings"):
+            try:
+                out[r["key"]] = json.loads(r["value"])
+            except ValueError:
+                out[r["key"]] = r["value"]
+        return out
+
+    def set_setting(self, key: str, value: Any) -> None:
+        self.x("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+               (key, json.dumps(value)))
+
+    # ------------------------------------------------------------------ posts
+
+    def post(self, post_id: int) -> dict | None:
+        return self.one("SELECT * FROM posts WHERE id=?", (post_id,))
+
+    def event(self, type_: str, message: str = "", post_id: int | None = None, title: str | None = None) -> None:
+        self.x("INSERT INTO events (type, at, post_id, title, message) VALUES (?, ?, ?, ?, ?)",
+               (type_, now(), post_id, title, message))

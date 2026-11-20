@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if setup %}Set up{% else %}Log in{% endif %} · JRWI archive</title>
+<link rel="stylesheet" href="/static/style.css?v={{ version }}">
+</head>
+<body>
+<div class="login panel">
+  <h1>JRWI archive</h1>
+  {% if setup %}
+    <p class="muted">Choose a password for this web app. You'll use it to open the archive and the admin pages.</p>
+  {% endif %}
+  {% if error %}<div class="notice">{{ error }}</div>{% endif %}
+  <form method="post" action="{% if setup %}/setup{% else %}/login{% endif %}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" name="password" autofocus required>
+    {% if setup %}
+      <label for="pw2">Same password again</label>
+      <input id="pw2" type="password" name="password2" required>
+      <div class="hint">At least 8 characters.</div>
+    {% endif %}
+    <p><button type="submit">{% if setup %}Save and continue{% else %}Log in{% endif %}</button></p>
+  </form>
+</div>
+</body>
+</html>
