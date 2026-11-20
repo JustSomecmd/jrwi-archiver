@@ -68,7 +68,7 @@ It then offers to use your browser's login instead: type `firefox` (or another b
 | `--browser NAME` | Reuse your browser's login (see above) |
 | `--cookies FILE` | Reuse a cookies.txt export (see above) |
 | `--hide-password` | Hide the password while you type it |
-| `--limit N` | Only archive N posts this run |
+| `--limit N` | Only archive N posts this run, and only read as much of the feed as that needs |
 | `--no-video` | Skip members-only video |
 | `--no-audio` | Skip audio episodes |
 | `--no-images` | Skip images |

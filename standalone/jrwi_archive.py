@@ -48,7 +48,7 @@ try:
 except ImportError:
     sys.exit("Some required packages are missing. Run this first:\n\n    pip install -r requirements.txt\n")
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 DEFAULT_BASE = "https://jrwishow.com"
 DEFAULT_MUX = "https://stream.mux.com"
@@ -1060,7 +1060,12 @@ class Store:
 def crawl_feed(client: Client, store: Store, args) -> None:
     posts = store.state["posts"]
     incremental = store.state.get("crawl_complete") and not args.refresh
-    log("Checking the members feed for new posts..." if incremental else "Reading the full members feed (this takes a while the first time)...")
+    if incremental:
+        log("Checking the members feed for new posts...")
+    elif args.limit:
+        log("Reading the members feed...")
+    else:
+        log("Reading the full members feed (this takes a while the first time)...")
     url: str | None = client.abs("/supporters")
     visited: set[str] = set()
     seen_ids: set[str] = set()
@@ -1113,6 +1118,10 @@ def crawl_feed(client: Client, store: Store, args) -> None:
         if page % 10 == 0:
             store.save()
         if incremental and known_streak >= 15:
+            break
+        if args.limit and sum(1 for pid in seen_ids if needs_work(posts[pid], args)) >= args.limit:
+            print()
+            log(f"  Stopped reading the feed early: it already has {args.limit} post(s) to archive (--limit).")
             break
         nxt = find_load_more(soup, final)
         if not frames or not nxt:
