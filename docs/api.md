@@ -1,4 +1,14 @@
-# JRWI archiver API (v0.2)
+# JRWI archiver API (contract v0.4)
+
+This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) aren't built yet.
+
+**Changes since v0.1** (v0.3 items are not in the service yet)
+- **`sync`** on items with both versions: the offset between the video and the audio, and whether it was checked.
+- **`duration`** on the `video` and `audio` parts.
+- **`/api/progress/{postId}`** takes either post ID of an item.
+- **v0.3:** when the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared.
+- **v0.4:** comments gain `pinned` and `link`. In the service since 0.2.0.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -31,6 +41,8 @@
 | `GET /files/<path>` | Images, thumbnails, attachments, documents |
 
 Item lists leave out posts above the user's tier. Add `include_locked=true` to include them; they'll have `"locked": true` and no media.
+
+**Progress (v0.3):** progress is kept once per item. Either post ID of the item works in `/api/progress/{postId}`, so the apps can use the item's `id` or `audio.post_id`. `position` is always an audio position. `finished: true` is also how the apps record that the episode was watched through the video, so the podcast feed and the web app show it as played.
 
 ## Objects
 
@@ -68,8 +80,9 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
  "show": "riptide", "tab": "episodes", "kind": "episode", "episode": 136, "pinned": true,
  "thumbnail": "/files/posts/300/thumbnail.webp", "duration": 11695,
  "video": {"post_id": 300, "jellyfin_path": "/media/jrwi/Riptide/Season 01/Riptide - S01E136 - Through the Fire [jrwi-300].mp4",
-           "url": "/api/video/300", "height": 1080, "size": 4123456789},
- "audio": {"post_id": 298, "url": "/api/audio/298", "mime": "audio/mp4", "size": 187654321},
+           "url": "/api/video/300", "height": 1080, "size": 4123456789, "duration": 11712},
+ "audio": {"post_id": 298, "url": "/api/audio/298", "mime": "audio/mp4", "size": 187654321, "duration": 11695},
+ "sync": {"offset": -17.2, "checked": true},
  "comment_count": 12, "like_count": 469, "locked": false, "archived": true}
 ```
 
@@ -79,10 +92,18 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **`date`:** the site only shows a date, so the time is midnight UTC.
 
 **`video` takes one of two shapes, or is `null`:**
-- **Archived file:** `{post_id, jellyfin_path, url, height, size}`. `jellyfin_path` is the path as the archiver sees it. Match Jellyfin items on the `[jrwi-<post id>]` tag in the file name, not on the full path.
+- **Archived file:** `{post_id, jellyfin_path, url, height, size, duration}`. `jellyfin_path` is the path as the archiver sees it. Match Jellyfin items on the `[jrwi-<post id>]` tag in the file name, not on the full path.
 - **YouTube only:** `{post_id, youtube_id, youtube_url}`. The video exists only as a YouTube embed. If TubeArchivist has that video ID, play it from there.
 
 **`audio`** is `null` when there's no archived audio version.
+
+**`duration` on `video` and `audio` (v0.3):** that version's own length in seconds, or `null` when unknown. The item's `duration` stays as it was.
+
+**`sync` (v0.3):** `{"offset": <seconds>, "checked": <true or false>}` on every item with both a video (archived or YouTube-only) and an audio version.
+- **Meaning:** `audio position = video position + offset`. In the example, the video has 17.2 seconds at the start that the audio doesn't, so 1:00:00 in the video is 59:42.8 in the audio.
+- **`checked`:** `true` when the archiver compared the two versions and found the offset. `false` when it couldn't or wasn't sure, in which case the offset is 0.
+- **`null`** only when the item has just one version.
+- **Apps** keep a carried-over position between 0 and the other version's `duration`.
 
 ### Item (full)
 
@@ -110,15 +131,15 @@ The list fields, plus:
 {"id": "286486:1016036", "author": {"name": "grizzly", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp"},
  "date": "2026-11-07T00:00:00+00:00", "date_text": "13d",
  "body_html": "<p>for anyone not reading the description: ...</p>", "body_text": "for anyone not reading ...",
- "like_count": 327, "pinned": true, "link": "https://jrwishow.com/supporters/videos/...?cid=comment_aq6A...",
+ "like_count": 327, "pinned": true, "link": "https://jrwishow.com/supporters/videos/...?cid=comment_...",
  "replies": [ /* comments */ ]}
 ```
 
 - **Dates:** the site only shows how long ago a comment was posted ("13d"), so `date` is worked out from that when the comment was saved. `date_text` is what the site showed.
-- **`pinned`:** pinned comments come first, like on the site.
-- **`link`:** the comment's own address on the site.
+- **`pinned` (v0.4):** pinned comments come first, as on the site.
+- **`link` (v0.4):** the comment's own address on the site, or `null`.
 - **Fields that can be missing:** `date`, `like_count` and `author.avatar` are `null` when the site didn't show them.
-- **Which comments:** every comment and reply. They come from every version of the item, starting with the main post's, newest first.
+- **Which comments:** every comment and reply, fetched from the site's comments endpoint with paging. They come from every version of the item, starting with the main post's, newest first.
 
 ### Event
 
