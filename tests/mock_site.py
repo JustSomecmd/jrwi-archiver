@@ -127,8 +127,8 @@ P1 = [
 ]
 P2 = [
     add(290, "/supporters/posts/riptide-135-art-scene", "Riptide #135 | Art Scene", "Oct 18, 2026",
-        f'<div class="gallery"><a href="{B}/imgproxy/art1/a.webp"><img src="{B}/imgproxy/s2/b.webp"></a>'
-        f'<a href="{B}/imgproxy/art2/b.webp"><img src="{B}/imgproxy/s3/c.webp"></a></div>', "", tags="tag_103 tag_101"),
+        '<div class="gallery">' + "".join(f'<a href="{B}/imgproxy/art{n}/a.webp"><img src="{B}/imgproxy/s{n + 1}/b.webp"></a>'
+                                         for n in range(1, 6)) + '</div>', "", tags="tag_103 tag_101"),
     add(289, "/supporters/video_embeds/blue-jay-riptide-135", "Blue Jay | Riptide #135", "Oct 17, 2026",
         '<div class="embed-player" data-controller="youtube-player" data-youtube-player-video-id-value="CzZ13VPQOcw"></div>',
         "<p>On YouTube.</p>", access="public", tags="tag_101"),
