@@ -1,4 +1,4 @@
-# JRWI archiver API (v0.1)
+# JRWI archiver API (v0.2)
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -11,7 +11,7 @@
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.1.0"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.2.0"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, `other` last. `?include_empty=true` lists all of them. |
@@ -107,14 +107,18 @@ The list fields, plus:
 ### Comment
 
 ```json
-{"id": "299:501", "author": {"name": "Sam", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp"},
- "date": "2026-11-17T10:00:00+00:00", "date_text": "Nov 17",
- "body_html": "<p>Love these rules!</p>", "body_text": "Love these rules!", "like_count": 4,
+{"id": "286486:1016036", "author": {"name": "grizzly", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp"},
+ "date": "2026-11-07T00:00:00+00:00", "date_text": "13d",
+ "body_html": "<p>for anyone not reading the description: ...</p>", "body_text": "for anyone not reading ...",
+ "like_count": 327, "pinned": true, "link": "https://jrwishow.com/supporters/videos/...?cid=comment_aq6A...",
  "replies": [ /* comments */ ]}
 ```
 
+- **Dates:** the site only shows how long ago a comment was posted ("13d"), so `date` is worked out from that when the comment was saved. `date_text` is what the site showed.
+- **`pinned`:** pinned comments come first, like on the site.
+- **`link`:** the comment's own address on the site.
 - **Fields that can be missing:** `date`, `like_count` and `author.avatar` are `null` when the site didn't show them.
-- **Which comments:** they come from every version of the item, starting with the main post's.
+- **Which comments:** every comment and reply. They come from every version of the item, starting with the main post's, newest first.
 
 ### Event
 

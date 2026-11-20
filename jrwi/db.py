@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS comments (
     id TEXT PRIMARY KEY, post_id INTEGER, parent_id TEXT,
     author_name TEXT, author_avatar TEXT, date TEXT, date_text TEXT,
     body_html TEXT, body_text TEXT, like_count INTEGER, position INTEGER,
-    raw TEXT
+    raw TEXT, pinned INTEGER DEFAULT 0, link TEXT
 );
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id, position);
 
@@ -83,6 +83,16 @@ class Db:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns that newer versions use to databases made by older ones."""
+        wanted = {"comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT"}}
+        for table, cols in wanted.items():
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for col, decl in cols.items():
+                if col not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     # ------------------------------------------------------------------ basics
 

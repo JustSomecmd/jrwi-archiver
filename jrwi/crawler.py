@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
+import json
+import time
 import hashlib
 import logging
 import os
@@ -213,6 +216,13 @@ class Archiver:
                 if not card or card["id"] in seen_ids:
                     continue
                 seen_ids.add(card["id"])
+                pills = card.pop("tag_pills", [])
+                for t in pills:
+                    self.db.upsert("tags", "id", {"id": str(t["id"]), "name": t["name"]})
+                if pills:
+                    card["tag_ids"] = [str(t["id"]) for t in pills]
+                if not card["locked"]:
+                    write_gz(self.post_dir(card["id"]) / "card.html.gz", P.clean_card(frame))
                 if self.merge_card(card):
                     known_streak = 0
                 elif not card["pinned"]:
@@ -295,7 +305,8 @@ class Archiver:
                                                           "problems": [f"{type(e).__name__}: {e}"]})
         return archived
 
-    def fetch_post_page(self, post: dict) -> tuple[str, str, object, object] | None:
+    def fetch_post_page(self, post: dict):
+        """(final URL, page HTML, page soup, card on the page or None). None if the post is locked."""
         final, text = self.page(post["url"])
         if "/pricing" in urlparse(final).path or "/payments/" in urlparse(final).path:
             self.db.update("posts", "id", post["id"], {"status": "locked", "locked": True})
@@ -307,39 +318,65 @@ class Archiver:
             soup = P.soup_of(text)
             if not logged_in(soup):
                 raise SessionExpired("the site logged us out and logging in again didn't help")
-        scope = P.find_post_scope(soup, post["id"])
-        if scope is None:
-            raise SiteError("couldn't find the post on its page (the site layout may have changed)")
-        if scope.select_one('a[href*="/available_tiers"]'):
+        write_gz(self.post_dir(post["id"]) / "page.html.gz", text)
+        frame = P.find_post_scope(soup, post["id"])
+        if frame is not None and frame.select_one('a[href*="/available_tiers"]'):
             self.db.update("posts", "id", post["id"], {"status": "locked", "locked": True})
             return None
-        write_gz(self.post_dir(post["id"]) / "page.html.gz", text)
-        return final, text, soup, scope
+        return final, text, soup, frame
+
+    def cached_card(self, post_id: int):
+        f = self.paths.archive / "posts" / str(post_id) / "card.html.gz"
+        if not f.exists():
+            return None
+        soup = P.soup_of(read_gz(f))
+        return soup.find("turbo-frame") or soup
+
+    def read_post(self, post: dict, final: str, soup, frame) -> tuple[dict, list[dict], list[str]]:
+        """Post fields, downloadable items and unresolved attachment names, from the page and the feed's card."""
+        cached = self.cached_card(post["id"])
+        card_frame = frame if frame is not None else cached
+        page_main = P.watch_block(soup) or soup.find("main") or soup
+        if card_frame is None and not page_main.find(["mux-player", "video", "audio", "iframe"]) \
+                and not page_main.select_one(".rich-text, .post__body"):
+            raise SiteError("couldn't read the post's page; it's saved as page.html.gz for checking")
+        fields: dict = {}
+        if card_frame is not None and card_frame.name == "turbo-frame":
+            fresh = P.parse_card(card_frame, final)
+            if fresh:
+                for k in ("duration", "like_count", "comment_count", "access"):
+                    if fresh.get(k) not in (None, "", []):
+                        fields[k] = fresh[k]
+                if fresh.get("tag_pills"):
+                    fields["tag_ids"] = [str(t["id"]) for t in fresh["tag_pills"]]
+                if fresh["title"] and not fresh["title"].startswith("Post "):
+                    fields["title"] = fresh["title"]
+                if fresh.get("published") and not post.get("published"):
+                    fields["published"], fields["date_text"] = fresh["published"], fresh["date_text"]
+        body_source = P.post_card(card_frame) if card_frame is not None else page_main
+        body_html, body_text, links = P.extract_body(body_source)
+        if not body_text and cached is not None and card_frame is not cached:
+            body_html, body_text, links = P.extract_body(P.post_card(cached))
+        fields.update(body_html=body_html, body_text=body_text, links=links)
+        # Players on the page have fresh playback tokens; the feed's card fills in the rest
+        items, unresolved = P.extract_media(frame if frame is not None else page_main, final, self.same_site, post["id"])
+        if cached is not None and frame is None:
+            keys = {i["key"] for i in items}
+            extra, extra_unresolved = P.extract_media(cached, final, self.same_site, post["id"])
+            items += [i for i in extra if i["key"] not in keys and not (i["kind"] == "mux" and token_expired(i.get("token")))]
+            resolved = {i.get("filename") for i in items if i["kind"] == "attachment"}
+            unresolved = sorted({*unresolved, *extra_unresolved} - resolved)
+        return fields, items, unresolved
 
     def archive_post(self, post: dict, wanted: dict[str, bool]) -> None:
         got = self.fetch_post_page(post)
         if got is None:
             return
-        final, text, soup, scope = got
+        final, text, soup, frame = got
         d = self.post_dir(post["id"])
         update: dict = {"last_fetched": now()}
-
-        if scope.name == "turbo-frame":
-            fresh = P.parse_card(scope, final)
-            if fresh:
-                for k in ("duration", "like_count", "comment_count", "access", "tag_ids"):
-                    if fresh.get(k) not in (None, "", []):
-                        update[k] = fresh[k]
-                if fresh["title"] and not fresh["title"].startswith("Post "):
-                    update["title"] = fresh["title"]
-                if fresh.get("published") and not post.get("published"):
-                    update["published"] = fresh["published"]
-                    update["date_text"] = fresh["date_text"]
-        card = P.post_card(scope) if scope.name == "turbo-frame" else scope
-        body_html, body_text, links = P.extract_body(card)
-        update.update(body_html=body_html, body_text=body_text, links=links)
-
-        items, unresolved = P.extract_media(scope, final, self.same_site)
+        fields, items, unresolved = self.read_post(post, final, soup, frame)
+        update.update(fields)
         files: dict = dict(post["files"] or {})
         media: dict = dict(post["media"] or {})
         images = list(post["images"] or [])
@@ -439,7 +476,10 @@ class Archiver:
                 elif it["kind"] == "attachment":
                     if have(key):
                         continue
-                    p = downloader.file(it["url"], d / "attachments", it.get("filename"), referer=final,
+                    url = it["url"]
+                    if "/api/" in urlparse(url).path and "download" in urlparse(url).path:
+                        url = self.resolve_download(url, final)
+                    p = downloader.file(url, d / "attachments", it.get("filename"), referer=final,
                                         method=it.get("method", "GET"), fields=it.get("fields"), reject_html=True)
                     files[key] = self.rel(p)
                     attachments.append({"name": p.name, "url": self.rel(p), "size": p.stat().st_size})
@@ -474,7 +514,7 @@ class Archiver:
 
         if wanted.get("comments"):
             try:
-                self.archive_comments(post["id"], final, text, soup)
+                self.archive_comments(post["id"])
             except SiteError as e:
                 if self.stop_event.is_set():
                     raise
@@ -519,37 +559,73 @@ class Archiver:
 
     # ------------------------------------------------------------------ comments
 
-    def archive_comments(self, post_id: int, final: str, text: str, soup) -> None:
+    def archive_comments(self, post_id: int) -> int:
+        """Every comment and reply on a post, saved raw (comments_NNN.html.gz) and in the database."""
         d = self.post_dir(post_id)
-        parts = [text]
+        queue: list[tuple[str, str | None]] = [(P.comments_url(self.client.base, post_id), None)]
         fetched: set[str] = set()
-        # (Turbo frame id or None, URL): comment threads that load separately, and "more comments" links
-        queue = [(fid, u) for fid, u in P.lazy_frames(soup, final, self.same_site, skip_ids={f"post_{post_id}"})
-                 if "comment" in (u + fid).lower()]
-        queue += [(None, u) for u in P.load_more_comment_links(soup, final, self.same_site)]
-        n = 0
-        while queue and n < 200:
-            frame_id, url = queue.pop(0)
+        index: list[dict] = []
+        while queue and len(index) < 2000:
+            if self.stop_event.is_set():
+                raise SiteError("stopped")
+            url, parent = queue.pop(0)
             if url in fetched:
                 continue
             fetched.add(url)
-            _, chunk = self.page(url, accept=TURBO_ACCEPT, headers={"Turbo-Frame": frame_id} if frame_id else None)
-            n += 1
-            write_gz(d / f"comments_{n:03d}.html.gz", chunk)
-            parts.append(chunk)
-            chunk_soup = P.soup_of(chunk, turbo=True)
-            for u in P.load_more_comment_links(chunk_soup, url, self.same_site):
-                if u not in fetched:
-                    queue.append((None, u))
-            for fid, u in P.lazy_frames(chunk_soup, url, self.same_site):
-                if "comment" in (u + fid).lower() and u not in fetched:
-                    queue.append((fid, u))
+            _, chunk = self.page(url, accept=TURBO_ACCEPT)
+            name = f"comments_{len(index) + 1:03d}.html.gz"
+            write_gz(d / name, chunk)
+            index.append({"file": name, "parent": parent, "url": url})
+            soup = P.soup_of(chunk, turbo=True)
+            nxt = P.next_comments_page(soup, url)
+            if nxt and nxt not in fetched:
+                queue.append((nxt, parent))
+            for cid, rurl in P.reply_requests(soup, url):
+                if rurl not in fetched:
+                    queue.append((rurl, cid))
         for old in d.glob("comments_*.html.gz"):
-            if int(old.stem.split("_")[1].split(".")[0]) > n:
+            if old.name not in {i["file"] for i in index}:
                 old.unlink()
-        self.store_comments(post_id, parts, final)
+        (d / "comments_index.json").write_text(json.dumps(index, indent=1))
+        return self.store_comments(post_id, [(read_gz(d / i["file"]), i["parent"]) for i in index],
+                                   self.client.abs("/supporters"))
 
-    def store_comments(self, post_id: int, parts: list[str], page_url: str) -> None:
+    def resolve_download(self, url: str, referer: str) -> str:
+        """Attachment buttons point at an API address that answers with the file's real (signed) address."""
+        r = self.client.request("GET", url, accept="application/json, text/plain, */*", stream=True,
+                                headers={"Referer": referer, "X-Requested-With": "XMLHttpRequest"})
+        try:
+            if r.status_code >= 400:
+                raise DownloadError(f"HTTP {r.status_code} asking for the download address")
+            ctype = r.headers.get("Content-Type", "")
+            if "json" in ctype:
+                found: list[str] = []
+
+                def walk(o):
+                    if isinstance(o, dict):
+                        for k in ("url", "download_url", "signed_url", "file_url"):
+                            if isinstance(o.get(k), str) and o[k].startswith("http"):
+                                found.append(o[k])
+                        for v in o.values():
+                            walk(v)
+                    elif isinstance(o, list):
+                        for v in o:
+                            walk(v)
+                    elif isinstance(o, str) and o.startswith("http"):
+                        found.append(o)
+                walk(r.json())
+                if found:
+                    return found[0]
+                raise DownloadError("the download address answer had no link in it")
+            if "text/plain" in ctype and r.text.strip().startswith("http"):
+                return r.text.strip()
+            if P.url_key(r.url) != P.url_key(url) and "text/html" not in ctype:
+                return r.url
+            raise DownloadError(f"unexpected answer asking for the download address ({ctype or 'no type'})")
+        finally:
+            r.close()
+
+    def store_comments(self, post_id: int, parts: list, page_url: str) -> int:
         comments = P.parse_comments(parts, page_url)
         avatars_dir = self.paths.archive / "avatars"
         if comments or self.db.one("SELECT 1 FROM comments WHERE post_id=? LIMIT 1", (post_id,)):
@@ -568,9 +644,12 @@ class Archiver:
                             except SiteError:
                                 pass
                         c["author_avatar"] = self.rel(local) if local.exists() else avatar
-                    self.db.upsert("comments", "id", {**c, "id": f"{post_id}:{c['id']}", "post_id": post_id,
-                                                      "parent_id": f"{post_id}:{c['parent_id']}" if c["parent_id"] else None})
+                    row = {k: v for k, v in c.items() if k not in ("pinned", "link")}
+                    self.db.upsert("comments", "id", {**row, "id": f"{post_id}:{c['id']}", "post_id": post_id,
+                                                      "parent_id": f"{post_id}:{c['parent_id']}" if c["parent_id"] else None,
+                                                      "pinned": c.get("pinned", False), "link": c.get("link")})
         self.db.update("posts", "id", post_id, {"comments_fetched": now()})
+        return len(comments)
 
     def refresh_comments(self) -> None:
         days = int(self.s["comment_refresh_days"] or 0)
@@ -586,16 +665,7 @@ class Archiver:
                 raise SiteError("stopped")
             self.status.set(done=n - 1, detail=post["title"])
             try:
-                got = self.fetch_post_page(post)
-                if got is None:
-                    continue
-                final, text, soup, scope = got
-                if scope.name == "turbo-frame":
-                    fresh = P.parse_card(scope, final)
-                    if fresh:
-                        self.db.update("posts", "id", post["id"], {k: fresh[k] for k in ("like_count", "comment_count")
-                                                                   if fresh.get(k) is not None})
-                self.archive_comments(post["id"], final, text, soup)
+                self.archive_comments(post["id"])
             except (SessionExpired, LoginFailed, Blocked):
                 raise
             except SiteError as e:
@@ -688,30 +758,25 @@ class Archiver:
     # ------------------------------------------------------------------ re-reading saved pages
 
     def reparse(self) -> int:
-        """Re-read every saved post page and comment page with the current parser. No downloads."""
+        """Re-read every saved post page, card and comment page with the current parser. No downloads."""
         n = 0
-        for post in self.db.q("SELECT id, url FROM posts"):
+        for post in self.db.q("SELECT * FROM posts"):
             d = self.paths.archive / "posts" / str(post["id"])
             page_file = d / "page.html.gz"
-            if not page_file.exists():
-                continue
-            text = read_gz(page_file)
-            soup = P.soup_of(text)
-            scope = P.find_post_scope(soup, post["id"])
-            if scope is None:
-                continue
             final = post["url"] or self.client.abs("/supporters")
-            card = P.post_card(scope) if scope.name == "turbo-frame" else scope
-            body_html, body_text, links = P.extract_body(card)
-            fields = {"body_html": body_html, "body_text": body_text, "links": links}
-            if scope.name == "turbo-frame":
-                fresh = P.parse_card(scope, final)
-                if fresh:
-                    fields.update({k: fresh[k] for k in ("like_count", "comment_count", "tag_ids")
-                                   if fresh.get(k) is not None})
-            self.db.update("posts", "id", post["id"], fields)
-            parts = [text] + [read_gz(f) for f in sorted(d.glob("comments_*.html.gz"))]
-            self.store_comments(post["id"], parts, final)
+            if page_file.exists():
+                soup = P.soup_of(read_gz(page_file))
+                frame = P.find_post_scope(soup, post["id"])
+                try:
+                    fields, _, _ = self.read_post(post, final, soup, frame)
+                    self.db.update("posts", "id", post["id"], fields)
+                except SiteError:
+                    pass
+            index_file = d / "comments_index.json"
+            if index_file.exists():
+                index = json.loads(index_file.read_text())
+                parts = [(read_gz(d / i["file"]), i["parent"]) for i in index if (d / i["file"]).exists()]
+                self.store_comments(post["id"], parts, self.client.abs("/supporters"))
             n += 1
         feed = self.paths.archive / "site" / "feed.html.gz"
         if feed.exists():
@@ -722,6 +787,19 @@ class Archiver:
         organize.reorganize(self.db, self.paths)
         organize.refresh_jellyfin(self.db, self.paths)
         return n
+
+
+def token_expired(token: str | None) -> bool:
+    """Mux playback tokens are signed and last about a day."""
+    if not token:
+        return False
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        exp = json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+        return bool(exp) and exp < time.time() + 600
+    except (IndexError, ValueError):
+        return False
 
 
 def folder_size(root: Path) -> int:

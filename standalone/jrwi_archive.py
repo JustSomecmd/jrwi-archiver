@@ -26,6 +26,8 @@ Quick start (full instructions in README.md):
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
 import getpass
 import html as htmllib
 import json
@@ -48,7 +50,7 @@ try:
 except ImportError:
     sys.exit("Some required packages are missing. Run this first:\n\n    pip install -r requirements.txt\n")
 
-VERSION = "1.1.1"
+VERSION = "1.2.1"
 
 DEFAULT_BASE = "https://jrwishow.com"
 DEFAULT_MUX = "https://stream.mux.com"
@@ -73,6 +75,7 @@ FILENAME_TEXT_RE = re.compile(
 )
 URL_RE = re.compile(r"https?://[^\s\"'<>()\\]+")
 POST_ID_RE = re.compile(r"^post_(\d+)$")
+CARDS_VERSION = 1
 DURATION_RE = re.compile(r"^\d{1,2}(:\d{2}){1,2}$")
 MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
@@ -216,19 +219,28 @@ def download_param_name(url: str) -> str | None:
     return None
 
 
+def without_noise(el):
+    """A copy without comments, profile pop-ups and side lists, whose dates aren't the post's own."""
+    copy = BeautifulSoup(str(el), "html.parser")
+    for bad in copy.select('[class*="comment"], [class*="popover"], turbo-frame[id$="_comments"]'):
+        bad.decompose()
+    return copy
+
+
 def parse_date(card) -> tuple[str | None, str]:
     """Return (ISO date, text as shown) for a post card."""
-    t = card.find("time", attrs={"datetime": True})
-    if t:
-        try:
-            return datetime.fromisoformat(t["datetime"].replace("Z", "+00:00")).date().isoformat(), t.get_text(strip=True)
-        except ValueError:
-            pass
     texts = []
     meta = card.select_one(".post__meta")
     if meta:
         texts.append(meta.get_text(" ", strip=True))
-    texts.append(card.get_text(" ", strip=True)[:3000])
+    clean = without_noise(card)
+    t = clean.find("time", attrs={"datetime": True})
+    if t and not texts:
+        try:
+            return datetime.fromisoformat(t["datetime"].replace("Z", "+00:00")).date().isoformat(), t.get_text(strip=True)
+        except ValueError:
+            pass
+    texts.append(clean.get_text(" ", strip=True)[:3000])
     for txt in texts:
         m = DATE_RE.search(txt)
         if m:
@@ -629,7 +641,16 @@ def parse_card(frame, page_url: str) -> dict | None:
         if DURATION_RE.match(s.strip()):
             duration = s.strip()
             break
-    pinned = any(s.strip() == "Pinned" for s in frame.find_all(string=True))
+    if duration is None:
+        player = frame.find("mux-player", attrs={"default-duration": True})
+        if player and player["default-duration"].isdigit():
+            secs = int(player["default-duration"])
+            duration = f"{secs // 3600}:{secs % 3600 // 60:02d}:{secs % 60:02d}" if secs >= 3600 else f"{secs // 60}:{secs % 60:02d}"
+    clean = without_noise(frame)
+    pinned = any(s.strip() == "Pinned" for s in clean.find_all(string=True))
+    tag_names = [norm_space(b.get_text(" ", strip=True)) for b in frame.select(".post__tags button")]
+    likes_el = frame.select_one('[data-testid="Post.LikesCount"]')
+    count_el = frame.find(id=f"post_{m.group(1)}_comments_count")
     return {
         "id": m.group(1),
         "title": title or f"Post {m.group(1)}",
@@ -641,7 +662,9 @@ def parse_card(frame, page_url: str) -> dict | None:
         "date_text": shown,
         "pinned": pinned,
         "duration": duration,
-        "tags": [c[4:] for c in (frame.get("class") or []) if c.startswith("tag_")],
+        "tags": tag_names or [c[4:] for c in (frame.get("class") or []) if c.startswith("tag_")],
+        "likes": int(likes_el.get_text(strip=True)) if likes_el and likes_el.get_text(strip=True).isdigit() else None,
+        "comments": int(count_el.get_text(strip=True)) if count_el and count_el.get_text(strip=True).isdigit() else None,
     }
 
 
@@ -718,7 +741,7 @@ def looks_like_attachment(url: str, attr: str, client: Client) -> bool:
     return False
 
 
-def extract_media(card, page_url: str, client: Client) -> tuple[list[dict], list[str]]:
+def extract_media(card, page_url: str, client: Client, post_id: str | None = None) -> tuple[list[dict], list[str]]:
     """Everything downloadable in a post card. Returns (items, unresolved attachment names)."""
     items: list[dict] = []
     seen: set[str] = set()
@@ -737,6 +760,8 @@ def extract_media(card, page_url: str, client: Client) -> tuple[list[dict], list
         pid = t.get("playback-id") if t.name in ("mux-player", "mux-video", "mux-audio") or t.has_attr("playback-id") else None
         if not pid:
             continue
+        if post_id and t.get("metadata-video-id") and t["metadata-video-id"] != str(post_id):
+            continue  # a player for some other post on the same page
         token = t.get("playback-token")
         if not token and t.get("tokens"):
             try:
@@ -812,7 +837,12 @@ def extract_media(card, page_url: str, client: Client) -> tuple[list[dict], list
                 add("image", url_key(src), url=src)
     media_box = card.select_one(".post__media")
     has_player = any(i["kind"] in ("mux", "hls", "download", "youtube", "embed") for i in items)
-    if media_box is not None and has_player:
+    for t in tags:
+        if t.name == "mux-player" and t.get("poster") and not t.has_attr("audio") and (
+                not post_id or t.get("metadata-video-id") in (None, str(post_id))):
+            add("thumbnail", "thumb:" + url_key(t["poster"]), url=urljoin(page_url, t["poster"]))
+            break
+    if media_box is not None and has_player and not any(i["kind"] == "thumbnail" for i in items):
         img = media_box.find("img", src=True)
         if img is not None:
             src = urljoin(page_url, img["src"])
@@ -1059,7 +1089,9 @@ class Store:
 
 def crawl_feed(client: Client, store: Store, args) -> None:
     posts = store.state["posts"]
-    incremental = store.state.get("crawl_complete") and not args.refresh
+    # Version 1.2 keeps a copy of each post from the feed, so read the whole feed once more after updating
+    incremental = (store.state.get("crawl_complete") and not args.refresh
+                   and store.state.get("cards_version") == CARDS_VERSION)
     if incremental:
         log("Checking the members feed for new posts...")
     elif args.limit:
@@ -1094,6 +1126,8 @@ def crawl_feed(client: Client, store: Store, args) -> None:
             if not card or card["id"] in seen_ids:
                 continue
             seen_ids.add(card["id"])
+            if not card["locked"]:
+                save_card(store, card["id"], frame)
             old = posts.get(card["id"])
             if old is None:
                 card.update(status="locked" if card["locked"] else "new", files={}, problems=[],
@@ -1103,7 +1137,8 @@ def crawl_feed(client: Client, store: Store, args) -> None:
                 known_streak = 0
             else:
                 was_locked = old.get("status") == "locked"
-                for k in ("title", "url", "kind", "access", "locked", "pinned", "duration", "tags", "date_text"):
+                for k in ("title", "url", "kind", "access", "locked", "pinned", "duration", "tags", "date_text",
+                          "likes", "comments"):
                     if card.get(k) not in (None, ""):
                         old[k] = card[k]
                 if card.get("date") and not old.get("date"):
@@ -1131,9 +1166,82 @@ def crawl_feed(client: Client, store: Store, args) -> None:
     print()
     if reached_end:
         store.state["crawl_complete"] = True
+        store.state["cards_version"] = CARDS_VERSION
     store.state["last_crawl"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     store.save()
     log(f"Feed: {len(posts)} posts known, {new} new this run.")
+
+
+def save_card(store: Store, post_id: str, frame) -> None:
+    """Keep the feed's version of a post, without its comment previews, for reading later."""
+    copy = BeautifulSoup(str(frame), "html.parser")
+    for bad in copy.select(f'turbo-frame[id="post_{post_id}_comments"], [class*="comments"], [class*="popover"]'):
+        bad.decompose()
+    folder = store.root / "_cards"
+    folder.mkdir(exist_ok=True)
+    with gzip.open(folder / f"{post_id}.html.gz", "wt", encoding="utf-8") as f:
+        f.write(str(copy))
+
+
+def load_card(store: Store, post_id: str):
+    f = store.root / "_cards" / f"{post_id}.html.gz"
+    if not f.exists():
+        return None
+    with gzip.open(f, "rt", encoding="utf-8") as fh:
+        soup = BeautifulSoup(fh.read(), "html.parser")
+    return soup.find("turbo-frame") or soup
+
+
+def token_expired(token: str | None) -> bool:
+    """Mux playback tokens are signed and last about a day."""
+    if not token:
+        return False
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        exp = json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+        return bool(exp) and exp < time.time() + 600
+    except (IndexError, ValueError):
+        return False
+
+
+def resolve_download(client: Client, url: str, referer: str) -> str:
+    """Attachment buttons point at an API address that answers with the file's real (signed) address."""
+    r = client.request("GET", url, accept="application/json, text/plain, */*", stream=True,
+                       headers={"Referer": referer, "X-Requested-With": "XMLHttpRequest"})
+    try:
+        if r.status_code >= 400:
+            raise ArchiveError(f"HTTP {r.status_code} asking for the download address")
+        ctype = r.headers.get("Content-Type", "")
+        if "json" in ctype:
+            data = r.json()
+            found: list[str] = []
+
+            def walk(o):
+                if isinstance(o, dict):
+                    for k in ("url", "download_url", "signed_url", "file_url"):
+                        if isinstance(o.get(k), str) and o[k].startswith("http"):
+                            found.append(o[k])
+                    for v in o.values():
+                        walk(v)
+                elif isinstance(o, list):
+                    for v in o:
+                        walk(v)
+                elif isinstance(o, str) and o.startswith("http"):
+                    found.append(o)
+            walk(data)
+            if found:
+                return found[0]
+            raise ArchiveError("the download address answer had no link in it")
+        if "text/plain" in ctype:
+            text = r.text.strip()
+            if text.startswith("http"):
+                return text
+        if url_key(r.url) != url_key(url) and "text/html" not in ctype:
+            return r.url  # it redirected straight to the file
+        raise ArchiveError(f"unexpected answer asking for the download address ({ctype or 'no type'})")
+    finally:
+        r.close()
 
 
 # --------------------------------------------------------------------------- per-post processing
@@ -1184,37 +1292,57 @@ def process_post(client: Client, dl: Downloader, store: Store, post: dict, args)
     soup = BeautifulSoup(text, "html.parser")
     if not logged_in(soup):
         raise SessionExpired("the site logged us out part way through")
-    frame = soup.find("turbo-frame", id=f"post_{post['id']}")
-    card = post_card(frame) if frame is not None else None
-    if card is None:
-        candidates = [d for d in soup.find_all("div") if "post" in (d.get("class") or [])]
-        card = candidates[0] if candidates else None
-    if card is None:
-        raise ArchiveError("couldn't find the post on its page (the site layout may have changed)")
-    scope = frame if frame is not None else card
-
-    if scope.select_one('a[href*="/available_tiers"]'):
-        post["status"] = "locked"
-        post["locked"] = True
-        return
-
-    fresh = parse_card(frame, final) if frame is not None else None
-    if fresh:
-        if fresh["title"] and not fresh["title"].startswith("Post "):
-            post["title"] = fresh["title"]
-        for k in ("date", "date_text", "duration"):
-            if fresh.get(k) and not post.get(k):
-                post[k] = fresh[k]
-    if not post.get("date"):
-        post["date"], post["date_text"] = parse_date(scope)
-
     d = store.post_dir(post)
-    (d / "card.html").write_text(str(scope), encoding="utf-8")
+    with gzip.open(d / "page.html.gz", "wt", encoding="utf-8") as f:
+        f.write(text)
     if args.dump_html:
         (d / "page.html").write_text(text, encoding="utf-8")
 
-    body_html, body_text, links = extract_body(card)
-    items, unresolved = extract_media(scope, final, client)
+    # Text posts show the same card as the feed. Video and audio posts have a "watch page" instead,
+    # so the feed's version of the post (saved while reading the feed) fills in the text and files.
+    frame = soup.find("turbo-frame", id=f"post_{post['id']}") or soup.select_one('[data-testid="Post"]')
+    if frame is not None and frame.select_one('a[href*="/available_tiers"]'):
+        post["status"] = "locked"
+        post["locked"] = True
+        return
+    cached = load_card(store, post["id"])
+    card_frame = frame if frame is not None else cached
+    # Watch pages keep this post's player, text and comments in one block, next to a list of other posts
+    page_main = (soup.find("turbo-frame", id=re.compile(r"^(video|audio|video_embed)s?_page$"))
+                 or soup.select_one(".video-page, .audio-page") or soup.find("main") or soup)
+    if card_frame is None and not page_main.find(["mux-player", "video", "audio", "iframe"]) \
+            and not page_main.select_one(".rich-text, .post__body"):
+        raise ArchiveError("couldn't read the post's page; it's saved as page.html.gz in the post's folder for checking")
+
+    fresh = parse_card(card_frame, final) if card_frame is not None and card_frame.name == "turbo-frame" else None
+    if fresh:
+        if fresh["title"] and not fresh["title"].startswith("Post "):
+            post["title"] = fresh["title"]
+        for k in ("date", "date_text", "duration", "tags", "likes", "comments"):
+            if fresh.get(k) and not post.get(k):
+                post[k] = fresh[k]
+    if not post.get("date"):
+        post["date"], post["date_text"] = parse_date(card_frame if card_frame is not None else page_main)
+
+    (d / "card.html").write_text(str(card_frame if card_frame is not None else page_main), encoding="utf-8")
+    body_source = post_card(card_frame) if card_frame is not None else page_main
+    body_html, body_text, links = extract_body(body_source)
+    if not body_text and card_frame is not cached and cached is not None:
+        body_html, body_text, links = extract_body(post_card(cached))
+
+    # Players on the page itself have fresh playback tokens; the feed's copy fills in the rest
+    items, unresolved = extract_media(frame if frame is not None else page_main, final, client, post["id"])
+    if cached is not None and frame is None:
+        have_keys = {i["key"] for i in items}
+        extra, extra_unresolved = extract_media(cached, final, client, post["id"])
+        for it in extra:
+            if it["key"] in have_keys:
+                continue
+            if it["kind"] == "mux" and token_expired(it.get("token")):
+                continue
+            items.append(it)
+        resolved_names = {i.get("filename") for i in items if i["kind"] == "attachment"}
+        unresolved = sorted({*unresolved, *extra_unresolved} - resolved_names)
     files: dict = post.setdefault("files", {})
     failures: list[str] = []
     notes: list[str] = []
@@ -1300,7 +1428,10 @@ def process_post(client: Client, dl: Downloader, store: Store, post: dict, args)
                 record(key, p, cls)
             elif it["kind"] == "attachment":
                 log(f"    downloading attachment: {it.get('filename') or it['url']}")
-                p = dl.file(it["url"], d / "attachments", it.get("filename"), referer=final,
+                url = it["url"]
+                if "/api/" in urlparse(url).path and "download" in urlparse(url).path:
+                    url = resolve_download(client, url, final)
+                p = dl.file(url, d / "attachments", it.get("filename"), referer=final,
                             method=it.get("method", "GET"), fields=it.get("fields"),
                             reject_html=True)
                 record(key, p, "attachment", it["url"])
@@ -1338,7 +1469,8 @@ def process_post(client: Client, dl: Downloader, store: Store, post: dict, args)
     meta = {
         "id": post["id"], "title": post["title"], "date": post.get("date"), "date_shown": post.get("date_text"),
         "type": post.get("kind"), "url": post["url"], "access": post.get("access"), "pinned": post.get("pinned"),
-        "duration": post.get("duration"), "tags": post.get("tags"), "body_text": body_text, "body_html": body_html,
+        "duration": post.get("duration"), "tags": post.get("tags"), "likes": post.get("likes"),
+        "comment_count": post.get("comments"), "body_text": body_text, "body_html": body_html,
         "links": links, "embedded_videos": embeds,
         "files": {k: v["path"] for k, v in files.items()},
         "notes": notes, "archived_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

@@ -3,6 +3,7 @@
 Run: python tests/mock_site.py 8765   (needs tests/media, made by tests/make_media.sh)
 Login: fan@example.com / hunter2
 """
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,17 +46,37 @@ def share(path):
             f'?utm_medium=copy-share-link&amp;utm_source=share-link"></div>')
 
 
+TAG_NAMES = {"101": "RIPTIDE", "102": "Riptide Rolled", "103": "Art"}
+
+
+def comment_preview(pid):
+    """Like the real feed: a comment with a profile pop-up that carries the commenter's join date."""
+    return (f'<turbo-frame class="post__section"><div class="comments"><turbo-frame class="comments__container" id="post_{pid}_comments">'
+            f'<turbo-frame class="comments__comment" id="comment_9{pid}"><div class="comment" data-testid="Post.Comment">'
+            '<div class="comment__aside"><img class="avatar__image" alt="grizzly" src="' + B + '/imgproxy/av/g.webp"></div>'
+            '<span class="comment__author"><div class="hidden"><div class="profile-popover"><time datetime="2025-12-31T10:00:00Z">Dec 31, 2025</time></div></div>'
+            '<div data-testid="Post.CommentAuthor">grizzly</div></span><span class="comment__date">13d</span>'
+            '<div class="comment__body"><p>Preview comment</p></div></div></turbo-frame></turbo-frame></div></turbo-frame>')
+
+
 def frame(pid, path, title, date, media, body, extra="", access="tiers", locked=False, tags="", likes=10, comments=0):
     title_href = "/supporters/pricing" if locked else path
     lock = f'<a href="/supporters/payments/checkout/posts/{pid}/available_tiers">Join to access</a>' if locked else ""
+    pills = "".join(f'<form action="/supporters" method="get"><input type="radio" name="tag_id" value="{t[4:]}" checked>'
+                    f'<button class="pill" type="submit">{TAG_NAMES.get(t[4:], t)}</button></form>'
+                    for t in tags.split() if t.startswith("tag_"))
     return (f'<turbo-frame class="main-list__list-item {tags}" data-testid="Post" id="post_{pid}">'
-            f'<div class="post " access="{access}"><div class="hidden" id="mediaData">{{}}</div>{media}'
+            f'<div class="post" access="{access}"><div class="post__inner"><div class="post__media">{media}</div>'
+            f'<div class="post__main"><div class="post__content">'
             f'<a data-turbo-frame="_top" class="post__meta" href="{title_href}">{date}</a>'
-            f'<a data-turbo-frame="_top" class="post__title" href="{title_href}">{title}</a>{lock}'
+            f'<div><a data-turbo-frame="_top" class="post__title" href="{title_href}">{title}</a></div>{lock}'
             f'<div class="post__body" data-controller="trim"><div class="rich-text" data-trim-target="content">{body}</div>'
-            f'<button>...Continue reading</button></div>{extra}{share(path)}'
-            f'<div class="post__actions"><button class="post__like" data-controller="like">{likes}</button>'
-            f'<button class="post__comments-count">{comments}</button></div></div></turbo-frame>')
+            f'<button>...Continue reading</button></div>{extra}'
+            f'<div class="post__section"><div class="post__tags">{pills}</div></div>'
+            f'<div class="post__section"><div class="post-actions">{share(path)}'
+            f'<turbo-frame id="post_{pid}_like"><button aria-label="Like"><span data-testid="Post.LikesCount"> {likes} </span></button></turbo-frame>'
+            f'<label aria-label="Comment"><span id="post_{pid}_comments_count">{comments}</span></label></div></div>'
+            f'{comment_preview(pid) if not locked else ""}</div></div></div></div></turbo-frame>')
 
 
 POSTS = {}
@@ -68,13 +89,14 @@ def add(pid, path, *a, **kw):
 
 def mux_video(pid, token=None):
     tok = f' playback-token="{token}"' if token else ""
-    return (f'<a class="post__media" href="#"><img alt="Video thumbnail" src="{B}/imgproxy/thumb{pid}/x.webp">'
-            f'<span>3:14:55</span></a><mux-player data-controller="mux-player" playback-id="vid{pid}"{tok}></mux-player>')
+    return (f'<div class="media-player media-player--video"><mux-player data-controller="mux-player" playback-id="vid{pid}"{tok} '
+            f'metadata-video-id="{pid}" poster="{B}/imgproxy/thumb{pid}/x.webp"></mux-player></div>')
 
 
 def mux_audio(pid):
-    return (f'<a class="post__media" href="#"><img alt="Audio thumbnail background" src="{B}/imgproxy/abg{pid}/bg.webp">'
-            f'<span>3:14:55</span></a><mux-player audio data-controller="mux-player" playback-id="aud{pid}"></mux-player>')
+    return (f'<div class="audio-player"><div class="audio-player__media"><img class="audio-player__media-image" alt="Audio thumbnail" '
+            f'src="{B}/imgproxy/abg{pid}/bg.webp"></div><mux-player audio data-controller="mux-player" playback-id="aud{pid}" '
+            f'metadata-video-id="{pid}" default-duration="11695"></mux-player></div>')
 
 
 def dl_audio(pid, name):
@@ -88,8 +110,11 @@ P1 = [
     add(299, "/supporters/posts/zombie-survival-guide", "ZOMBIE SURVIVAL GUIDE - Miller Troop Ruleset", "Nov 17, 2026",
         f'<div class="gallery"><a href="{B}/imgproxy/full1/img.webp"><img src="{B}/imgproxy/s1/a.webp"></a></div>',
         '<p>Hi, scouts!</p><p>Mechanics in <a href="https://docs.google.com/document/d/10vanqYbkaHg5j2lE7HmPq0mSA3Y88IXY8TqF6XfNmC4/edit">this doc</a>.</p>',
-        extra=('<div><button data-controller="attachment" data-attachment-url-value="/supporters/attachments/11/download">'
-               '<span>Zombie Character Sheets.pdf</span></button></div>'), access="public", comments=2),
+        extra=('<div class="post__section post__attachments"><button class="post__attachment" '
+               'data-controller="post-attachment-download" '
+               'data-post-attachment-download-path-value="/supporters/api/v1/posts/299/attachments/11/download_url" '
+               'data-post-attachment-download-sign-in-path-value="/supporters/sign_in" type="button">'
+               '<span class="post__attachment-name">Zombie Character Sheets.pdf</span></button></div>'), access="public", comments=2),
     add(298, "/supporters/audio/through-the-fire-riptide-136-audio-only", "Through the Fire | Riptide #136 (AUDIO ONLY)",
         "Nov 7, 2026", mux_audio(298), "<p>Audio version.</p>",
         extra=dl_audio(298, "Through%20the%20Fire%20%7C%20Riptide%20%23136%20%28AUDIO%20ONLY%29"), tags="tag_101"),
@@ -117,18 +142,66 @@ TAGS = ('<div class="filters">'
         '<button value="102"><img alt="Riptide Rolled\'s tag thumbnail" src="x"><span>Riptide Rolled</span><span>125</span></button>'
         '<button value="103"><img alt="Art\'s tag thumbnail" src="x"><span>Art</span><span>136</span></button></div>')
 
-COMMENTS = {
-    299: ('<div class="comments__list">'
-          '<div class="comment" id="comment_501"><img class="avatar" src="' + B + '/imgproxy/av1/u.webp">'
-          '<div class="comment__author">Sam</div><time datetime="2026-11-17T10:00:00Z">Nov 17</time>'
-          '<div class="comment__body"><p>Love these rules!</p></div><button class="comment__like">4</button>'
-          '<div class="comment__replies"><div class="comment" id="comment_502"><div class="comment__author">Alex</div>'
-          '<div class="comment__body"><p>Same here.</p></div></div></div></div>'
-          '<div class="comment" id="comment_503"><div class="comment__author">Jo</div>'
-          '<div class="comment__body"><p>Printing these now.</p></div></div></div>'),
-    300: ('<div class="comment" id="comment_601"><div class="comment__author">Kim</div>'
-          '<div class="comment__body"><p>Best episode yet.</p></div></div>'),
+def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when="13d"):
+    """A comment as the real site renders it, including the parts that must be ignored."""
+    badge = '<div class="comment__badge-container"><div class="pill">Pinned</div></div>' if pinned else ""
+    load = (f'<form action="/supporters/posts/{pid}/comments/{cid}/replies" data-testid="Post.LoadRepliesButton" '
+            f'data-turbo-stream="true" method="get"><input type="hidden" name="limit" value="10"><button>{replies} '
+            f'<turbo-frame id="comment_{cid}_reply_text">{"Load replies" if replies else "Reply"}</turbo-frame></button></form>')
+    return (f'<turbo-frame class="comments__comment" id="comment_{cid}"><div class="comment" data-testid="Post.Comment">{badge}'
+            f'<div class="comment__aside"><div class="avatar"><img class="avatar__image" alt="{author}" src="{B}/imgproxy/av-{author}/a.webp"></div></div>'
+            f'<turbo-frame id="comment_{cid}_edit_form"></turbo-frame><div class="comment__main"><div class="comment__header">'
+            f'<span class="comment__author"><div class="hidden"><div class="profile-popover"><div class="profile-popover__nickname">{author}</div>'
+            '<time datetime="2025-07-16T22:34:22Z">Jul 16, 2025</time></div></div>'
+            f'<div class="comment__author-name"><div data-testid="Post.CommentAuthor">{author}</div></div></span>'
+            f'<div class="comment__date-and-actions"><a href="/supporters/posts/x?cid=comment_h{cid}"><span class="comment__date">{when}</span></a>'
+            '<div class="comment__dropdown"><div class="dropdown"><div class="modal"><p>Block someone?</p></div></div></div></div></div>'
+            f'<div class="comment__content"><div><div class="comment__body"><p>{body}</p></div><button>Read more</button></div></div>'
+            f'<div class="comment__footer"><turbo-frame id="comment_{cid}_like"><form action="/supporters/posts/{pid}/comments/{cid}/like" method="post">'
+            f'<button aria-label="Like"><span class="comment__footer-item-number">{likes}</span></button></form></turbo-frame>{load}</div>'
+            f'<turbo-frame class="comments__list" id="comment_{cid}_replies"></turbo-frame></div></div></turbo-frame>')
+
+
+def more_form(pid, marker, cid=None):
+    action = f"/supporters/posts/{pid}/comments" + (f"/{cid}/replies" if cid else "")
+    return (f'<form action="{action}" method="get" data-turbo-stream="true"><input type="hidden" name="limit" value="10">'
+            f'<input type="hidden" name="order" value="newest"><input type="hidden" name="next_page_data" value="{marker}">'
+            '<button>View more comments</button></form>')
+
+
+COMMENT_PAGES = {
+    (299, None): [real_comment(299, 501, "Sam", "Love these rules!", likes=4, replies=1),
+                  real_comment(299, 503, "Jo", "Printing these now.")], 
+    (299, "p2"): [real_comment(299, 504, "Lee", "Great work, thanks!", when="2w")],
+    (300, None): [real_comment(300, 601, "Kim", "Best episode yet.", likes=327, pinned=True)],
 }
+REPLY_PAGES = {(299, 501): [real_comment(299, 502, "Alex", "Same here.")]}
+
+
+def comments_stream(pid, marker):
+    frames = COMMENT_PAGES.get((pid, marker), [])
+    more = more_form(pid, "p2") if (pid, "p2") in COMMENT_PAGES and marker is None else ""
+    return (f'<turbo-stream action="append" target="post_{pid}_comments"><template>{"".join(frames)}{more}'
+            '</template></turbo-stream>')
+
+
+def watch_page(pid, fr):
+    """Video and audio pages, shaped like the real one: a video_page block plus a column of other posts."""
+    player = re.search(r"(<mux-player.*?</mux-player>|<div class=\"embed-player.*?</div>)", fr, re.S)
+    title = re.search(r'class="post__title"[^>]*>(.*?)</a>', fr).group(1)
+    date = re.search(r'class="post__meta"[^>]*>(.*?)</a>', fr).group(1)
+    desc = re.search(r'data-trim-target="content">(.*?)</div>', fr, re.S).group(1)
+    suggestion = ('<div class="next-video-suggestion hidden"><a class="video video--static" href="#"></a>'
+                  '<a class="button" href="/supporters/videos/some-other-video?series_id=1">Play now</a></div>')
+    media = player.group(1).replace("</mux-player>", suggestion + "</mux-player>") if player else ""
+    sidebar = ('<div class="grid__column grid__column--7@md"><div>Recently uploaded</div>'
+               f'<a data-testid="VideoCatalog.Video" href="/supporters/payments/checkout/posts/1/available_tiers">'
+               f'<img alt="Thumbnail" src="{B}/imgproxy/side/s.webp"><span>3:14:55</span><span>Some other episode</span></a></div>')
+    return (f'<div class="main"><turbo-frame class="video-page" id="video_page"><div class="video-page__video-container">{media}</div>'
+            '<div class="container"><div class="grid"><div class="grid__column grid__column--16@md"><div class="video-page__details">'
+            f'<div class="video-page__header"><div class="video-page__meta">{date}</div><div class="video-page__title">{title}</div></div>'
+            f'<div class="video-page__description" data-controller="trim"><div class="rich-text">{desc}</div></div>'
+            f'</div></div>{sidebar}</div></div></turbo-frame></div>')
 
 
 def feed_page1(li):
@@ -196,18 +269,26 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, stream(P2, "/supporters/load_more?last_id=287&last_live_at=y&order=desc"),
                                  "text/vnd.turbo-stream.html")
             return self.send(200, stream([], None), "text/vnd.turbo-stream.html")
-        if p in POSTS:
+        if p in POSTS and p.split("/")[2] in ("videos", "audio", "video_embeds"):
             pid, fr = POSTS[p]
             if pid == 296:
                 return self.send(302, "", headers={"Location": "/supporters/pricing"})
-            lazy = (f'<turbo-frame id="comments_post_{pid}" src="/supporters/posts/{pid}/comments" loading="lazy"></turbo-frame>'
-                    if pid in COMMENTS else "")
-            return self.send(200, page(f"<ul><li>{fr}</li></ul>{lazy}", li))
-        if p.startswith("/supporters/posts/") and p.endswith("/comments"):
-            pid = int(p.split("/")[3])
+            return self.send(200, page(watch_page(pid, fr), li))
+        if p in POSTS:
+            pid, fr = POSTS[p]
+            return self.send(200, page(f"<ul><li>{fr}</li></ul>", li))
+        m = re.match(r"^/supporters/posts/(\d+)/comments(?:/(\d+)/replies)?$", p)
+        if m:
             if not li:
                 return self.send(302, "", headers={"Location": "/supporters/sign_in"})
-            return self.send(200, f'<turbo-frame id="comments_post_{pid}">{COMMENTS.get(pid, "")}</turbo-frame>')
+            if "turbo-stream" not in (self.headers.get("Accept") or ""):
+                return self.send(406, "no")
+            pid, cid = int(m.group(1)), m.group(2)
+            if cid:
+                body = "".join(REPLY_PAGES.get((pid, int(cid)), []))
+                return self.send(200, f'<turbo-stream action="append" target="comment_{cid}_replies"><template>{body}'
+                                      '</template></turbo-stream>', "text/vnd.turbo-stream.html")
+            return self.send(200, comments_stream(pid, q.get("next_page_data", [None])[0]), "text/vnd.turbo-stream.html")
         if p.startswith("/pages/"):
             slug = p.split("/")[2]
             name = dict(SHOWS).get(slug, slug.replace("-", " ").title())
@@ -219,11 +300,12 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, page('<h1>Perks</h1><a href="https://jrwishow.com/supporters/podcast/abc/rss">Private RSS</a>', li))
         if p == "/supporters/pricing":
             return self.send(200, page("<h1>Pricing</h1>", li))
-        if p == "/supporters/attachments/11/download":
+        if p == "/supporters/api/v1/posts/299/attachments/11/download_url":
             if not li:
-                return self.send(302, "", headers={"Location": "/supporters/sign_in"})
-            return self.send(200, (MEDIA / "sheet.pdf").read_bytes(), "application/pdf",
-                             {"Content-Disposition": 'attachment; filename="Zombie Character Sheets.pdf"'})
+                return self.send(401, '{"error": "sign in"}', "application/json")
+            return self.send(200, '{"url": "' + B + '/signed/Zombie%20Character%20Sheets.pdf?sig=abc"}', "application/json")
+        if p.startswith("/signed/"):
+            return self.send(200, (MEDIA / "sheet.pdf").read_bytes(), "application/pdf")
         if p.startswith("/imgproxy/"):
             return self.file(MEDIA / "img.webp", "image/webp")
         if p.startswith("/mux/aud") and p.endswith("/audio.m4a"):

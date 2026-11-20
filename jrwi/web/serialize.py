@@ -182,10 +182,12 @@ class Serializer:
                                               "avatar": files_url(avatar) if avatar and not avatar.startswith("http") else avatar},
                     "date": iso(r["date"]), "date_text": r["date_text"],
                     "body_html": clean_html(r["body_html"]), "body_text": r["body_text"] or "",
-                    "like_count": r["like_count"], "replies": [build(c) for c in by_parent.get(r["id"], [])]}
+                    "like_count": r["like_count"], "pinned": bool(r.get("pinned")), "link": r.get("link"),
+                    "replies": [build(c) for c in by_parent.get(r["id"], [])]}
 
         known_ids = {r["id"] for r in rows}
         top = [r for r in rows if r["parent_id"] is None or r["parent_id"] not in known_ids]
+        top.sort(key=lambda r: not r.get("pinned"))  # pinned comments first, like the site
         start = (page - 1) * page_size
         return {"items": [build(r) for r in top[start:start + page_size]], "page": page, "page_size": page_size,
                 "total": len(top)}

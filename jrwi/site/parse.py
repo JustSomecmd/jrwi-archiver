@@ -143,7 +143,15 @@ def soup_of(text: str, turbo: bool = False) -> BeautifulSoup:
     return BeautifulSoup(text, "html.parser")
 
 
+SHORT_AGO_RE = re.compile(r"^\s*(\d+)\s*(s|m|min|h|d|w|mo|y)\s*$", re.I)
+
+
 def parse_date_text(txt: str) -> str | None:
+    m = SHORT_AGO_RE.match(txt or "")
+    if m:
+        n, unit = int(m.group(1)), m.group(2).lower()
+        days = {"s": 0, "m": 0, "min": 0, "h": n / 24, "d": n, "w": 7 * n, "mo": 30 * n, "y": 365 * n}[unit]
+        return (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
     m = DATE_RE.search(txt or "")
     if m:
         try:
@@ -163,18 +171,27 @@ def parse_date_text(txt: str) -> str | None:
     return None
 
 
+def without_noise(el):
+    """A copy without comments and profile pop-ups, whose dates and badges aren't the post's own."""
+    copy = BeautifulSoup(str(el), "html.parser")
+    for bad in copy.select('[class*="comment"], [class*="popover"], turbo-frame[id$="_comments"]'):
+        bad.decompose()
+    return copy
+
+
 def parse_date(el) -> tuple[str | None, str]:
-    t = el.find("time", attrs={"datetime": True})
-    if t:
-        try:
-            return datetime.fromisoformat(t["datetime"].replace("Z", "+00:00")).isoformat(), t.get_text(strip=True)
-        except ValueError:
-            pass
     texts = []
     meta = el.select_one(".post__meta")
     if meta:
         texts.append(meta.get_text(" ", strip=True))
-    texts.append(el.get_text(" ", strip=True)[:3000])
+    clean = without_noise(el)
+    t = clean.find("time", attrs={"datetime": True})
+    if t and not texts:
+        try:
+            return datetime.fromisoformat(t["datetime"].replace("Z", "+00:00")).isoformat(), t.get_text(strip=True)
+        except ValueError:
+            pass
+    texts.append(clean.get_text(" ", strip=True)[:3000])
     for txt in texts:
         d = parse_date_text(txt)
         if d:
@@ -275,12 +292,23 @@ def parse_card(frame, page_url: str) -> dict | None:
     title_href = (title_el.get("href") or "") if title_el is not None and title_el.name == "a" else ""
     locked = bool(frame.select_one('a[href*="/available_tiers"]')) or "/supporters/pricing" in title_href
     published, shown = parse_date(frame)
+    clean = without_noise(frame)
     duration = None
-    for s in frame.find_all(string=True):
+    for s in clean.find_all(string=True):
         if DURATION_RE.match(s.strip()):
             duration = duration_seconds(s.strip())
             break
-    likes, n_comments = counts(frame)
+    if duration is None:
+        player = frame.find("mux-player", attrs={"default-duration": True})
+        if player and player["default-duration"].isdigit():
+            duration = int(player["default-duration"])
+    likes_el = frame.select_one('[data-testid="Post.LikesCount"]')
+    count_el = frame.find(id=f"post_{m.group(1)}_comments_count")
+    if likes_el is not None or count_el is not None:
+        likes = to_int(likes_el.get_text(strip=True)) if likes_el is not None else None
+        n_comments = to_int(count_el.get_text(strip=True)) if count_el is not None else None
+    else:
+        likes, n_comments = counts(clean)
     return {
         "id": int(m.group(1)),
         "title": title or f"Post {m.group(1)}",
@@ -290,17 +318,42 @@ def parse_card(frame, page_url: str) -> dict | None:
         "locked": locked,
         "published": published,
         "date_text": shown,
-        "pinned": any(s.strip() == "Pinned" for s in frame.find_all(string=True)),
+        "pinned": any(s.strip() == "Pinned" for s in clean.find_all(string=True)),
         "duration": duration,
         "tag_ids": [c[4:] for c in (frame.get("class") or []) if c.startswith("tag_")],
+        "tag_pills": card_tags(frame),
         "like_count": likes,
         "comment_count": n_comments,
     }
 
 
+def card_tags(frame) -> list[dict]:
+    """Tag pills on a post card: [{'id': '20095', 'name': 'RIPTIDE'}]."""
+    out = []
+    for form in frame.select(".post__tags form"):
+        inp = form.find("input", attrs={"name": "tag_id"})
+        btn = form.find("button")
+        if inp is not None and inp.get("value") and btn is not None:
+            out.append({"id": inp["value"], "name": norm_space(btn.get_text(" ", strip=True))})
+    return out
+
+
 def parse_tags(soup) -> list[dict]:
     """Tag names from the feed's filter panel: [{'id': '20083', 'name': 'RIPTIDE', 'count': 277}]."""
     out: dict[str, dict] = {}
+    for inp in soup.find_all("input", attrs={"name": "tag_id", "value": True}):
+        if inp.find_parent(class_="post__tags") is not None:
+            continue
+        btn = inp.find_next("button")
+        if btn is None:
+            continue
+        text = norm_space(btn.get_text(" ", strip=True))
+        m = re.match(r"^(.*?)\s+(\d[\d,]*)$", text)
+        name, count = (m.group(1), to_int(m.group(2))) if m else (text, None)
+        if name:
+            out[inp["value"]] = {"id": inp["value"], "name": name, "count": count}
+    if out:
+        return list(out.values())
     for img in soup.find_all("img", alt=re.compile(r"'s tag thumbnail$")):
         name = img["alt"][: -len("'s tag thumbnail")]
         holder = img
@@ -437,7 +490,7 @@ def looks_like_attachment(url: str, attr: str, same_site: SameSite) -> bool:
     return False
 
 
-def extract_media(card, page_url: str, same_site: SameSite) -> tuple[list[dict], list[str]]:
+def extract_media(card, page_url: str, same_site: SameSite, post_id: int | None = None) -> tuple[list[dict], list[str]]:
     """Everything downloadable in a post card. Returns (items, unresolved attachment names)."""
     items: list[dict] = []
     seen: set[str] = set()
@@ -454,6 +507,8 @@ def extract_media(card, page_url: str, same_site: SameSite) -> tuple[list[dict],
     for t in tags:
         pid = t.get("playback-id") if t.name in ("mux-player", "mux-video", "mux-audio") or t.has_attr("playback-id") else None
         if not pid:
+            continue
+        if post_id and t.get("metadata-video-id") and t["metadata-video-id"] != str(post_id):
             continue
         token = t.get("playback-token")
         if not token and t.get("tokens"):
@@ -522,8 +577,13 @@ def extract_media(card, page_url: str, same_site: SameSite) -> tuple[list[dict],
             src = urljoin(page_url, img["src"])
             if urlparse(src).scheme in ("http", "https"):
                 add("image", url_key(src), url=src)
+    for t in tags:
+        if t.name == "mux-player" and t.get("poster") and not t.has_attr("audio") and (
+                not post_id or t.get("metadata-video-id") in (None, str(post_id))):
+            add("thumbnail", "thumb:" + url_key(t["poster"]), url=urljoin(page_url, t["poster"]))
+            break
     media_box = card.select_one(".post__media")
-    if media_box is not None:
+    if media_box is not None and not any(i["kind"] == "thumbnail" for i in items):
         img = media_box.find("img", src=True)
         if img is not None:
             src = urljoin(page_url, img["src"])
@@ -581,12 +641,30 @@ def extract_body(card) -> tuple[str, str, list[dict]]:
 
 
 def find_post_scope(soup, post_id: int):
-    """The element holding one post on its own page."""
+    """The post's card on its own page. Video and audio posts have a "watch page" without one (None)."""
     frame = soup.find("turbo-frame", id=f"post_{post_id}")
+    if frame is not None:
+        return frame
+    frame = soup.select_one('[data-testid="Post"]')
     if frame is not None:
         return frame
     candidates = [d for d in soup.find_all("div") if "post" in (d.get("class") or [])]
     return candidates[0] if candidates else None
+
+
+def watch_block(soup):
+    """Video and audio posts open a "watch page": player, date, title, description, tags and comments in
+    one block (turbo-frame#video_page), next to a "Recently uploaded" column that belongs to other posts."""
+    return (soup.find("turbo-frame", id=re.compile(r"^(video|audio|video_embed)s?_page$"))
+            or soup.select_one(".video-page, .audio-page"))
+
+
+def clean_card(frame) -> str:
+    """A post card without its comment previews, for keeping alongside the post."""
+    copy = BeautifulSoup(str(frame), "html.parser")
+    for bad in copy.select('turbo-frame[id$="_comments"], [class*="comments"], [class*="popover"]'):
+        bad.decompose()
+    return str(copy)
 
 
 def lazy_frames(soup, page_url: str, same_site: SameSite, skip_ids: set[str] = frozenset()) -> list[tuple[str, str]]:
@@ -614,88 +692,130 @@ def load_more_comment_links(soup, page_url: str, same_site: SameSite) -> list[st
 
 
 # --------------------------------------------------------------------------- comments
+#
+# Comments load separately from the post: GET /supporters/posts/<id>/comments?order=newest&limit=N
+# answers with Turbo Stream HTML. Each comment is <turbo-frame id="comment_<id>">. More comments come
+# from a form with a next_page_data field; replies from a "Load replies" form (.../comments/<id>/replies).
 
-def _comment_nodes(soup) -> list:
-    nodes = [el for el in soup.find_all(True) if COMMENT_ID_RE.match(el.get("id") or "")]
-    if nodes:
-        return nodes
-    nodes = [el for el in soup.find_all(True) if "comment" in (el.get("data-testid") or "").lower()
-             and el.get("data-testid", "").lower() in ("comment", "post.comment", "comments.comment")]
-    if nodes:
-        return nodes
-    # Last resort: elements whose class is exactly a comment block (not comment lists, forms or buttons)
+COMMENT_FRAME_RE = re.compile(r"^comment_(\d+)$")
+
+
+def comments_url(base: str, post_id: int, limit: int = 50) -> str:
+    return urljoin(base + "/", f"/supporters/posts/{post_id}/comments?order=newest&limit={limit}")
+
+
+def _form_url(form, page_url: str, limit: int | None = None) -> str:
+    params = [(i["name"], i.get("value", "")) for i in form.find_all("input", attrs={"name": True})
+              if i["name"] != "authenticity_token"]
+    if limit:
+        params = [(k, str(limit) if k == "limit" else v) for k, v in params]
+    return urljoin(page_url, form["action"]) + ("?" + urlencode(params) if params else "")
+
+
+def next_comments_page(soup, page_url: str, limit: int = 50) -> str | None:
+    """The 'more comments' (or 'more replies') form, if there is one."""
+    for form in soup.find_all("form", action=True):
+        if form.find("input", attrs={"name": "next_page_data"}) is None:
+            continue
+        if re.search(r"/comments(/\d+/replies)?/?$", urlparse(urljoin(page_url, form["action"])).path):
+            return _form_url(form, page_url, limit)
+    return None
+
+
+def reply_requests(soup, page_url: str, limit: int = 50) -> list[tuple[str, str]]:
+    """(comment id, URL) for each comment whose replies load separately."""
     out = []
-    for el in soup.find_all(["div", "li", "article", "turbo-frame"]):
-        classes = [c.lower() for c in el.get("class") or []]
-        if any(c in ("comment", "comment-item", "comments__item", "comment__item") for c in classes):
-            out.append(el)
+    for form in soup.find_all("form", action=re.compile(r"/comments/\d+/replies/?$")):
+        if form.find("input", attrs={"name": "next_page_data"}) is not None:
+            continue  # that's paging inside replies, handled by next_comments_page
+        cid = re.search(r"/comments/(\d+)/replies", form["action"]).group(1)
+        text = norm_space(form.get_text(" ", strip=True)).lower()
+        count = re.match(r"^(\d+)", text)
+        if ("load replies" in text or "repl" in text and count) and not (count and count.group(1) == "0"):
+            out.append((cid, _form_url(form, page_url, limit)))
     return out
 
 
-def _first_text(el, selectors: list[str]) -> str:
-    for sel in selectors:
-        found = el.select_one(sel)
-        if found is not None:
-            t = norm_space(found.get_text(" ", strip=True))
-            if t:
-                return t
-    return ""
+def _comment_nodes(soup) -> list:
+    nodes = [el for el in soup.find_all(True) if COMMENT_FRAME_RE.match(el.get("id") or "")]
+    if nodes:
+        return nodes
+    # Other layouts: elements marked as a single comment
+    return [el for el in soup.find_all(True) if (el.get("data-testid") or "").lower() in ("comment", "post.comment")
+            or any(c.lower() in ("comment-item", "comments__item") for c in el.get("class") or [])]
 
 
-def parse_comments(html_parts: list[str], page_url: str) -> list[dict]:
-    """Comments from a post page and any separately loaded comment frames.
+def _parse_comment(el, page_url: str) -> dict:
+    m = COMMENT_FRAME_RE.match(el.get("id") or "")
+    cid = m.group(1) if m else (el.get("data-comment-id") or el.get("data-id") or str(abs(hash(str(el)[:400]))))
+    # Work on a copy without nested replies, edit forms, menus and profile pop-ups
+    own = BeautifulSoup(str(el), "html.parser").find()
+    for nested in list(own.find_all(True))[::-1]:
+        if nested is own or nested.decomposed:
+            continue
+        ident = " ".join(nested.get("class") or []).lower() + " " + (nested.get("id") or "").lower()
+        if (COMMENT_FRAME_RE.match(nested.get("id") or "") or "popover" in ident or "dropdown" in ident
+                or "modal" in ident or ident.strip().endswith("_edit_form") or "_replies" in ident):
+            nested.decompose()
+    author_el = own.select_one('[data-testid="Post.CommentAuthor"]') or own.select_one(".comment__author-name")
+    if author_el is None:
+        author_el = next((x for x in own.select("[class*=author], [class*=name], strong, b")
+                          if norm_space(x.get_text(" ", strip=True))), None)
+    author = norm_space(author_el.get_text(" ", strip=True)) if author_el is not None else ""
+    avatar_el = own.select_one("img.avatar__image") or own.find("img", src=True)
+    body_el = (own.select_one(".comment__body") or own.select_one("[class*=rich-text]")
+               or own.select_one("[class*=body]") or own.select_one("[class*=content]") or own.find("p"))
+    for b in (body_el.find_all("button") if body_el is not None else []):
+        b.decompose()
+    date_el = own.select_one(".comment__date")
+    t = own.find("time", attrs={"datetime": True})
+    if date_el is not None:
+        shown = norm_space(date_el.get_text(" ", strip=True))
+        when = parse_date_text(shown)
+    elif t is not None:
+        shown, when = t.get_text(strip=True), t["datetime"]
+    else:
+        when, shown = parse_date(own)
+    like_el = own.select_one('turbo-frame[id$="_like"] [class*=number]') or own.select_one(
+        '[class*=like] [class*=number], [data-testid*=Like] [class*=number]')
+    pinned = any(norm_space(x.get_text(" ", strip=True)) == "Pinned" for x in own.select("[class*=badge]"))
+    link = own.find("a", href=re.compile(r"[?&]cid="))
+    return {
+        "id": str(cid), "author_name": author,
+        "author_avatar": urljoin(page_url, avatar_el["src"]) if avatar_el is not None and avatar_el.get("src") else None,
+        "date": when, "date_text": shown,
+        "body_html": body_el.decode_contents().strip() if body_el is not None else "",
+        "body_text": norm_space(body_el.get_text(" ", strip=True)) if body_el is not None else "",
+        "like_count": to_int(like_el.get_text(strip=True)) if like_el is not None else None,
+        "pinned": pinned, "link": urljoin(page_url, link["href"]) if link is not None else None,
+        "raw": str(el)[:200_000],
+    }
 
-    The member-only markup hasn't been seen yet, so this looks for common patterns and always
-    keeps each comment's raw HTML for re-reading later.
-    """
+
+def parse_comments(parts: list, page_url: str) -> list[dict]:
+    """Comments from saved responses. parts: [(html, parent comment id or None)] or plain HTML strings."""
     comments: list[dict] = []
     seen: set[str] = set()
-    for html_text in html_parts:
+    for pos_base, part in enumerate(parts):
+        html_text, context_parent = part if isinstance(part, tuple) else (part, None)
         soup = soup_of(html_text, turbo=True)
         nodes = _comment_nodes(soup)
         node_ids = {id(n) for n in nodes}
-        for pos, el in enumerate(nodes):
-            m = COMMENT_ID_RE.match(el.get("id") or "")
-            cid = m.group(1) if m else (el.get("data-comment-id") or el.get("data-id") or f"{abs(hash(str(el)[:400]))}")
-            if cid in seen:
+        for el in nodes:
+            c = _parse_comment(el, page_url)
+            if c["id"] in seen:
                 continue
-            seen.add(cid)
-            parent_id = el.get("data-parent-id") or el.get("data-comment-parent-id")
-            if not parent_id:
+            seen.add(c["id"])
+            parent = el.get("data-parent-id") or None
+            if not parent:
                 for anc in el.parents:
                     if id(anc) in node_ids:
-                        am = COMMENT_ID_RE.match(anc.get("id") or "")
-                        parent_id = am.group(1) if am else None
+                        am = COMMENT_FRAME_RE.match(anc.get("id") or "")
+                        parent = am.group(1) if am else None
                         break
-            # Work on a copy without nested replies, so the author and text are this comment's own
-            own = BeautifulSoup(str(el), "html.parser")
-            own_root = own.find()
-            for nested in list(own_root.find_all(True))[::-1]:
-                if nested is not own_root and (COMMENT_ID_RE.match(nested.get("id") or "")
-                                               or "repl" in " ".join(nested.get("class") or []).lower()):
-                    nested.decompose()
-            author = _first_text(own_root, ["[class*=author]", "[class*=user-name]", "[class*=username]",
-                                            "[class*=name]", "strong", "b"])
-            avatar_el = own_root.find("img", src=True)
-            body_el = (own_root.select_one("[class*=rich-text]") or own_root.select_one("[class*=body]")
-                       or own_root.select_one("[class*=content]") or own_root.select_one("[class*=text]")
-                       or own_root.find("p"))
-            body_html = body_el.decode_contents() if body_el is not None else ""
-            body_text = norm_space(body_el.get_text(" ", strip=True)) if body_el is not None else ""
-            when, shown = parse_date(own_root)
-            likes = None
-            for b in own_root.find_all(["button", "span", "div"]):
-                ident = " ".join(b.get("class") or []).lower() + (b.get("data-testid") or "").lower()
-                if "like" in ident or "reaction" in ident or "heart" in ident:
-                    likes = to_int(b.get_text(" ", strip=True))
-                    if likes is not None:
-                        break
-            comments.append({
-                "id": str(cid), "parent_id": str(parent_id) if parent_id else None,
-                "author_name": author, "author_avatar": urljoin(page_url, avatar_el["src"]) if avatar_el else None,
-                "date": when, "date_text": shown, "body_html": body_html, "body_text": body_text,
-                "like_count": likes, "position": pos, "raw": str(el)[:200_000],
-            })
+            c["parent_id"] = parent or context_parent
+            c["position"] = len(comments)
+            comments.append(c)
     return comments
 
 

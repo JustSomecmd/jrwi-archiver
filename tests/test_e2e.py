@@ -86,9 +86,22 @@ def test_post_with_attachment_and_comments(client):
     assert [a["name"] for a in item["attachments"]] == ["Zombie Character Sheets.pdf"]
     assert len(item["images"]) == 1
     comments = client.get("/api/items/299/comments").json()
-    assert comments["total"] == 2
-    assert comments["items"][0]["author"]["name"] == "Sam"
-    assert comments["items"][0]["replies"][0]["body_text"] == "Same here."
+    assert comments["total"] == 3  # two on the first page, one more behind "View more comments"
+    first = comments["items"][0]
+    assert first["author"]["name"] == "Sam" and first["like_count"] == 4
+    assert first["body_text"] == "Love these rules!"
+    assert first["replies"][0]["body_text"] == "Same here."
+    pinned = client.get("/api/items/300/comments").json()["items"][0]
+    assert pinned["pinned"] and pinned["author"]["name"] == "Kim" and pinned["like_count"] == 327
+
+
+def test_card_details(client):
+    item = client.get("/api/items/300").json()
+    assert item["date"].startswith("2026-11-07")  # not a commenter's join date
+    assert item["like_count"] == 469 and item["comment_count"] == 3
+    assert item["tags"] == ["RIPTIDE"]
+    assert item["thumbnail"]
+    assert client.get("/api/items/299").json()["body_text"].startswith("Hi, scouts!")
 
 
 def test_audio_progress_and_range(client):
