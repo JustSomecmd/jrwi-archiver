@@ -120,7 +120,9 @@ P1 = [
         "Nov 7, 2026", mux_audio(298), "<p>Audio version.</p>",
         extra=dl_audio(298, "Through%20the%20Fire%20%7C%20Riptide%20%23136%20%28AUDIO%20ONLY%29"), tags="tag_101"),
     add(297, "/supporters/videos/just-rolled-with-it-riptide-136", "Just Rolled With It | Riptide #136", "Nov 7, 2026",
-        mux_video(297), "<p>The aftershow.</p>", tags="tag_102"),
+        mux_video(297), "<p>The aftershow.</p><p>The cast talk through the episode: the fight in the harbour, the deal "
+        "with the captain, and what comes next for the crew.</p><p>Questions from the members get answered at the end, "
+        "so leave yours in the comments.</p><p>See you next time!</p>", tags="tag_102"),
     add(296, "/supporters/videos/high-roller-special", "High Roller Special", "Oct 10, 2026",
         '<a class="post__media" href="/supporters/payments/checkout/posts/296/available_tiers"><span>1:00:00</span></a>',
         "", locked=True),

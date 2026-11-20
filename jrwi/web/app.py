@@ -452,24 +452,54 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         rows_sql = f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY published {direction}, id {direction}"
         total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
         rows = db.q(f"{rows_sql} LIMIT 20 OFFSET ?", args + [(max(1, page) - 1) * 20])
-        posts = [ser.post_full(r) for r in rows]
+        posts = []
+        for r in rows:
+            p = ser.post_full(r)
+            # The site's feed shows each post's top comments, with more on request
+            top = sorted_comments(r) if r["comment_count"] or r["comments_fetched"] else []
+            p["top_comments"], p["more_comments"] = top[:2], len(top) > 2
+            if p["audio"]:
+                prog = api_progress(p["audio"]["post_id"])
+                p["progress_start"] = prog.get("position") if prog and not prog.get("finished") else 0
+            posts.append(p)
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
                       pages=math.ceil(total / 20) or 1, locked=locked, order=order)
 
+    def sorted_comments(post: dict, csort: str = "top") -> list[dict]:
+        """A post's own comments. 'top' (most relevant, as on the site): pinned first, then the most liked.
+        'new': pinned first, then newest first."""
+        items = ser.comments(post, 1, 100000, only_post=post["id"])["items"]
+        if csort == "new":
+            return items  # already pinned first, then newest first
+        return sorted(items, key=lambda c: (not c["pinned"], -(c["like_count"] or 0)))
+
+    @app.get("/items/{post_id}/comments-html", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def item_comments_html(request: Request, post_id: int, csort: str = "top", offset: int = 0, limit: int = 10):
+        """More comments for a post in the feed, as HTML. X-More says whether there are more after these."""
+        post = db.post(post_id)
+        if not post:
+            raise HTTPException(404, "No such post")
+        items = sorted_comments(post, "new" if csort == "new" else "top")
+        offset, limit = max(0, offset), max(1, min(limit, 50))
+        resp = templates.TemplateResponse(request, "comments_part.html", {"items": items[offset:offset + limit]})
+        resp.headers["X-More"] = "1" if len(items) > offset + limit else "0"
+        return resp
+
     @app.get("/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def item_page(request: Request, post_id: int):
+    def item_page(request: Request, post_id: int, csort: str = "top"):
         post = db.post(post_id)
         if not post:
             raise HTTPException(404, "No such post")
         item = ser.post_full(post)
-        comments = ser.comments(post, 1, 1000, only_post=post["id"])
+        csort = "new" if csort == "new" else "top"
+        comments = {"items": sorted_comments(post, csort)}
         show = db.one("SELECT id, name FROM shows WHERE id=?", (item["show"],))
         progress = api_progress(item["audio"]["post_id"]) if item["audio"] else None
         # The side list, like the site's "Recently uploaded": newest posts from the same show
         sql, args = item_query(show=item["show"], separate=True)
         more = [ser.post_summary(r) for r in db.q(f"SELECT * FROM ({sql}) WHERE id != ? LIMIT 8", args + [post["id"]])]
         return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=progress,
-                      more=more)
+                      more=more, csort=csort)
 
     @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def pages_index(request: Request):

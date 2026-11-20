@@ -122,6 +122,15 @@ def test_versions_stay_separate_posts(app, client):
         assert r.status_code == 200, path
     page = web.get("/items/298").text
     assert "Audio version" in page and "Pat" in page and "Kim" not in page
+    # The feed shows each post's two most liked comments, and loads the rest on request
+    feed = web.get("/feed").text
+    zombie = feed[feed.index('data-comments="299"'):]
+    zombie = zombie[:zombie.index("</article>")]
+    assert zombie.index("Sam") < zombie.index("Jo") and "Lee" not in zombie and "View 1 reply" in zombie
+    rest = web.get("/items/299/comments-html?csort=top&offset=2&limit=10")
+    assert "Lee" in rest.text and rest.headers["X-More"] == "0"
+    newest = web.get("/items/299/comments-html?csort=new&offset=0&limit=2")
+    assert newest.headers["X-More"] == "1"
 
 
 def test_jellyfin_layout():

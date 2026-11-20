@@ -21,8 +21,7 @@
     </div>
   {% endif %}
   {% if a %}
-    <div class="audioplayer" data-pane="audio" {% if v and v.url %}hidden{% endif %}>
-      {% if item.thumbnail %}<div class="bgblur" style="background-image:url('{{ item.thumbnail }}')"></div>{% endif %}
+    <div class="audioplayer" data-pane="audio" data-avg {% if v and v.url %}hidden{% endif %}>
       <div class="inner">
         {% if item.thumbnail %}<img class="art" src="{{ item.thumbnail }}" alt="">{% endif %}
         <div class="controls">
@@ -45,7 +44,7 @@
     <h1>{{ item.title }}</h1>
     <div class="rich">{{ item.body_html | safe }}</div>
     {% if item.images %}
-      <div class="gallery">{% for i in item.images %}<a href="{{ i.url }}" target="_blank"><img loading="lazy" src="{{ i.url }}" alt=""></a>{% endfor %}</div>
+      <div class="gallery">{% for i in item.images %}<a href="{{ i.url }}" target="_blank" class="fit" data-avg><img loading="lazy" src="{{ i.url }}" alt=""></a>{% endfor %}</div>
     {% endif %}
     {% if item.attachments or item.documents %}
       <div class="files">
@@ -72,7 +71,15 @@
   </div>
 
   <div class="comments" id="comments">
-    <h2>Comments{% if item.comment_count %} · {{ item.comment_count }}{% endif %}</h2>
+    <div class="comments-head">
+      <h2>Comments{% if item.comment_count %} · {{ item.comment_count }}{% endif %}</h2>
+      {% if comments %}
+      <details class="dd sortdd">
+        <summary>{{ 'Most relevant' if csort == 'top' else 'Newest' }} {{ icon('chevron') }}</summary>
+        <div class="dd-menu"><a href="?csort=top#comments">Most relevant</a><a href="?csort=new#comments">Newest</a></div>
+      </details>
+      {% endif %}
+    </div>
     {% if comments %}
       {% for c in comments %}{{ comment_tree(c) }}{% endfor %}
     {% else %}
