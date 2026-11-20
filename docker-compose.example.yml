@@ -1,28 +1,33 @@
-# Add this service to the compose file that runs TubeArchivist and Jellyfin.
+# Add this service to your compose file. It has its own network, so it doesn't need
+# to sit behind a VPN container such as gluetun.
 services:
   jrwi-archiver:
-    image: ghcr.io/justsomecmd/jrwi-archiver:latest
+    image: ghcr.io/justsomecmd/jrwi-archiver:0.2.1   # or :latest
     container_name: jrwi-archiver
     restart: unless-stopped
     # Run as your own user so Jellyfin and you can read the files (find the numbers with `id`).
     user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "8090:8090"
     environment:
       - TZ=Europe/Amsterdam
-      # Optional. Without these, set the jrwishow.com login on the admin page instead.
+      # The archive and the Jellyfin videos share one mount, so finished videos are moved, not copied.
+      - JRWI_ARCHIVE=/jrwi/archive
+      - JRWI_MEDIA=/jrwi/videos
+      # Optional. Without these, set the jrwishow.com login on the Settings page instead.
       # - JRWI_EMAIL=you@example.com
       # - JRWI_PASSWORD=your-password
       # Optional. Without it, the web app asks you to choose a password on first visit.
       # - JRWI_WEB_PASSWORD=choose-a-password
     volumes:
-      - ./jrwi/data:/data          # database, login session
-      - ./jrwi/archive:/archive    # posts, audio, images, attachments, comments, site pages
-      - /srv/media/jrwi:/media/jrwi  # video, laid out as TV shows for Jellyfin
+      - ./jrwi-data:/data   # database and login session
+      - /srv/jrwi:/jrwi     # archive/ (posts, audio, images, comments, pages) and videos/ (for Jellyfin)
 
-  # In your existing Jellyfin service, mount the same video folder (read-only is enough)
-  # and add it in Jellyfin as a "Shows" library:
+  # In your Jellyfin service, mount the video folder (read-only is enough)
+  # and add it in Jellyfin as a "Shows" library with online metadata turned off:
   #
   # jellyfin:
   #   volumes:
-  #     - /srv/media/jrwi:/media/jrwi:ro
+  #     - /srv/jrwi/videos:/media/jrwi:ro

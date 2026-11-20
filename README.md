@@ -17,10 +17,12 @@ The archive is for personal use. Keep it private: don't put it on the open inter
 1. Make the folders, owned by the user the container runs as:
 
    ```sh
-   mkdir -p jrwi/data jrwi/archive /srv/media/jrwi
+   mkdir -p jrwi-data /srv/jrwi/archive /srv/jrwi/videos
    ```
 
-2. Add the service from [`docker-compose.example.yml`](docker-compose.example.yml) to your compose file. Change `/srv/media/jrwi` to wherever your media lives, and `user:` to your own user and group IDs (run `id` to see them).
+2. Add the service from [`docker-compose.example.yml`](docker-compose.example.yml) to your compose file. Change `/srv/jrwi` to wherever your media lives, and `user:` to your own user and group IDs (run `id` to see them).
+   - **One folder for both:** the archive and the Jellyfin videos sit in one mounted folder (`/jrwi/archive` and `/jrwi/videos` in the container). A finished video is then moved into place instead of copied, which matters for files of several GB.
+   - **No VPN needed:** the service doesn't need to run behind a VPN container such as gluetun. The site sees your normal connection, as it does when you watch in a browser.
 3. Start it with `docker compose up -d jrwi-archiver` and open `http://<server>:8090`.
 4. Choose a password for the web app. You'll go straight to **Settings**.
 5. Enter your jrwishow.com email and password, save, then press **Test login**.
@@ -32,7 +34,9 @@ The archive is for personal use. Keep it private: don't put it on the open inter
 
 ### Jellyfin
 
-Mount the same video folder into Jellyfin, for example `/srv/media/jrwi:/media/jrwi:ro`, and add it as a **Shows** library.
+Mount the video folder into Jellyfin, for example `/srv/jrwi/videos:/media/jrwi:ro`, and add it as a **Shows** library.
+
+- **Turn off online metadata for this library:** in the library's settings, untick every metadata downloader and image fetcher. The shows aren't on TheTVDB or TMDB, and a show such as Riptide could otherwise be matched to an unrelated series. The `.nfo` files also carry `<lockdata>`, which tells Jellyfin to keep their metadata.
 
 - **Episodes:** each show gets a folder, such as `Riptide/Season 01/Riptide - S01E136 - Through the Fire [jrwi-286486].mp4`.
 - **Specials:** aftershows, extras and unnumbered videos go in `Season 00`.

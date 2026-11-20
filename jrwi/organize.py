@@ -249,6 +249,7 @@ def write_episode_nfo(db: Db, paths: Paths, post: dict, video: Path, season: int
         f"  <plot>{escape(plot)}</plot>\n  {runtime}\n"
         f'  <uniqueid type="jrwi" default="true">{post["id"]}</uniqueid>\n'
         f"  <originaltitle>{escape(post['title'])}</originaltitle>\n"
+        "  <lockdata>true</lockdata>\n"
         "</episodedetails>\n"
     )
     nfo = video.with_suffix(".nfo")
@@ -273,6 +274,7 @@ def write_show_nfo(db: Db, paths: Paths, show_id: str | None, folder: Path) -> N
         f"  <title>{escape(show['name'])}</title>\n  <plot>{escape(show.get('description') or '')}</plot>\n"
         "  <studio>Just Roll With It</studio>\n"
         f'  <uniqueid type="jrwi" default="true">show-{escape(show["id"])}</uniqueid>\n'
+        "  <lockdata>true</lockdata>\n"
         "</tvshow>\n"
     )
     if not nfo.exists() or nfo.read_text(encoding="utf-8") != xml:
