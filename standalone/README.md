@@ -32,7 +32,8 @@ On a Mac, the first time you open the file, right-click it and choose **Open** (
 
 Before you download the whole library, archive the 5 newest posts and check the result. Open a terminal in this folder and run:
 
-- Windows: `"Run on Windows.bat" --limit 5`
+- Windows PowerShell (the default terminal on Windows 11): `& ".\Run on Windows.bat" --limit 5`
+- Windows Command Prompt: `"Run on Windows.bat" --limit 5`
 - Mac: `./"Run on Mac.command" --limit 5`
 
 Then open `JRWI Archive/index.html` in your browser. If the posts, images and media look right, run the launcher again without `--limit`.
