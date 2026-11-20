@@ -33,6 +33,14 @@ document.querySelectorAll("audio[data-progress]").forEach((audio) => {
 });
 
 // Live status on the admin page
+const humanSize = (n) => {
+  if (n === null || n === undefined || n === "") return "?";
+  n = Number(n);
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return i === 0 ? `${Math.round(n)} B` : `${n.toFixed(1)} ${units[i]}`;
+};
 const live = document.querySelector("[data-live-status]");
 if (live) {
   const tick = async () => {
@@ -48,6 +56,13 @@ if (live) {
       bar.style.width = pct + "%";
       live.querySelector("[data-count]").textContent =
         s.running && s.progress.total ? `${s.progress.done} of ${s.progress.total}` : "";
+      // Counts and sizes change while a check runs
+      const set = (key, text) => document.querySelectorAll(`[data-stat="${key}"]`).forEach((el) => { el.textContent = text; });
+      for (const k of ["archived", "items", "locked", "problems"]) set(k, String(s.counts[k]));
+      set("archive_bytes", humanSize(s.disk.archive_bytes));
+      set("free_bytes", humanSize(s.disk.free_bytes));
+      // The last check's problem is old news once a new check is running
+      if (s.running) document.querySelectorAll("[data-last-problem]").forEach((el) => { el.hidden = true; });
       if (live.dataset.wasRunning === "1" && !s.running) location.reload();
       live.dataset.wasRunning = s.running ? "1" : "0";
     } catch (e) {}

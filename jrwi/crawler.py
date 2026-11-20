@@ -105,8 +105,17 @@ class Archiver:
         s = self.s
         email = os.environ.get("JRWI_EMAIL") or s["site_email"]
         password = os.environ.get("JRWI_PASSWORD") or s["site_password"]
+        before = self.status.snapshot()
         self.status.set(phase="logging in", detail="")
         self.client.login(email, password, debug_file=self.paths.data / "login-debug.txt")
+        self.status.set(phase=before["phase"], detail=before["detail"])
+
+    def has_login(self) -> bool:
+        """True when there's an email and password, or a saved login session, to check with."""
+        s = self.s
+        email = os.environ.get("JRWI_EMAIL") or s["site_email"]
+        password = os.environ.get("JRWI_PASSWORD") or s["site_password"]
+        return bool(email and password) or self.client.cookie_file.exists()
 
     def page(self, url: str, accept: str = HTML_ACCEPT, headers: dict | None = None) -> tuple[str, str]:
         """GET a page, logging in again once if the session ran out."""
@@ -291,6 +300,8 @@ class Archiver:
                 if first_time and fresh["status"] in ("complete", "partial") and not fresh["pair_id"]:
                     self.new_titles.append(fresh["title"])
                     self.db.event("new_item", "", post["id"], fresh["title"])
+                if first_time:
+                    self.grow_archive_size(fresh)
             except (SessionExpired, LoginFailed, Blocked):
                 raise
             except NotFound as e:
@@ -304,6 +315,18 @@ class Archiver:
                 self.db.update("posts", "id", post["id"], {"status": "error",
                                                           "problems": [f"{type(e).__name__}: {e}"]})
         return archived
+
+    def grow_archive_size(self, post: dict) -> None:
+        """Add a newly archived post to the archive size shown on the admin page. The full count at the end of
+        each check corrects any difference."""
+        try:
+            size = folder_size(self.paths.archive / "posts" / str(post["id"]))
+            video = ((post.get("media") or {}).get("video") or {}).get("path")
+            if video and (self.paths.media / video).is_file():
+                size += (self.paths.media / video).stat().st_size
+            self.db.set_setting("archive_bytes", int(self.db.setting("archive_bytes") or 0) + size)
+        except (OSError, ValueError, TypeError):
+            pass
 
     def fetch_post_page(self, post: dict):
         """(final URL, page HTML, page soup, card on the page or None). None if the post is locked."""

@@ -154,8 +154,10 @@ class Client:
     def login(self, email: str, password: str, debug_file: Path | None = None) -> None:
         """Log in with the site's own form. On failure, explain why and save details (never the password)."""
         if not email or not password:
-            raise LoginFailed("no jrwishow.com email and password are set (Admin > Settings), and the saved "
-                              "login session has run out")
+            if self.cookie_file.exists():
+                raise LoginFailed("no jrwishow.com email and password are set (Settings), and the saved "
+                                  "login session has run out")
+            raise LoginFailed("no jrwishow.com email and password are set yet (Settings)")
         notes: list[str] = []
         response_text = ""
 

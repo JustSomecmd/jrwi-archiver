@@ -72,7 +72,12 @@ class Scheduler:
                 if self.next_check is None and self._interval():
                     self._plan_next(datetime.now(timezone.utc))
                 continue
+            manual = woke or self.wake.is_set()
             self.wake.clear()
+            if not manual and not self.archiver.has_login():
+                # Nothing to log in with yet: wait for Settings instead of recording a failed check
+                self._plan_next(datetime.now(timezone.utc))
+                continue
             full, self.full_requested = self.full_requested, False
             try:
                 result = self.archiver.run_check(full=full)

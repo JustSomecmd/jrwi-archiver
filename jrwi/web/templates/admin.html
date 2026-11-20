@@ -5,12 +5,12 @@
 <h1>Admin</h1>
 <p class="admin-links"><a class="btn ghost" href="/admin/settings">Settings</a>
   <a class="btn ghost" href="/admin/shows">Shows</a>
-  <a class="btn ghost" href="/admin/problems">Problems ({{ st.counts.problems }})</a></p>
+  <a class="btn ghost" href="/admin/problems">Problems (<span data-stat="problems">{{ st.counts.problems }}</span>)</a></p>
 {% if not configured %}
   <div class="notice">Add your jrwishow.com email and password in <a href="/admin/settings">Settings</a> before the first check.</div>
 {% endif %}
-{% if st.last_result in ('login_failed', 'blocked', 'error') %}
-  <div class="notice">The last check ended with <b>{{ st.last_result.replace('_', ' ') }}</b>: {{ st.message }}</div>
+{% if st.last_result in ('login_failed', 'blocked', 'error') and not st.running %}
+  <div class="notice" data-last-problem>The last check ended with <b>{{ st.last_result.replace('_', ' ') }}</b>: {{ st.message }}</div>
 {% endif %}
 
 <div class="panel" data-live-status data-was-running="{{ '1' if st.running else '0' }}">
@@ -34,11 +34,11 @@
 </div>
 
 <div class="stats">
-  <div class="stat"><b>{{ st.counts.archived }}</b><span class="muted small">posts archived</span></div>
-  <div class="stat"><b>{{ st.counts['items'] }}</b><span class="muted small">posts seen</span></div>
-  <div class="stat"><b>{{ st.counts.locked }}</b><span class="muted small">above your tier</span></div>
-  <div class="stat"><b>{{ human_size(st.disk.archive_bytes) }}</b><span class="muted small">archive size</span></div>
-  <div class="stat"><b>{{ human_size(st.disk.free_bytes) }}</b><span class="muted small">free space</span></div>
+  <div class="stat"><b data-stat="archived">{{ st.counts.archived }}</b><span class="muted small">posts archived</span></div>
+  <div class="stat"><b data-stat="items">{{ st.counts['items'] }}</b><span class="muted small">posts seen</span></div>
+  <div class="stat"><b data-stat="locked">{{ st.counts.locked }}</b><span class="muted small">above your tier</span></div>
+  <div class="stat"><b data-stat="archive_bytes">{{ human_size(st.disk.archive_bytes) }}</b><span class="muted small">archive size</span></div>
+  <div class="stat"><b data-stat="free_bytes">{{ human_size(st.disk.free_bytes) }}</b><span class="muted small">free space</span></div>
   <div class="stat"><b>{{ (st.next_check or 'manual only')[:16].replace('T', ' ') }}</b><span class="muted small">next check (UTC)</span></div>
 </div>
 
