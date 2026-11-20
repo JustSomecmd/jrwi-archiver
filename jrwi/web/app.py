@@ -61,6 +61,18 @@ def human_size(n) -> str:
     return f"{n:.1f} TB"
 
 
+
+def nice_date(value) -> str:
+    """'2026-11-07' or a full ISO time as the site writes dates: 'Nov 7, 2026'."""
+    if not value:
+        return ""
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)[:10]
+    return f"{d:%b} {d.day}, {d.year}"
+
+
 def human_duration(s) -> str:
     if not s:
         return ""
@@ -98,7 +110,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.globals.update(files_url=files_url, human_size=human_size, human_duration=human_duration,
-                                 tab_name=tab_name, version=VERSION, quote=quote,
+                                 tab_name=tab_name, version=VERSION, quote=quote, nice_date=nice_date,
                                  version_name={"video": "Video version", "audio": "Audio version",
                                                "youtube": "YouTube version"})
     app.state.db, app.state.archiver, app.state.scheduler = db, archiver, scheduler
@@ -428,19 +440,21 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                       pages=math.ceil(data["total"] / data["page_size"]) or 1)
 
     @app.get("/feed", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def feed(request: Request, q: str | None = None, page: int = 1, locked: bool = False):
+    def feed(request: Request, q: str | None = None, page: int = 1, locked: bool = False, order: str = "desc"):
+        order = "asc" if order == "asc" else "desc"
         where, args = ["status != 'gone'"], []
         if not locked:
             where.append("status != 'locked'")
         if q:
             where.append("(title LIKE ? OR body_text LIKE ?)")
             args += [f"%{q}%", f"%{q}%"]
-        rows_sql = f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY published DESC, id DESC"
+        direction = order.upper()
+        rows_sql = f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY published {direction}, id {direction}"
         total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
         rows = db.q(f"{rows_sql} LIMIT 20 OFFSET ?", args + [(max(1, page) - 1) * 20])
         posts = [ser.post_full(r) for r in rows]
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
-                      pages=math.ceil(total / 20) or 1, locked=locked)
+                      pages=math.ceil(total / 20) or 1, locked=locked, order=order)
 
     @app.get("/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def item_page(request: Request, post_id: int):
@@ -451,7 +465,11 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         comments = ser.comments(post, 1, 1000, only_post=post["id"])
         show = db.one("SELECT id, name FROM shows WHERE id=?", (item["show"],))
         progress = api_progress(item["audio"]["post_id"]) if item["audio"] else None
-        return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=progress)
+        # The side list, like the site's "Recently uploaded": newest posts from the same show
+        sql, args = item_query(show=item["show"], separate=True)
+        more = [ser.post_summary(r) for r in db.q(f"SELECT * FROM ({sql}) WHERE id != ? LIMIT 8", args + [post["id"]])]
+        return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=progress,
+                      more=more)
 
     @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def pages_index(request: Request):

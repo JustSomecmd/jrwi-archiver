@@ -1,13 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#150824">
 <title>{% if setup %}Set up{% else %}Log in{% endif %} · JRWI archive</title>
 <link rel="stylesheet" href="/static/style.css?v={{ version }}">
 </head>
 <body>
 <div class="login panel">
   <h1>JRWI archive</h1>
+  <p class="muted" style="text-align:center;margin-top:-.3rem">Your private copy of the members area</p>
   {% if setup %}
     <p class="muted">Choose a password for this web app. You'll use it to open the archive and the admin pages.</p>
   {% endif %}
@@ -21,7 +22,7 @@
       <input id="pw2" type="password" name="password2" required>
       <div class="hint">At least 8 characters.</div>
     {% endif %}
-    <p><button type="submit">{% if setup %}Save and continue{% else %}Log in{% endif %}</button></p>
+    <p><button type="submit" style="width:100%">{% if setup %}Save and continue{% else %}Log in{% endif %}</button></p>
   </form>
 </div>
 </body>

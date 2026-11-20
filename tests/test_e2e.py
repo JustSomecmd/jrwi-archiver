@@ -29,6 +29,7 @@ TMP = Path(tempfile.mkdtemp(prefix="jrwi-test-"))
 os.environ.update(
     JRWI_DATA=str(TMP / "data"), JRWI_ARCHIVE=str(TMP / "archive"), JRWI_MEDIA=str(TMP / "media"),
     JRWI_SITE=f"http://127.0.0.1:{PORT}", JRWI_MUX_BASE=f"http://127.0.0.1:{PORT}/mux",
+    JRWI_YT_THUMBS=f"http://127.0.0.1:{PORT}/imgproxy/yt",
     JRWI_EMAIL="fan@example.com", JRWI_PASSWORD="hunter2",
 )
 
@@ -81,6 +82,7 @@ def test_pairs_and_tabs(client):
     assert by_ep[136]["video"]["jellyfin_path"].endswith("[jrwi-300].mp4")
     assert by_ep[136]["audio"]["post_id"] == 298
     assert by_ep[135]["video"]["youtube_id"] == "CzZ13VPQOcw"
+    assert by_ep[135]["thumbnail"]   # YouTube-only: the video's thumbnail, archived
     tabs = [t["id"] for t in client.get("/api/shows/riptide").json()["tabs"]]
     assert tabs == ["episodes", "aftershow", "art"]
 
@@ -200,15 +202,22 @@ def test_reparse_fixes_old_archives(app, client):
     db.x("UPDATE comments SET author_avatar=? WHERE author_name='Lee'", (archiver.rel(stray),))
     # The audio post's thumbnail as an older version saved it: the blurred strip
     audio = db.post(298)
-    thumb_file = archiver.paths.archive / audio["thumbnail"]
+    (archiver.paths.archive / audio["thumbnail"]).unlink()
+    thumb_file = archiver.paths.archive / "posts" / "298" / "thumbnail.webp"   # older versions' file name
     thumb_file.write_bytes(b"blurred strip")
-    old_files = {("thumb:old-blurred-strip" if k.startswith("thumb:") else k): v for k, v in audio["files"].items()}
-    db.update("posts", "id", 298, {"files": old_files})
+    old_rel = str(thumb_file.relative_to(archiver.paths.archive))
+    old_files = {("thumb:old-blurred-strip" if k.startswith("thumb:") else k): (old_rel if k.startswith("thumb:") else v)
+                 for k, v in audio["files"].items()}
+    db.update("posts", "id", 298, {"files": old_files, "thumbnail": old_rel})
     db.set_setting("parser_version", 1)
 
     result = archiver.run_reparse()
-    assert result["to_fetch"] == 2 and result["removed"] == 1 and not result["stopped"]
-    assert "images" in db.post(298)["skipped"]
+    assert result["to_fetch"] == 1 and result["removed"] == 1 and not result["stopped"]
+    audio = db.post(298)   # the cover is fetched during the re-read, under a new name
+    assert "images" not in (audio["skipped"] or [])
+    assert [k for k in audio["files"] if k.startswith("thumb:")][0].find("acover298") > 0
+    assert audio["thumbnail"] != old_rel and not thumb_file.exists()
+    assert (archiver.paths.archive / audio["thumbnail"]).read_bytes() != b"blurred strip"
     assert not stray.exists()
     assert "attachments" in db.post(299)["skipped"]
     assert db.setting("parser_version") == PARSER_VERSION
@@ -219,9 +228,6 @@ def test_reparse_fixes_old_archives(app, client):
     post = db.post(299)
     assert [a["name"] for a in post["attachments"]] == ["Zombie Character Sheets.pdf"]
     assert "attachments" not in (post["skipped"] or [])
-    audio = db.post(298)
-    assert [k for k in audio["files"] if k.startswith("thumb:")][0].find("acover298") > 0
-    assert (archiver.paths.archive / audio["thumbnail"]).read_bytes() != b"blurred strip"
 
 
 def test_download_a_post_again(app, client):

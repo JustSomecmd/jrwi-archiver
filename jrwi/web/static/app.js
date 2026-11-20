@@ -73,3 +73,10 @@ if (live) {
   tick();
   setInterval(tick, 3000);
 }
+
+// Close the Shows menu when tapping or clicking anywhere else
+document.addEventListener("click", (e) => {
+  document.querySelectorAll("details.dd[open], details.mobnav[open]").forEach((d) => {
+    if (!d.contains(e.target)) d.open = false;
+  });
+});

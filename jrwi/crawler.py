@@ -478,7 +478,7 @@ class Archiver:
                         (self.paths.archive / thumbnail).unlink()
                         for k in [k for k, v in files.items() if v == thumbnail]:
                             del files[k]
-                    p = downloader.file(it["url"], d, f"thumbnail{P.ext_of(it['url']) or '.jpg'}", referer=final)
+                    p = downloader.file(it["url"], d, thumb_name(it), referer=final)
                     files[key] = self.rel(p)
                     thumbnail = self.rel(p)
                 elif it["kind"] == "download":
@@ -880,8 +880,19 @@ class Archiver:
                     fields, items, _ = self.read_post(post, final, soup, frame)
                 except SiteError:
                     fields, items = {}, []
+                # A thumbnail that's now read differently (like an audio post's cover instead of the blurred strip
+                # behind it) is small: fetch it right away instead of waiting for the next check
+                thumb = next((i for i in items if i["kind"] == "thumbnail"), None)
+                files = dict(post["files"] or {})
+                if (thumb and wanted.get("images", True) and post["status"] in ("complete", "partial")
+                        and not (thumb["key"] in files and (self.paths.archive / files[thumb["key"]]).exists())):
+                    rel = self.save_thumbnail(post, thumb)
+                    if rel:
+                        files = {k: v for k, v in files.items() if not k.startswith("thumb:")}
+                        files[thumb["key"]] = rel
+                        fields.update(files=files, thumbnail=rel)
                 if post["status"] in ("complete", "partial"):
-                    missing = self.missing_classes(post, items, wanted)
+                    missing = self.missing_classes({**post, **fields}, items, wanted)
                     if missing:
                         # archive_posts picks up posts whose skipped kinds are wanted, and fetches only what's missing
                         fields["skipped"] = sorted(set(post["skipped"] or []) | missing)
@@ -919,6 +930,23 @@ class Archiver:
         if not stopped:
             self.db.set_setting("parser_version", P.PARSER_VERSION)
         return result
+
+    def save_thumbnail(self, post: dict, it: dict) -> str | None:
+        """Download a post's thumbnail and replace the old one. Each picture gets its own name, so browsers don't
+        keep showing an old copy."""
+        dest = self.post_dir(post["id"]) / thumb_name(it)
+        if not dest.exists():
+            try:
+                r = self.client.request("GET", it["url"], pace=self.same_site(it["url"]), tries=2, timeout=(10, 30))
+            except SiteError:
+                return None
+            if r.status_code != 200 or "text/html" in r.headers.get("Content-Type", ""):
+                return None
+            dest.write_bytes(r.content)
+        old = post.get("thumbnail")
+        if old and old != self.rel(dest):
+            (self.paths.archive / old).unlink(missing_ok=True)
+        return self.rel(dest)
 
     def missing_classes(self, post: dict, items: list[dict], wanted: dict) -> set[str]:
         """Kinds of file that a saved page lists but that were never downloaded. Follows the same rules as
@@ -981,6 +1009,11 @@ class Archiver:
                     f.unlink(missing_ok=True)
                     removed += 1
         return removed
+
+
+def thumb_name(it: dict) -> str:
+    """A thumbnail's file name, different for each picture."""
+    return f"thumbnail-{hashlib.sha1(it['key'].encode()).hexdigest()[:8]}{P.ext_of(it['url']) or '.jpg'}"
 
 
 def token_expired(token: str | None) -> bool:

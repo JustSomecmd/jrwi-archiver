@@ -2,6 +2,6 @@
 {% set active = 'pages' %}
 {% block title %}{{ page.title }} · JRWI archive{% endblock %}
 {% block content %}
-<p class="small muted"><a href="/pages">All pages</a> · saved {{ (page.fetched or '')[:16].replace('T', ' ') }}</p>
+<a class="back" href="/pages">&lsaquo; All pages</a> <span class="muted small">saved {{ nice_date(page.fetched) }}</span>
 <div class="post rich">{{ html | safe }}</div>
 {% endblock %}

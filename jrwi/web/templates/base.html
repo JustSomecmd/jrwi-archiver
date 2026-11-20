@@ -1,27 +1,53 @@
-<!DOCTYPE html>
+{% from "macros.html" import icon %}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#150824">
 <title>{% block title %}JRWI archive{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css?v={{ version }}">
 </head>
 <body>
-<header class="top">
-  <div class="wrap">
-    <a class="brand" href="/">{% if logo %}<img src="{{ logo }}" alt="">{% endif %}<span>JRWI archive</span></a>
-    <nav>
+<header class="site-header">
+  <div class="hwrap">
+    <a class="logo" href="/">
+      {% if logo %}<img src="{{ logo }}" alt="Just Roll With It">{% else %}<span class="word">JRWI</span>{% endif %}
+      <span class="archive-tag">Archive</span>
+    </a>
+    <nav class="mainnav">
       <a href="/" {% if active == 'home' %}class="on"{% endif %}>Home</a>
+      {% if shows_nav %}
+      <details class="dd {% if active == 'shows' %}on{% endif %}">
+        <summary>Shows {{ icon('chevron') }}</summary>
+        <div class="dd-menu">{% for s in shows_nav %}<a href="/shows/{{ s.id }}">{{ s.name }}</a>{% endfor %}</div>
+      </details>
+      {% endif %}
       <a href="/feed" {% if active == 'feed' %}class="on"{% endif %}>Feed</a>
       <a href="/pages" {% if active == 'pages' %}class="on"{% endif %}>Pages</a>
       <a href="/admin" {% if active == 'admin' %}class="on"{% endif %}>Admin</a>
       <a href="/admin/settings" {% if active == 'settings' %}class="on"{% endif %}>Settings</a>
     </nav>
-    {% if status.running %}<span class="run"><span class="dot"></span>{{ status.phase }}</span>{% endif %}
-    <a class="small muted logout" href="/logout">Log out</a>
+    <div class="hright">
+      {% if status.running %}<a class="run" href="/admin" title="{{ status.phase }}"><span class="dot"></span><span class="label">{{ status.phase }}</span></a>{% endif %}
+      <a class="iconbtn logout" href="/logout" title="Log out">{{ icon('logout') }}</a>
+      <details class="mobnav">
+        <summary aria-label="Menu">{{ icon('menu') }}</summary>
+        <nav class="drawer">
+          <a href="/">Home</a>
+          <a href="/feed">Feed</a>
+          {% if shows_nav %}<div class="label">Shows</div>
+          <div class="sub">{% for s in shows_nav %}<a href="/shows/{{ s.id }}">{{ s.name }}</a>{% endfor %}</div>{% endif %}
+          <div class="label">Archive</div>
+          <a href="/pages">Site pages</a>
+          <a href="/admin">Admin</a>
+          <a href="/admin/settings">Settings</a>
+          <a href="/logout">Log out</a>
+        </nav>
+      </details>
+    </div>
   </div>
 </header>
-<main><div class="wrap">{% block content %}{% endblock %}</div></main>
+<main>{% block hero %}{% endblock %}<div class="wrap">{% block content %}{% endblock %}</div></main>
 <script src="/static/app.js?v={{ version }}"></script>
 </body>
 </html>

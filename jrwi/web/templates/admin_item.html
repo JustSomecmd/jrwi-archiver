@@ -2,7 +2,7 @@
 {% set active = 'admin' %}
 {% block title %}Edit · {{ p.title }}{% endblock %}
 {% block content %}
-<p class="small"><a href="/items/{{ p.id }}">Back to the post</a></p>
+<a class="back" href="/items/{{ p.id }}">&lsaquo; Back to the post</a>
 <h1>{{ p.title }}</h1>
 <div class="cols">
 <form class="panel" method="post" action="/admin/items/{{ p.id }}">

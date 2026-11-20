@@ -16,11 +16,13 @@ from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urljoin, urlpa
 
 from bs4 import BeautifulSoup
 
+from ..config import YT_THUMBS
+
 SameSite = Callable[[str], bool]
 
 # Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
 # it has saved, so fixes reach posts and comments that were archived before the update.
-PARSER_VERSION = 3
+PARSER_VERSION = 4
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
@@ -612,6 +614,10 @@ def extract_media(card, page_url: str, same_site: SameSite, post_id: int | None 
             src = urljoin(page_url, img["src"])
             if urlparse(src).scheme in ("http", "https") and url_key(src) not in seen:
                 add("thumbnail", "thumb:" + url_key(src), url=src)
+    # YouTube-only posts have no picture of their own on the site's card; use the video's thumbnail
+    yt = next((i for i in items if i["kind"] == "youtube"), None)
+    if yt is not None and not any(i["kind"] == "thumbnail" for i in items):
+        add("thumbnail", "thumb:yt:" + yt["video_id"], url=f"{YT_THUMBS}/vi/{yt['video_id']}/hqdefault.jpg")
 
     for t in tags:
         if t.name not in ("a", "button"):

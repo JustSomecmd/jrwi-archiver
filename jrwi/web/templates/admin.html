@@ -5,7 +5,7 @@
 <h1>Admin</h1>
 <p class="admin-links"><a class="btn ghost" href="/admin/settings">Settings</a>
   <a class="btn ghost" href="/admin/shows">Shows</a>
-  <a class="btn ghost" href="/admin/problems">Problems (<span data-stat="problems">{{ st.counts.problems }}</span>)</a></p>
+  <a class="btn ghost" href="/admin/problems"><span>Problems (<span data-stat="problems">{{ st.counts.problems }}</span>)</span></a></p>
 {% if not configured %}
   <div class="notice">Add your jrwishow.com email and password in <a href="/admin/settings">Settings</a> before the first check.</div>
 {% endif %}
