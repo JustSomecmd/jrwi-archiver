@@ -69,3 +69,18 @@ def test_scheduled_check_waits_for_a_login(archiver, monkeypatch):
     s.check_now()                                      # Check now still runs, to show the problem
     time.sleep(1.5)
     assert ran == [False]
+
+
+def test_reparse_after_an_update(archiver, monkeypatch):
+    from jrwi import scheduler as sched
+    from jrwi.site.parse import PARSER_VERSION
+
+    calls = []
+    monkeypatch.setattr(archiver, "run_reparse", lambda: calls.append(1) or {})
+    s = sched.Scheduler(archiver, archiver.db)
+    s._reparse_after_update()                 # nothing archived yet: just remember the version
+    assert calls == [] and archiver.db.setting("parser_version") == PARSER_VERSION
+    archiver.db.upsert("posts", "id", {"id": 1, "title": "x", "status": "complete"})
+    archiver.db.set_setting("parser_version", PARSER_VERSION - 1)
+    s._reparse_after_update()                 # archived with older rules: re-read once
+    assert calls == [1]

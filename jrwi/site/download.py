@@ -57,10 +57,12 @@ def ffmpeg_exe() -> str | None:
 
 
 class Downloader:
-    def __init__(self, client: Client, max_height: int = 0, progress: Callable[[str], None] | None = None) -> None:
+    def __init__(self, client: Client, max_height: int = 0,
+                 progress: Callable[..., None] | None = None) -> None:
         self.client = client
         self.max_height = max_height
-        self.progress = progress or (lambda msg: None)
+        # progress(text, fraction): fraction is how much of the current file is done, 0 to 1, or None
+        self.progress = progress or (lambda msg, fraction=None: None)
         self.ffmpeg = find_ffmpeg()
 
     def file(self, url: str, dest_dir: Path, name: str | None, *, referer: str, method: str = "GET",
@@ -116,9 +118,9 @@ class Downloader:
                             raise DownloadError("stopped")
                         f.write(chunk)
                         done += len(chunk)
-                        if total and time.monotonic() - shown > 3:
+                        if total and time.monotonic() - shown > 2:
                             shown = time.monotonic()
-                            self.progress(f"{dest.name}: {done * 100 // total}%")
+                            self.progress(f"{dest.name}: {done * 100 // total}% of {human_bytes(total)}", done / total)
             except requests.RequestException as e:
                 raise Transient(f"connection dropped ({type(e).__name__})")
             if total and done < total:
@@ -165,9 +167,23 @@ class Downloader:
 
         should_stop = self.client.should_stop
 
+        last_shown = [0.0]
+
         def hook(d):
             if should_stop():
                 raise DownloadError("stopped")
+            if d.get("status") != "downloading" or time.monotonic() - last_shown[0] < 2:
+                return
+            last_shown[0] = time.monotonic()
+            frac = None
+            if d.get("fragment_count"):
+                frac = min(1.0, (d.get("fragment_index") or 0) / d["fragment_count"])
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if frac is None and total:
+                frac = min(1.0, (d.get("downloaded_bytes") or 0) / total)
+            kind = "audio" if audio_only or (d.get("info_dict") or {}).get("vcodec") == "none" else "video"
+            size = f" of ~{human_bytes(total)}" if total else ""
+            progress(f"{kind} {round(frac * 100) if frac is not None else '?'}%{size}", frac)
 
         opts = {
             "outtmpl": str(dest_dir / (base + ".%(ext)s")),
@@ -226,3 +242,12 @@ def to_jpeg(src: Path, dest: Path) -> bool:
         return dest.exists()
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def human_bytes(n: float | None) -> str:
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"

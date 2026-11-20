@@ -9,6 +9,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from .crawler import Archiver
+from .site.parse import PARSER_VERSION
 from .db import Db
 
 log = logging.getLogger("jrwi.scheduler")
@@ -21,6 +22,7 @@ class Scheduler:
         self.db = db
         self.wake = threading.Event()
         self.full_requested = False
+        self.reparse_requested = False
         self.next_check: datetime | None = None
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
 
@@ -38,6 +40,31 @@ class Scheduler:
         self.wake.set()
         return True
 
+    def reparse_now(self) -> bool:
+        """Re-read saved pages next, in the scheduler's thread so it never overlaps a check."""
+        if self.running:
+            return False
+        self.reparse_requested = True
+        self.wake.set()
+        return True
+
+    def _reparse(self) -> None:
+        try:
+            result = self.archiver.run_reparse()
+            log.info("re-read saved pages: %s", result)
+        except Exception:
+            log.exception("re-reading saved pages failed")
+
+    def _reparse_after_update(self) -> None:
+        """After an update that reads pages differently, re-read everything once before the next check."""
+        if str(self.db.setting("parser_version") or "") == str(PARSER_VERSION):
+            return
+        if self.db.one("SELECT 1 FROM posts LIMIT 1") is None:
+            self.db.set_setting("parser_version", PARSER_VERSION)
+            return
+        log.info("this version reads saved pages differently; re-reading them")
+        self._reparse()
+
     def stop(self) -> None:
         self.archiver.stop_event.set()
 
@@ -54,6 +81,7 @@ class Scheduler:
         self.next_check = after + interval + timedelta(seconds=jitter)
 
     def _loop(self) -> None:
+        self._reparse_after_update()
         last = self.db.one("SELECT finished FROM runs WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1")
         start = datetime.now(timezone.utc)
         if last and last["finished"]:
@@ -74,6 +102,10 @@ class Scheduler:
                 continue
             manual = woke or self.wake.is_set()
             self.wake.clear()
+            if self.reparse_requested:
+                self.reparse_requested = False
+                self._reparse()
+                continue
             if not manual and not self.archiver.has_login():
                 # Nothing to log in with yet: wait for Settings instead of recording a failed check
                 self._plan_next(datetime.now(timezone.utc))

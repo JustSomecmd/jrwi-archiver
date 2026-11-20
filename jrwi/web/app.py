@@ -8,7 +8,6 @@ import logging
 import math
 import os
 import secrets
-import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -154,7 +153,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                         "SUM(status='locked') AS locked, SUM(json_array_length(problems) > 0) AS problems FROM posts")
         return {
             "running": snap["running"], "phase": snap["phase"], "detail": snap["detail"],
-            "progress": {"done": snap["done"], "total": snap["total"]},
+            "progress": {"done": snap["done"], "total": snap["total"], "current": snap["current"]},
             "last_check_started": last["started"] if last else None,
             "last_check_finished": last["finished"] if last else None,
             "next_check": scheduler.next_check.isoformat(timespec="seconds") if scheduler.next_check else None,
@@ -201,7 +200,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/api/status", dependencies=[Depends(api_auth)])
     def api_status():
-        return status_obj()
+        return JSONResponse(status_obj(), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/check", dependencies=[Depends(api_auth)])
     def api_check(full: bool = False):
@@ -449,6 +448,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         runs = db.q("SELECT * FROM runs ORDER BY id DESC LIMIT 15")
         events = db.q("SELECT * FROM events ORDER BY id DESC LIMIT 20")
         return render(request, "admin.html", st=status_obj(), runs=runs, events=events,
+                      last_reparse=db.setting("last_reparse"),
                       configured=bool(db.setting("site_email") or os.environ.get("JRWI_EMAIL")))
 
     @app.post("/admin/check", dependencies=[Depends(web_auth)])
@@ -592,16 +592,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.post("/admin/reparse", dependencies=[Depends(web_auth)])
     def admin_reparse():
-        if not archiver.status.running:
-            def work():
-                archiver.status.set(running=True, phase="re-reading saved pages", detail="", started=now())
-                try:
-                    archiver.reparse()
-                except Exception:
-                    log.exception("re-reading failed")
-                finally:
-                    archiver.status.set(running=False, phase="idle", detail="")
-            threading.Thread(target=work, name="jrwi-reparse", daemon=True).start()
+        scheduler.reparse_now()
         return RedirectResponse("/admin", 303)
 
     return app

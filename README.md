@@ -74,7 +74,11 @@ archive/
 media/jrwi/               video for Jellyfin
 ```
 
-Every post page and comment thread is kept as it was downloaded. If a later version of this app reads pages better (for example, picking up a detail it missed), **Admin > Re-read saved pages** applies that to the whole archive without downloading anything again.
+Every post page, comment page, feed card and site page is kept as it was downloaded. When an update changes how pages are read (for example, picking up a detail an older version missed or read wrong), the service re-reads everything it saved on its next start, before the next check. **Admin > Re-read saved pages** does the same by hand.
+
+- **What it corrects:** post text, dates, tags, likes, comments, profile pictures, badges, the Shows menu and site pages.
+- **Nothing big is downloaded again.** If the re-read finds files an older version never downloaded, the next check fetches just those posts again.
+- **Clean-up:** profile pictures and badges that no comment uses any more are deleted.
 
 ## Settings
 

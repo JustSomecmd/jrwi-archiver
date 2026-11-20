@@ -45,15 +45,18 @@ const live = document.querySelector("[data-live-status]");
 if (live) {
   const tick = async () => {
     try {
-      const r = await fetch("/api/status");
+      const r = await fetch("/api/status", { cache: "no-store" });
       if (!r.ok) return;
       const s = await r.json();
       live.querySelector("[data-phase]").textContent = s.running ? s.phase : "Idle";
       live.querySelector("[data-detail]").textContent = s.running ? s.detail || "" : "";
-      const pct = s.progress && s.progress.total ? Math.round((100 * s.progress.done) / s.progress.total) : 0;
+      // Whole posts done, plus how far the file downloading now has got
+      const p = s.progress || {};
+      const pct = p.total ? Math.min(100, (100 * (p.done + (p.current || 0))) / p.total) : 0;
       const bar = live.querySelector("[data-bar]");
-      bar.parentElement.hidden = !(s.running && s.progress.total);
-      bar.style.width = pct + "%";
+      bar.parentElement.hidden = !s.running;
+      bar.parentElement.classList.toggle("busy", s.running && !p.total);  // no total yet: just show it's working
+      bar.style.width = pct.toFixed(1) + "%";
       live.querySelector("[data-count]").textContent =
         s.running && s.progress.total ? `${s.progress.done} of ${s.progress.total}` : "";
       // Counts and sizes change while a check runs

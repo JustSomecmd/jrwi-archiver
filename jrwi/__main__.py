@@ -40,7 +40,7 @@ def main(argv=None) -> int:
         result = archiver.run_check(full=args.full)
         print(result)
         return 0 if result["result"] == "ok" else 1
-    print(f"re-read {archiver.reparse()} posts")
+    print(archiver.run_reparse())
     return 0
 
 

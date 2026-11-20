@@ -18,7 +18,7 @@
       <a href="/admin/settings" {% if active == 'settings' %}class="on"{% endif %}>Settings</a>
     </nav>
     {% if status.running %}<span class="run"><span class="dot"></span>{{ status.phase }}</span>{% endif %}
-    <a class="small muted" href="/logout">Log out</a>
+    <a class="small muted logout" href="/logout">Log out</a>
   </div>
 </header>
 <main><div class="wrap">{% block content %}{% endblock %}</div></main>

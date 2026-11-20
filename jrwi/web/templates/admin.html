@@ -30,7 +30,7 @@
       {% endif %}
     </div>
   </div>
-  <div class="bar" {% if not (st.running and st.progress.total) %}hidden{% endif %}><i data-bar style="width:0"></i></div>
+  <div class="bar{% if st.running and not st.progress.total %} busy{% endif %}" {% if not st.running %}hidden{% endif %}><i data-bar style="width:0"></i></div>
 </div>
 
 <div class="stats">
@@ -67,8 +67,16 @@
 
 <div class="panel">
   <h3>Re-read saved pages</h3>
-  <p class="muted small">Every post page and comment thread is saved as it was downloaded. After an update to this app,
-    this reads them again with the newer rules without downloading anything.</p>
+  <p class="muted small">Every post page, comment page, feed card and site page is saved as it was downloaded.
+    This reads them all again with the current rules, so a fix in an update also corrects what was archived before it:
+    post text, dates, tags, comments, profile pictures and badges. It runs by itself after an update that changes
+    how pages are read. Nothing big is downloaded again; if the re-read finds files an older version missed,
+    the next check fetches just those.</p>
+  {% if last_reparse %}<p class="small">Last re-read {{ (last_reparse.finished or '')[:16].replace('T', ' ') }} UTC:
+    {{ last_reparse.posts }} posts, {{ last_reparse.pages }} site pages
+    {%- if last_reparse.to_fetch %}, {{ last_reparse.to_fetch }} posts with files to fetch on the next check{% endif %}
+    {%- if last_reparse.removed %}, {{ last_reparse.removed }} unused pictures removed{% endif %}
+    {%- if last_reparse.stopped %} (stopped before the end){% endif %}.</p>{% endif %}
   <form method="post" action="/admin/reparse"><button class="ghost" {% if st.running %}disabled{% endif %}>Re-read saved pages</button></form>
 </div>
 {% endblock %}

@@ -38,6 +38,7 @@ class Status:
     detail: str = ""
     done: int = 0
     total: int = 0
+    current: float | None = None   # how much of the file downloading now is done, 0 to 1
     started: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -49,7 +50,7 @@ class Status:
     def snapshot(self) -> dict:
         with self.lock:
             return {"running": self.running, "phase": self.phase, "detail": self.detail,
-                    "done": self.done, "total": self.total, "started": self.started}
+                    "done": self.done, "total": self.total, "current": self.current, "started": self.started}
 
 
 def write_gz(path: Path, text: str) -> None:
@@ -157,7 +158,7 @@ class Archiver:
             log.exception("check failed")
             result, message = "error", f"{type(e).__name__}: {e}"
         finally:
-            self.status.set(running=False, phase="idle", detail="", done=0, total=0)
+            self.status.set(running=False, phase="idle", detail="", done=0, total=0, current=None)
         try:
             self.db.set_setting("archive_bytes", folder_size(self.paths.archive) + folder_size(self.paths.media))
         except OSError:
@@ -291,7 +292,7 @@ class Archiver:
         for n, post in enumerate(todo, 1):
             if self.stop_event.is_set():
                 raise SiteError("stopped")
-            self.status.set(done=n - 1, detail=post["title"])
+            self.status.set(done=n - 1, detail=post["title"], current=None)
             first_time = post["status"] == "new"
             try:
                 self.archive_post(post, wanted)
@@ -409,7 +410,7 @@ class Archiver:
                   for i in items if i["kind"] in ("youtube", "embed")]
         failures, notes, skipped = [], [], set()
         downloader = Downloader(self.client, int(self.s["max_height"] or 0),
-                                progress=lambda m: self.status.set(detail=f"{post['title']}: {m}"))
+                                progress=lambda m, f=None: self.status.set(detail=f"{post['title']}: {m}", current=f))
         title_base = P.safe_filename(update.get("title") or post["title"], 90, keep_ext=False)
         direct_ids = {i["playback_id"] for i in items if i["kind"] == "mux" and any(
             f"/{i['playback_id']}/" in urlparse(x["url"]).path for x in items if x["kind"] == "download")}
@@ -671,16 +672,7 @@ class Archiver:
         Keeps the web address if it can't be downloaded."""
         if not url or not url.startswith("http"):
             return url
-        local = self.paths.archive / folder / asset_name(url)
-        if not local.exists():
-            try:
-                r = self.client.request("GET", url, pace=False, tries=2, timeout=(10, 30))
-                if r.status_code == 200:
-                    local.parent.mkdir(parents=True, exist_ok=True)
-                    local.write_bytes(r.content)
-            except SiteError:
-                pass
-        return self.rel(local) if local.exists() else url
+        return self.save_asset(url, self.paths.archive / folder) or url
 
     def refresh_comments(self) -> None:
         days = int(self.s["comment_refresh_days"] or 0)
@@ -739,38 +731,43 @@ class Archiver:
             except SiteError as e:
                 log.warning("page %s failed: %s", url, e)
                 continue
-            soup = P.soup_of(text)
-            slug = P.slugify(path.strip("/").replace("/", "-")) or "home"
+            self.store_site_page(path, final, text, shows)
+
+    def store_site_page(self, path: str, final: str, text: str, shows: dict, fetched: str | None = None) -> None:
+        """Save one site page and what it says about a show. Also used to re-read saved pages."""
+        soup = P.soup_of(text)
+        slug = P.slugify(path.strip("/").replace("/", "-")) or "home"
+        if fetched is None:
             write_gz(self.paths.archive / "pages" / f"{slug}.html.gz", text)
-            main = P.main_content(soup)
-            mapping = {}
-            for img in P.page_images(main, final):
-                local = self.save_asset(img, self.paths.archive / "pages" / "assets")
+        main = P.main_content(soup)
+        mapping = {}
+        for img in P.page_images(main, final):
+            local = self.save_asset(img, self.paths.archive / "pages" / "assets")
+            if local:
+                mapping[img] = local
+        html = str(main)
+        for remote, local in mapping.items():
+            html = html.replace(remote, "/files/" + local).replace(remote.replace("&", "&amp;"), "/files/" + local)
+        self.db.upsert("pages", "path", {"path": path, "title": P.page_title(soup), "file": f"pages/{slug}.html.gz",
+                                         "fetched": fetched or now(), "main_html": html})
+        key = path.rsplit("/", 1)[-1]
+        if path.startswith("/pages/") and key in shows:
+            show = shows[key]
+            desc = soup.find("meta", attrs={"property": "og:description"}) or soup.find("meta", attrs={"name": "description"})
+            poster_url = P.og_image(soup, final)
+            fields = {}
+            if desc and desc.get("content"):
+                fields["description"] = P.norm_space(desc["content"])
+            if poster_url:
+                local = self.save_asset(poster_url, self.paths.archive / "shows" / show["id"])
                 if local:
-                    mapping[img] = local
-            html = str(main)
-            for remote, local in mapping.items():
-                html = html.replace(remote, "/files/" + local).replace(remote.replace("&", "&amp;"), "/files/" + local)
-            self.db.upsert("pages", "path", {"path": path, "title": P.page_title(soup), "file": f"pages/{slug}.html.gz",
-                                             "fetched": now(), "main_html": html})
-            key = path.rsplit("/", 1)[-1]
-            if path.startswith("/pages/") and key in shows:
-                show = shows[key]
-                desc = soup.find("meta", attrs={"property": "og:description"}) or soup.find("meta", attrs={"name": "description"})
-                poster_url = P.og_image(soup, final)
-                fields = {}
-                if desc and desc.get("content"):
-                    fields["description"] = P.norm_space(desc["content"])
-                if poster_url:
-                    local = self.save_asset(poster_url, self.paths.archive / "shows" / show["id"])
-                    if local:
-                        fields["poster"] = local
-                imgs = P.page_images(main, final)
-                if imgs:
-                    local = mapping.get(imgs[0]) or self.save_asset(imgs[0], self.paths.archive / "shows" / show["id"])
-                    if local:
-                        fields["banner"] = local
-                self.db.update("shows", "id", show["id"], fields)
+                    fields["poster"] = local
+            imgs = P.page_images(main, final)
+            if imgs:
+                local = mapping.get(imgs[0]) or self.save_asset(imgs[0], self.paths.archive / "shows" / show["id"])
+                if local:
+                    fields["banner"] = local
+            self.db.update("shows", "id", show["id"], fields)
 
     def save_asset(self, url: str, folder: Path) -> str | None:
         local = folder / asset_name(url)
@@ -788,11 +785,34 @@ class Archiver:
 
     # ------------------------------------------------------------------ re-reading saved pages
 
-    def reparse(self) -> int:
-        """Re-read every saved post page, card and comment page with the current parser. Nothing is downloaded
-        again, apart from small pictures (badges, profile pictures) that weren't saved yet."""
-        n = 0
-        for post in self.db.q("SELECT * FROM posts"):
+    def run_reparse(self) -> dict:
+        """Re-read everything saved, as its own job with status and a Stop button. Run by the scheduler, so it
+        never overlaps a check."""
+        self.stop_event.clear()
+        self.status.set(running=True, phase="re-reading saved pages", detail="", done=0, total=0, current=None,
+                        started=now())
+        try:
+            return self.reparse()
+        finally:
+            self.status.set(running=False, phase="idle", detail="", done=0, total=0, current=None)
+
+    def reparse(self) -> dict:
+        """Re-read everything saved with the current parsers: post pages and feed cards, comment pages, the feed
+        (tags and the Shows menu) and site pages.
+
+        Nothing big is downloaded again. Small pictures that weren't saved yet (badges, profile pictures) are.
+        Posts where the re-read finds files that were never downloaded, because an older version missed them,
+        are marked so the next check fetches just those posts again."""
+        posts = self.db.q("SELECT * FROM posts ORDER BY published DESC, id DESC")
+        wanted = self.wanted()
+        self.status.set(phase="re-reading saved pages", total=len(posts), done=0)
+        n = to_fetch = 0
+        stopped = False
+        for i, post in enumerate(posts):
+            if self.stop_event.is_set():
+                stopped = True
+                break
+            self.status.set(done=i, detail=post["title"] or str(post["id"]))
             d = self.paths.archive / "posts" / str(post["id"])
             page_file = d / "page.html.gz"
             final = post["url"] or self.client.abs("/supporters")
@@ -800,25 +820,111 @@ class Archiver:
                 soup = P.soup_of(read_gz(page_file))
                 frame = P.find_post_scope(soup, post["id"])
                 try:
-                    fields, _, _ = self.read_post(post, final, soup, frame)
-                    self.db.update("posts", "id", post["id"], fields)
+                    fields, items, _ = self.read_post(post, final, soup, frame)
                 except SiteError:
-                    pass
+                    fields, items = {}, []
+                if post["status"] in ("complete", "partial"):
+                    missing = self.missing_classes(post, items, wanted)
+                    if missing:
+                        # archive_posts picks up posts whose skipped kinds are wanted, and fetches only what's missing
+                        fields["skipped"] = sorted(set(post["skipped"] or []) | missing)
+                        to_fetch += 1
+                if fields:
+                    self.db.update("posts", "id", post["id"], fields)
             index_file = d / "comments_index.json"
             if index_file.exists():
                 index = json.loads(index_file.read_text())
                 parts = [(read_gz(d / i["file"]), i["parent"]) for i in index if (d / i["file"]).exists()]
                 self.store_comments(post["id"], parts, self.client.abs("/supporters"))
             n += 1
-        feed = self.paths.archive / "site" / "feed.html.gz"
-        if feed.exists():
-            soup = P.soup_of(read_gz(feed))
-            self.save_tags(P.parse_tags(soup))
-            organize.merge_show_menu(self.db, P.parse_show_menu(soup, self.client.abs("/supporters")))
+        pages = 0
+        if not stopped:
+            self.status.set(phase="re-reading saved pages", detail="feed and site pages", done=len(posts))
+            feed = self.paths.archive / "site" / "feed.html.gz"
+            if feed.exists():
+                soup = P.soup_of(read_gz(feed))
+                self.save_tags(P.parse_tags(soup))
+                organize.merge_show_menu(self.db, P.parse_show_menu(soup, self.client.abs("/supporters")))
+            shows = {s["page_url"].rstrip("/").rsplit("/", 1)[-1]: s for s in self.db.q("SELECT * FROM shows")
+                     if s.get("page_url")}
+            for row in self.db.q("SELECT * FROM pages"):
+                f = self.paths.archive / (row["file"] or "")
+                if row["file"] and f.exists():
+                    self.store_site_page(row["path"], self.client.abs(row["path"]), read_gz(f), shows,
+                                         fetched=row["fetched"])
+                    pages += 1
         organize.classify_all(self.db)
         organize.reorganize(self.db, self.paths)
         organize.refresh_jellyfin(self.db, self.paths)
-        return n
+        removed = 0 if stopped else self.remove_unused_pictures()
+        result = {"finished": now(), "posts": n, "pages": pages, "to_fetch": to_fetch, "removed": removed,
+                  "stopped": stopped}
+        self.db.set_setting("last_reparse", result)
+        if not stopped:
+            self.db.set_setting("parser_version", P.PARSER_VERSION)
+        return result
+
+    def missing_classes(self, post: dict, items: list[dict], wanted: dict) -> set[str]:
+        """Kinds of file that a saved page lists but that were never downloaded. Follows the same rules as
+        archive_post for what counts as already saved."""
+        files = post.get("files") or {}
+        media = post.get("media") or {}
+
+        def have(key: str) -> bool:
+            return key in files and (self.paths.archive / files[key]).exists()
+
+        def have_video() -> bool:
+            v = media.get("video") or {}
+            return bool(v.get("path")) and (self.paths.media / v["path"]).exists()
+
+        def have_audio() -> bool:
+            a = media.get("audio") or {}
+            return bool(a.get("path")) and (self.paths.archive / a["path"]).exists()
+
+        direct_ids = {i["playback_id"] for i in items if i["kind"] == "mux" and any(
+            f"/{i['playback_id']}/" in urlparse(x["url"]).path for x in items if x["kind"] == "download")}
+        missing: set[str] = set()
+        for it in items:
+            cls = self.media_class(it)
+            if cls and not wanted.get(cls, True):
+                continue
+            kind = it["kind"]
+            if kind in ("image", "thumbnail", "attachment", "gdoc"):
+                gone = not have(it["key"])
+            elif kind == "download":
+                gone = not have_video() if cls == "video" else not have(it["key"])
+            elif kind in ("mux", "hls"):
+                if it.get("drm") or (it.get("playback_id") and it["playback_id"] in direct_ids):
+                    continue
+                gone = not (have_audio() if it.get("audio_only") else have_video())
+            elif kind in ("youtube", "embed"):
+                gone = bool(wanted.get("embeds")) and not have_video()
+            else:
+                continue
+            if gone and cls:
+                missing.add(cls)
+        return missing
+
+    def remove_unused_pictures(self) -> int:
+        """Delete profile pictures and badges that no saved comment uses any more, for example ones an older
+        version saved by mistake."""
+        used: set[str] = set()
+        for r in self.db.q("SELECT author_avatar, author_badges FROM comments"):
+            if r["author_avatar"]:
+                used.add(r["author_avatar"])
+            for b in r["author_badges"] or []:
+                if b.get("image"):
+                    used.add(b["image"])
+        removed = 0
+        for folder in ("avatars", "badges"):
+            root = self.paths.archive / folder
+            if not root.is_dir():
+                continue
+            for f in root.iterdir():
+                if f.is_file() and self.rel(f) not in used:
+                    f.unlink(missing_ok=True)
+                    removed += 1
+        return removed
 
 
 def token_expired(token: str | None) -> bool:

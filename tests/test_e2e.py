@@ -50,7 +50,19 @@ def app():
     db = application.state.db
     db.set_setting("request_delay", 0)
     db.set_setting("google_docs", False)
+    # Record how far each file download got, to check the progress bar has something to show
+    status = application.state.archiver.status
+    application.state.file_progress = seen = []
+    original_set = status.set
+
+    def recording_set(**kw):
+        if kw.get("current") is not None:
+            seen.append(kw["current"])
+        original_set(**kw)
+
+    status.set = recording_set
     result = application.state.archiver.run_check()
+    status.set = original_set
     assert result["result"] == "ok", result
     yield application
     proc.terminate()
@@ -128,3 +140,38 @@ def test_locked_hidden_and_auth(app, client):
 def test_web_pages_need_login(app):
     c = TestClient(app)
     assert c.get("/", follow_redirects=False).status_code == 303
+
+
+def test_download_progress_is_reported(app):
+    seen = app.state.file_progress
+    assert seen and all(0 <= f <= 1 for f in seen)
+
+
+def test_reparse_fixes_old_archives(app, client):
+    """An older version that missed an attachment and saved a badge as a profile picture: re-reading the saved
+    pages corrects the comments, removes the stray picture, and the next check fetches only what was missed."""
+    from jrwi.site.parse import PARSER_VERSION
+
+    archiver, db = app.state.archiver, app.state.db
+    post = db.post(299)
+    key, rel = next((k, v) for k, v in post["files"].items() if v.endswith("Zombie Character Sheets.pdf"))
+    (archiver.paths.archive / rel).unlink()
+    files = {k: v for k, v in post["files"].items() if k != key}
+    db.update("posts", "id", 299, {"files": files, "attachments": []})
+    stray = archiver.paths.archive / "avatars" / "0123456789abcdef.webp"
+    stray.write_bytes(b"old badge")
+    db.x("UPDATE comments SET author_avatar=? WHERE author_name='Lee'", (archiver.rel(stray),))
+    db.set_setting("parser_version", 1)
+
+    result = archiver.run_reparse()
+    assert result["to_fetch"] == 1 and result["removed"] == 1 and not result["stopped"]
+    assert not stray.exists()
+    assert "attachments" in db.post(299)["skipped"]
+    assert db.setting("parser_version") == PARSER_VERSION
+    lee = next(c for c in client.get("/api/items/299/comments").json()["items"] if c["author"]["name"] == "Lee")
+    assert lee["author"]["avatar"] is None
+
+    assert archiver.run_check()["result"] == "ok"
+    post = db.post(299)
+    assert [a["name"] for a in post["attachments"]] == ["Zombie Character Sheets.pdf"]
+    assert "attachments" not in (post["skipped"] or [])

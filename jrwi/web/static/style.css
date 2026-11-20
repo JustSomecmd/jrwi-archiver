@@ -8,7 +8,7 @@ html, body { margin: 0; background: var(--bg); color: var(--text);
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-img { max-width: 100%; }
+img { max-width: 100%; height: auto; }
 h1, h2, h3 { line-height: 1.2; margin: 0 0 .6rem; }
 h1 { font-size: 1.7rem; } h2 { font-size: 1.25rem; margin-top: 1.6rem; }
 .muted { color: var(--muted); } .small { font-size: .85rem; }
@@ -92,7 +92,9 @@ th { color: var(--muted); font-weight: 600; }
 .result-ok { color: var(--ok); } .result-login_failed, .result-error, .result-blocked { color: var(--bad); }
 .result-stopped, .result-running { color: var(--warn); }
 .bar { height: 8px; background: var(--panel-2); border-radius: 99px; overflow: hidden; margin: .5rem 0; }
-.bar i { display: block; height: 100%; background: var(--accent); }
+.bar i { display: block; height: 100%; background: var(--accent); transition: width .6s ease; }
+.bar.busy i { width: 30% !important; animation: busy 1.4s ease-in-out infinite; }
+@keyframes busy { from { margin-left: -30%; } to { margin-left: 100%; } }
 
 form.inline { display: inline; }
 button, .btn { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: .5rem 1rem;
@@ -110,10 +112,20 @@ label.check { display: flex; gap: .5rem; align-items: center; font-weight: 500; 
 .login { max-width: 380px; margin: 12vh auto; }
 code { background: var(--panel-2); padding: .1rem .35rem; border-radius: 4px; font-size: .85em; word-break: break-all; }
 .searchbar { display: flex; gap: .5rem; margin-bottom: 1rem; } .searchbar input { flex: 1; }
-@media (max-width: 640px) { header.top .wrap { height: auto; padding: .6rem 1rem; flex-wrap: wrap; } .banner { aspect-ratio: 3/1; } }
+@media (max-width: 640px) {
+  header.top .wrap { height: auto; padding: .6rem 1rem; flex-wrap: wrap; row-gap: .4rem; }
+  header.top .logout { order: 2; margin-left: auto; }
+  header.top nav { order: 3; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; gap: 1.1rem; padding-bottom: .2rem; }
+  header.top nav a { white-space: nowrap; }
+  header.top .run { order: 4; flex: 1 0 100%; overflow: hidden; text-overflow: ellipsis; }
+  .banner { aspect-ratio: 3/1; }
+}
 .admin-links { display: flex; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 1rem; }
 .admin-links .btn:hover { text-decoration: none; border-color: var(--muted); }
 .comment .av.initial { display: grid; place-items: center; font-weight: 700; color: var(--muted); }
 .mbadge { display: inline-flex; align-items: center; gap: .25rem; margin-left: .35rem; padding: 0 .4rem; height: 1.25rem;
   border: 1px solid var(--line); border-radius: 999px; font-size: .72rem; color: var(--muted); vertical-align: middle; }
 .mbadge img { height: .95rem; width: auto; }
+details.admin-tools { margin-top: 2.5rem; color: var(--muted); font-size: .85rem; }
+details.admin-tools summary { cursor: pointer; width: max-content; }
+details.admin-tools p { margin: .5rem 0 0; }

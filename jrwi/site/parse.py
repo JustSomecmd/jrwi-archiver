@@ -18,6 +18,10 @@ from bs4 import BeautifulSoup
 
 SameSite = Callable[[str], bool]
 
+# Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
+# it has saved, so fixes reach posts and comments that were archived before the update.
+PARSER_VERSION = 2
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}

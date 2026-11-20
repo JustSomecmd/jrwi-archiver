@@ -1,4 +1,4 @@
-# JRWI archiver API (contract v0.5)
+# JRWI archiver API (contract v0.6)
 
 This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) aren't built yet.
 
@@ -9,6 +9,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.3:** when the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared.
 - **v0.4:** comments gain `pinned` and `link`. In the service since 0.2.0.
 - **v0.5:** comment authors gain `badges`. In the service since 0.2.4.
+- **v0.6:** the status's `progress` gains `current`. In the service since 0.2.5.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
 
 **General rules**
@@ -51,7 +52,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 
 ```json
 {"running": true, "phase": "archiving posts", "detail": "Through the Fire | Riptide #136: 42%",
- "progress": {"done": 12, "total": 30},
+ "progress": {"done": 12, "total": 30, "current": 0.42},
  "last_check_started": "2026-11-20T11:19:59+00:00", "last_check_finished": "2026-11-20T11:20:00+00:00",
  "next_check": "2026-11-20T15:29:00+00:00", "last_result": "ok", "message": null, "login_ok": true,
  "counts": {"items": 2104, "archived": 2001, "locked": 87, "problems": 3},
@@ -60,6 +61,8 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 
 - **`last_result`:** one of `ok`, `login_failed`, `blocked`, `error` or `stopped`.
 - **`next_check`:** `null` when checks only run by hand.
+- **`progress` (`current` since v0.6):** `done` of `total` steps in the current phase, for example posts. `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the phase has no known length yet, such as while reading the feed.
+- **`phase`** can also be `re-reading saved pages`. The service does that by itself after an update that reads pages differently, before its next check.
 
 ### Show
 
