@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.8)
+# JRWI archiver API (contract v0.9)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) aren't built yet.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) and v0.9 (video progress) aren't built yet.
 
 **Changes since v0.1** (v0.3 items are not in the service yet)
 - **`sync`** on items with both versions: the offset between the video and the audio, and whether it was checked.
@@ -10,6 +10,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.4:** comments gain `pinned` and `link`. In the service since 0.2.0.
 - **v0.5:** comment authors gain `badges`. In the service since 0.2.4.
 - **v0.6:** the status's `progress` gains `current`. In the service since 0.2.5.
+- **v0.9 (planned, not built yet):** progress for every post with a video or audio, with `position` in that post's own timeline (see Progress).
 - **v0.8:** comment authors gain `color`. In the service since 0.3.4.
 - **v0.7:** `/api/posts`, `/api/posts/{postId}` and `/api/posts/{postId}/comments` for single posts. Item `versions` gain `version`, `main`, `date`, `like_count` and `comment_count`. Comments gain `post_id`. In the service since 0.2.6.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
@@ -41,7 +42,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/audio/{postId}` | The audio file, with HTTP range support |
 | `GET /api/video/{postId}` | The video file, with HTTP range support. This is a fallback; Jellyfin is the main way to play video. |
 | `GET /api/progress/{postId}` | `{"position": 1234.5, "duration": 11695, "finished": false, "updated_at": "..."}` |
-| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11695, "finished": false}`. Saves audio progress. |
+| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11695, "finished": false}`. Saves progress. Audio only until v0.9; from v0.9, video too. |
 | `GET /api/events?since=<time>` | New items and failures since a time (default: the last 24 hours) |
 | `GET /api/problems` | Posts that couldn't be fully saved |
 | `GET /api/feed.xml?token=<key>` | Private podcast RSS of all audio |
@@ -50,6 +51,12 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 Item lists leave out posts above the user's tier. Add `include_locked=true` to include them; they'll have `"locked": true` and no media.
 
 **Progress (v0.3):** progress is kept once per item. Either post ID of the item works in `/api/progress/{postId}`, so the apps can use the item's `id` or `audio.post_id`. `position` is always an audio position. `finished: true` is also how the apps record that the episode was watched through the video, so the podcast feed and the web app show it as played.
+
+**Progress (v0.9, planned, not built yet; decision 9):** video progress is kept in the archive too.
+- **Every video and audio post:** `/api/progress/{postId}` works for any post with a video (archived or YouTube-only) or audio, including items with only a video.
+- **Each post's own timeline:** `position` is in the timeline of the post whose ID is in the address. Send the video position to `video.post_id` and the audio position to `audio.post_id`. The archiver converts between the two with `sync.offset` and still keeps one position and one watched state per item, so reading either post ID gives the same moment in that version's timeline.
+- **Still compatible:** apps that keep sending the audio position to `audio.post_id`, as in v0.3, work unchanged.
+- **Responses** add `post_id`, the post whose timeline `position` is in: `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`.
 
 ## Objects
 
