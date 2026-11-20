@@ -50,15 +50,25 @@ if (live) {
       const s = await r.json();
       live.querySelector("[data-phase]").textContent = s.running ? s.phase : "Idle";
       live.querySelector("[data-detail]").textContent = s.running ? s.detail || "" : "";
-      // Whole posts done, plus how far the file downloading now has got
+      // While archiving, the bar follows the post being archived (its file downloading now), and the count says
+      // how many posts are done. Other phases, such as re-reading saved pages, show how far the whole job is.
       const p = s.progress || {};
-      const pct = p.total ? Math.min(100, (100 * (p.done + (p.current || 0))) / p.total) : 0;
+      const perPost = s.phase === "archiving posts";
+      const hasCurrent = p.current !== null && p.current !== undefined;
+      let pct = 0;
+      let busy = s.running && !p.total;  // no length known: just show it's working
+      if (perPost) {
+        busy = s.running && !hasCurrent;  // reading the post's page or comments, or between files
+        pct = hasCurrent ? 100 * p.current : 0;
+      } else if (p.total) {
+        pct = (100 * (p.done + (p.current || 0))) / p.total;
+      }
       const bar = live.querySelector("[data-bar]");
       bar.parentElement.hidden = !s.running;
-      bar.parentElement.classList.toggle("busy", s.running && !p.total);  // no total yet: just show it's working
-      bar.style.width = pct.toFixed(1) + "%";
+      bar.parentElement.classList.toggle("busy", busy);
+      bar.style.width = Math.min(100, pct).toFixed(1) + "%";
       live.querySelector("[data-count]").textContent =
-        s.running && s.progress.total ? `${s.progress.done} of ${s.progress.total}` : "";
+        s.running && p.total ? (perPost ? `post ${p.done + 1} of ${p.total}` : `${p.done} of ${p.total}`) : "";
       // Counts and sizes change while a check runs
       const set = (key, text) => document.querySelectorAll(`[data-stat="${key}"]`).forEach((el) => { el.textContent = text; });
       for (const k of ["archived", "items", "locked", "problems"]) set(k, String(s.counts[k]));

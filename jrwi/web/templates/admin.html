@@ -30,7 +30,7 @@
       {% endif %}
     </div>
   </div>
-  <div class="bar{% if st.running and not st.progress.total %} busy{% endif %}" {% if not st.running %}hidden{% endif %}><i data-bar style="width:0"></i></div>
+  <div class="bar{% if st.running and (not st.progress.total or (st.phase == 'archiving posts' and st.progress.current is none)) %} busy{% endif %}" {% if not st.running %}hidden{% endif %}><i data-bar style="width:0"></i></div>
 </div>
 
 <div class="stats">
