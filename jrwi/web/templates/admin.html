@@ -3,8 +3,9 @@
 {% block title %}Admin · JRWI archive{% endblock %}
 {% block content %}
 <h1>Admin</h1>
-<p class="small"><a href="/admin/settings">Settings</a> · <a href="/admin/shows">Shows</a> ·
-  <a href="/admin/problems">Problems ({{ st.counts.problems }})</a></p>
+<p class="admin-links"><a class="btn ghost" href="/admin/settings">Settings</a>
+  <a class="btn ghost" href="/admin/shows">Shows</a>
+  <a class="btn ghost" href="/admin/problems">Problems ({{ st.counts.problems }})</a></p>
 {% if not configured %}
   <div class="notice">Add your jrwishow.com email and password in <a href="/admin/settings">Settings</a> before the first check.</div>
 {% endif %}

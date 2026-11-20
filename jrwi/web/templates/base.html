@@ -15,6 +15,7 @@
       <a href="/feed" {% if active == 'feed' %}class="on"{% endif %}>Feed</a>
       <a href="/pages" {% if active == 'pages' %}class="on"{% endif %}>Pages</a>
       <a href="/admin" {% if active == 'admin' %}class="on"{% endif %}>Admin</a>
+      <a href="/admin/settings" {% if active == 'settings' %}class="on"{% endif %}>Settings</a>
     </nav>
     {% if status.running %}<span class="run"><span class="dot"></span>{{ status.phase }}</span>{% endif %}
     <a class="small muted" href="/logout">Log out</a>

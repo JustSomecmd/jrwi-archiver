@@ -111,3 +111,5 @@ label.check { display: flex; gap: .5rem; align-items: center; font-weight: 500; 
 code { background: var(--panel-2); padding: .1rem .35rem; border-radius: 4px; font-size: .85em; word-break: break-all; }
 .searchbar { display: flex; gap: .5rem; margin-bottom: 1rem; } .searchbar input { flex: 1; }
 @media (max-width: 640px) { header.top .wrap { height: auto; padding: .6rem 1rem; flex-wrap: wrap; } .banner { aspect-ratio: 3/1; } }
+.admin-links { display: flex; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 1rem; }
+.admin-links .btn:hover { text-decoration: none; border-color: var(--muted); }
