@@ -85,6 +85,13 @@ def test_pairs_and_tabs(client):
     assert tabs == ["episodes", "aftershow", "art"]
 
 
+def test_audio_thumbnail_is_the_cover(app):
+    """Audio posts show a blurred strip behind a square cover. The cover is the thumbnail."""
+    files = app.state.db.post(298)["files"]
+    thumbs = [k for k in files if k.startswith("thumb:")]
+    assert len(thumbs) == 1 and "acover298" in thumbs[0]
+
+
 def test_versions_stay_separate_posts(app, client):
     """Items group an episode's video and audio for the players; the archive keeps each post on its own."""
     item = client.get("/api/items/300").json()
@@ -191,10 +198,17 @@ def test_reparse_fixes_old_archives(app, client):
     stray = archiver.paths.archive / "avatars" / "0123456789abcdef.webp"
     stray.write_bytes(b"old badge")
     db.x("UPDATE comments SET author_avatar=? WHERE author_name='Lee'", (archiver.rel(stray),))
+    # The audio post's thumbnail as an older version saved it: the blurred strip
+    audio = db.post(298)
+    thumb_file = archiver.paths.archive / audio["thumbnail"]
+    thumb_file.write_bytes(b"blurred strip")
+    old_files = {("thumb:old-blurred-strip" if k.startswith("thumb:") else k): v for k, v in audio["files"].items()}
+    db.update("posts", "id", 298, {"files": old_files})
     db.set_setting("parser_version", 1)
 
     result = archiver.run_reparse()
-    assert result["to_fetch"] == 1 and result["removed"] == 1 and not result["stopped"]
+    assert result["to_fetch"] == 2 and result["removed"] == 1 and not result["stopped"]
+    assert "images" in db.post(298)["skipped"]
     assert not stray.exists()
     assert "attachments" in db.post(299)["skipped"]
     assert db.setting("parser_version") == PARSER_VERSION
@@ -205,6 +219,9 @@ def test_reparse_fixes_old_archives(app, client):
     post = db.post(299)
     assert [a["name"] for a in post["attachments"]] == ["Zombie Character Sheets.pdf"]
     assert "attachments" not in (post["skipped"] or [])
+    audio = db.post(298)
+    assert [k for k in audio["files"] if k.startswith("thumb:")][0].find("acover298") > 0
+    assert (archiver.paths.archive / audio["thumbnail"]).read_bytes() != b"blurred strip"
 
 
 def test_download_a_post_again(app, client):

@@ -18,7 +18,7 @@
     {% if p.locked %}<span class="badge">Not in your tier</span>{% endif %}
   </div>
   <h2><a href="/items/{{ p.id }}">{{ p.title }}</a></h2>
-  {% if p.thumbnail and (p.video or p.audio) %}<a href="/items/{{ p.id }}"><img src="{{ p.thumbnail }}" alt="" style="max-width:420px;border-radius:8px"></a>{% endif %}
+  {% if p.thumbnail and (p.video or p.audio) %}<a href="/items/{{ p.id }}"><img src="{{ p.thumbnail }}" alt="" style="max-width:{{ '200px' if p.audio and not p.video else '420px' }};border-radius:8px"></a>{% endif %}
   <div class="rich">{{ p.body_html | safe }}</div>
   {% if p.images %}<div class="gallery">{% for i in p.images[:8] %}<img loading="lazy" src="{{ i.url }}" alt="">{% endfor %}</div>{% endif %}
   {% if p.attachments %}<div class="files">{% for f in p.attachments %}<a href="{{ f.url }}" download>📎 {{ f.name }}</a>{% endfor %}</div>{% endif %}

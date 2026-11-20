@@ -1,6 +1,6 @@
 {% macro item_card(it) %}
 <a class="card {% if it.locked %}locked{% endif %}" href="/items/{{ it.id }}">
-  <div class="thumb" {% if it.thumbnail %}style="background-image:url('{{ it.thumbnail }}')"{% endif %}>
+  <div class="thumb{% if it.audio and not it.video %} cover{% endif %}" {% if it.thumbnail %}style="background-image:url('{{ it.thumbnail }}')"{% endif %}>
     <div class="badges">
       {% if it.episode and it.tab == 'episodes' %}<span class="badge acc">#{{ it.episode }}</span>{% endif %}
       {% if it.paired and it.version %}<span class="badge">{{ version_name[it.version] }}</span>
@@ -28,7 +28,7 @@
       {%- for b in c.author.badges %}<span class="mbadge" {% if b.name %}title="{{ b.name }}"{% endif %}>
         {%- if b.image %}<img src="{{ b.image }}" alt="">{% elif b.icon %}{{ b.icon }} {% endif %}
         {%- if b.name and not b.image %}{{ b.name }}{% endif %}</span>{% endfor %}
-      {%- if c.pinned %}<span class="mbadge">Pinned</span>{% endif %}<span class="when">{{ c.date_text or (c.date or '')[:10] }}</span>
+      {%- if c.pinned %}<span class="mbadge">Pinned</span>{% endif %}<span class="when" {% if c.date_text %}title="Shown on the site as {{ c.date_text }}"{% endif %}>{{ (c.date or '')[:10] or c.date_text }}</span>
       {% if c.like_count %}<span class="when">♥ {{ c.like_count }}</span>{% endif %}</div>
     <div class="rich">{{ c.body_html | safe if c.body_html else c.body_text }}</div>
     {% if c.replies %}<div class="replies">{% for r in c.replies %}{{ comment_tree(r) }}{% endfor %}</div>{% endif %}

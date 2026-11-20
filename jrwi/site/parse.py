@@ -20,7 +20,7 @@ SameSite = Callable[[str], bool]
 
 # Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
 # it has saved, so fixes reach posts and comments that were archived before the update.
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
@@ -150,12 +150,15 @@ def soup_of(text: str, turbo: bool = False) -> BeautifulSoup:
 SHORT_AGO_RE = re.compile(r"^\s*(\d+)\s*(s|m|min|h|d|w|mo|y)\s*$", re.I)
 
 
-def parse_date_text(txt: str) -> str | None:
+def parse_date_text(txt: str, now: datetime | None = None) -> str | None:
+    """A date from what the site shows. Relative times ("13d", "2 weeks ago") count back from `now`, which must be
+    when the page was downloaded, not when it's read, or re-reading an old page would move its dates."""
+    ref = now or datetime.now(timezone.utc)
     m = SHORT_AGO_RE.match(txt or "")
     if m:
         n, unit = int(m.group(1)), m.group(2).lower()
         days = {"s": 0, "m": 0, "min": 0, "h": n / 24, "d": n, "w": 7 * n, "mo": 30 * n, "y": 365 * n}[unit]
-        return (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+        return (ref - timedelta(days=days)).date().isoformat()
     m = DATE_RE.search(txt or "")
     if m:
         try:
@@ -166,13 +169,27 @@ def parse_date_text(txt: str) -> str | None:
     if m:
         n, unit = int(m.group(1)), m.group(2).lower()
         days = {"second": 0, "minute": 0, "hour": n / 24, "day": n, "week": 7 * n, "month": 30 * n, "year": 365 * n}[unit]
-        return (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+        return (ref - timedelta(days=days)).date().isoformat()
     low = (txt or "").strip().lower()
     if low.startswith("today") or low.startswith("just now"):
-        return date.today().isoformat()
+        return ref.date().isoformat()
     if low.startswith("yesterday"):
-        return (date.today() - timedelta(days=1)).isoformat()
+        return (ref - timedelta(days=1)).date().isoformat()
     return None
+
+
+def date_precision(txt: str | None) -> int:
+    """How exact a shown date is: 0 for hours or less, 1 for a day, 2 a week, 3 a month, 4 a year, 5 unknown.
+    The site shows a comment's age more coarsely as it gets older ("11h", then "3d", "2w", "5mo")."""
+    m = SHORT_AGO_RE.match(txt or "")
+    if m:
+        return {"s": 0, "m": 0, "min": 0, "h": 0, "d": 1, "w": 2, "mo": 3, "y": 4}[m.group(2).lower()]
+    m = RELATIVE_RE.search(txt or "")
+    if m:
+        return {"second": 0, "minute": 0, "hour": 0, "day": 1, "week": 2, "month": 3, "year": 4}[m.group(2).lower()]
+    if DATE_RE.search(txt or "") or (txt or "").strip().lower().startswith(("today", "yesterday", "just now")):
+        return 1
+    return 5
 
 
 def without_noise(el):
@@ -588,7 +605,9 @@ def extract_media(card, page_url: str, same_site: SameSite, post_id: int | None 
             break
     media_box = card.select_one(".post__media")
     if media_box is not None and not any(i["kind"] == "thumbnail" for i in items):
-        img = media_box.find("img", src=True)
+        # Audio posts show a blurred strip behind a square cover; the cover is the thumbnail
+        img = media_box.select_one("img.audio-player__media-image[src]") or next(
+            (i for i in media_box.find_all("img", src=True) if "background" not in " ".join(i.get("class") or [])), None)
         if img is not None:
             src = urljoin(page_url, img["src"])
             if urlparse(src).scheme in ("http", "https") and url_key(src) not in seen:
@@ -787,7 +806,7 @@ def _author_badges(own, page_url: str) -> list[dict]:
     return out
 
 
-def _parse_comment(el, page_url: str) -> dict:
+def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
     m = COMMENT_FRAME_RE.match(el.get("id") or "")
     cid = m.group(1) if m else (el.get("data-comment-id") or el.get("data-id") or str(abs(hash(str(el)[:400]))))
     # Work on a copy without nested replies, edit forms, menus and profile pop-ups
@@ -814,7 +833,7 @@ def _parse_comment(el, page_url: str) -> dict:
     t = own.find("time", attrs={"datetime": True})
     if date_el is not None:
         shown = norm_space(date_el.get_text(" ", strip=True))
-        when = parse_date_text(shown)
+        when = parse_date_text(shown, fetched)
     elif t is not None:
         shown, when = t.get_text(strip=True), t["datetime"]
     else:
@@ -837,16 +856,19 @@ def _parse_comment(el, page_url: str) -> dict:
 
 
 def parse_comments(parts: list, page_url: str) -> list[dict]:
-    """Comments from saved responses. parts: [(html, parent comment id or None)] or plain HTML strings."""
+    """Comments from saved responses. parts: [(html, parent comment id or None, when it was downloaded)], the last
+    item optional, or plain HTML strings."""
     comments: list[dict] = []
     seen: set[str] = set()
     for pos_base, part in enumerate(parts):
-        html_text, context_parent = part if isinstance(part, tuple) else (part, None)
+        html_text, context_parent, fetched = (tuple(part) + (None, None))[:3] if isinstance(part, tuple) else (part, None, None)
+        if isinstance(fetched, str):
+            fetched = datetime.fromisoformat(fetched)
         soup = soup_of(html_text, turbo=True)
         nodes = _comment_nodes(soup)
         node_ids = {id(n) for n in nodes}
         for el in nodes:
-            c = _parse_comment(el, page_url)
+            c = _parse_comment(el, page_url, fetched)
             if c["id"] in seen:
                 continue
             seen.add(c["id"])

@@ -419,7 +419,9 @@ class Archiver:
         if cached is not None and frame is None:
             keys = {i["key"] for i in items}
             extra, extra_unresolved = P.extract_media(cached, final, self.same_site, post["id"])
-            items += [i for i in extra if i["key"] not in keys and not (i["kind"] == "mux" and token_expired(i.get("token")))]
+            has_thumb = any(i["kind"] == "thumbnail" for i in items)
+            items += [i for i in extra if i["key"] not in keys and not (i["kind"] == "mux" and token_expired(i.get("token")))
+                      and not (i["kind"] == "thumbnail" and has_thumb)]
             resolved = {i.get("filename") for i in items if i["kind"] == "attachment"}
             unresolved = sorted({*unresolved, *extra_unresolved} - resolved)
         return fields, items, unresolved
@@ -470,6 +472,12 @@ class Archiver:
                 elif it["kind"] == "thumbnail":
                     if have(key):
                         continue
+                    # A different picture than before (for example after a fix): replace the old file, which has
+                    # the same name and would otherwise be kept
+                    if thumbnail and (self.paths.archive / thumbnail).is_file():
+                        (self.paths.archive / thumbnail).unlink()
+                        for k in [k for k, v in files.items() if v == thumbnail]:
+                            del files[k]
                     p = downloader.file(it["url"], d, f"thumbnail{P.ext_of(it['url']) or '.jpg'}", referer=final)
                     files[key] = self.rel(p)
                     thumbnail = self.rel(p)
@@ -631,7 +639,7 @@ class Archiver:
             _, chunk = self.page(url, accept=TURBO_ACCEPT)
             name = f"comments_{len(index) + 1:03d}.html.gz"
             write_gz(d / name, chunk)
-            index.append({"file": name, "parent": parent, "url": url})
+            index.append({"file": name, "parent": parent, "url": url, "fetched": now()})
             soup = P.soup_of(chunk, turbo=True)
             nxt = P.next_comments_page(soup, url)
             if nxt and nxt not in fetched:
@@ -643,8 +651,18 @@ class Archiver:
             if old.name not in {i["file"] for i in index}:
                 old.unlink()
         (d / "comments_index.json").write_text(json.dumps(index, indent=1))
-        return self.store_comments(post_id, [(read_gz(d / i["file"]), i["parent"]) for i in index],
-                                   self.client.abs("/supporters"))
+        return self.store_comments(post_id, self.comment_parts(d, index), self.client.abs("/supporters"))
+
+    @staticmethod
+    def comment_parts(d: Path, index: list[dict]) -> list[tuple]:
+        """Saved comment pages with when each was downloaded (older indexes: the file's time)."""
+        parts = []
+        for i in index:
+            f = d / i["file"]
+            if f.exists():
+                fetched = i.get("fetched") or datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat()
+                parts.append((read_gz(f), i["parent"], fetched))
+        return parts
 
     def resolve_download(self, url: str, referer: str) -> str:
         """Attachment buttons point at an API address that answers with the file's real (signed) address."""
@@ -683,6 +701,13 @@ class Archiver:
 
     def store_comments(self, post_id: int, parts: list, page_url: str) -> int:
         comments = P.parse_comments(parts, page_url)
+        # The site shows older comments' ages more coarsely ("11h", later "5mo"). Keep a date from an earlier, more
+        # exact reading instead of replacing it with a rougher one.
+        known = {r["id"]: r for r in self.db.q("SELECT id, date, date_text FROM comments WHERE post_id=?", (post_id,))}
+        for c in comments:
+            old = known.get(f"{post_id}:{c['id']}")
+            if old and old["date"] and P.date_precision(old["date_text"]) < P.date_precision(c.get("date_text")):
+                c["date"], c["date_text"] = old["date"], old["date_text"]
         # Pictures first, so the database isn't held while they download
         for c in comments:
             c["author_avatar"] = self.small_image(c.get("author_avatar"), "avatars")
@@ -866,8 +891,7 @@ class Archiver:
             index_file = d / "comments_index.json"
             if index_file.exists():
                 index = json.loads(index_file.read_text())
-                parts = [(read_gz(d / i["file"]), i["parent"]) for i in index if (d / i["file"]).exists()]
-                self.store_comments(post["id"], parts, self.client.abs("/supporters"))
+                self.store_comments(post["id"], self.comment_parts(d, index), self.client.abs("/supporters"))
             n += 1
         pages = 0
         if not stopped:

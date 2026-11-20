@@ -50,7 +50,7 @@ try:
 except ImportError:
     sys.exit("Some required packages are missing. Run this first:\n\n    pip install -r requirements.txt\n")
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 DEFAULT_BASE = "https://jrwishow.com"
 DEFAULT_MUX = "https://stream.mux.com"
@@ -845,7 +845,9 @@ def extract_media(card, page_url: str, client: Client, post_id: str | None = Non
             add("thumbnail", "thumb:" + url_key(t["poster"]), url=urljoin(page_url, t["poster"]))
             break
     if media_box is not None and has_player and not any(i["kind"] == "thumbnail" for i in items):
-        img = media_box.find("img", src=True)
+        # Audio posts show a blurred strip behind a square cover; the cover is the thumbnail
+        img = media_box.select_one("img.audio-player__media-image[src]") or next(
+            (i for i in media_box.find_all("img", src=True) if "background" not in " ".join(i.get("class") or [])), None)
         if img is not None:
             src = urljoin(page_url, img["src"])
             if urlparse(src).scheme in ("http", "https"):

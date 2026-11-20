@@ -94,8 +94,9 @@ def mux_video(pid, token=None):
 
 
 def mux_audio(pid):
-    return (f'<div class="audio-player"><div class="audio-player__media"><img class="audio-player__media-image" alt="Audio thumbnail" '
-            f'src="{B}/imgproxy/abg{pid}/bg.webp"></div><mux-player audio data-controller="mux-player" playback-id="aud{pid}" '
+    return (f'<div class="audio-player"><div class="audio-player__media">'
+            f'<img class="audio-player__media-background hidden@sm" src="{B}/imgproxy/abg{pid}/rs:fill:712:200:0/bl:20/bg.webp">'
+            f'<img class="audio-player__media-image" alt="Audio thumbnail" src="{B}/imgproxy/acover{pid}/rs:fill:200:200:0/cover.webp"></div><mux-player audio data-controller="mux-player" playback-id="aud{pid}" '
             f'metadata-video-id="{pid}" default-duration="11695"></mux-player></div>')
 
 

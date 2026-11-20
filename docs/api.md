@@ -161,7 +161,7 @@ A single post, never merged with its other versions. It has the same fields as a
  "replies": [ /* comments */ ]}
 ```
 
-- **Dates:** the site only shows how long ago a comment was posted ("13d"), so `date` is worked out from that when the comment was saved. `date_text` is what the site showed.
+- **Dates:** the site only shows how long ago a comment was posted ("13d"), so `date` is counted back from when that page was downloaded. The site shows older comments more roughly ("5mo"), so when a later download is rougher, the earlier, more exact `date` is kept. `date_text` is what the site showed for the `date` that's kept.
 - **`pinned` (v0.4):** pinned comments come first, as on the site.
 - **`link` (v0.4):** the comment's own address on the site, or `null`.
 - **`author.avatar`:** `null` for members without a profile picture. The site shows their initial instead, and apps can do the same.

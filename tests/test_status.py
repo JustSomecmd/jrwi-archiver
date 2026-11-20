@@ -84,3 +84,29 @@ def test_reparse_after_an_update(archiver, monkeypatch):
     archiver.db.set_setting("parser_version", PARSER_VERSION - 1)
     s._reparse_after_update()                 # archived with older rules: re-read once
     assert calls == [1]
+
+
+def comment_html(when: str) -> str:
+    return ('<turbo-frame id="comment_9"><div class="comment" data-testid="Post.Comment">'
+            '<div class="comment__aside"><div class="avatar">a</div></div>'
+            '<div data-testid="Post.CommentAuthor">Ann</div><span class="comment__date">' + when + '</span>'
+            '<div class="comment__body"><p>Hi</p></div></div></turbo-frame>')
+
+
+def test_comment_dates_count_from_when_the_page_was_saved():
+    from jrwi.site.parse import parse_comments
+    c = parse_comments([(comment_html("13d"), None, "2026-01-20T12:00:00+00:00")], "https://jrwishow.com/supporters")[0]
+    assert c["date"] == "2026-01-07" and c["date_text"] == "13d"
+
+
+def test_comment_keeps_its_most_exact_date(archiver):
+    store = lambda when, at: archiver.store_comments(5, [(comment_html(when), None, at)], "https://jrwishow.com/supporters")
+    one = lambda: archiver.db.one("SELECT date, date_text FROM comments WHERE id='5:9'")
+    store("11h", "2026-01-20T12:00:00+00:00")
+    assert one() == {"date": "2026-01-20", "date_text": "11h"}
+    store("2w", "2026-02-01T12:00:00+00:00")      # weeks later the site only says "2w": keep the exact day
+    assert one() == {"date": "2026-01-20", "date_text": "11h"}
+    store("3d", "2026-01-23T08:00:00+00:00")      # still rougher than hours
+    assert one() == {"date": "2026-01-20", "date_text": "11h"}
+    store("10h", "2026-01-20T11:00:00+00:00")     # as exact: replaces it, as when re-reading the same page
+    assert one() == {"date": "2026-01-20", "date_text": "10h"}
