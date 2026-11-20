@@ -6,10 +6,8 @@
 {%- elif name == 'video' %}<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>
 {%- elif name == 'audio' %}<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>
 {%- elif name == 'image' %}<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 17l-5-5-9 8"/>
-{%- elif name == 'link' %}<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>
+{%- elif name == 'file' %}<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/>
 {%- elif name == 'doc' %}<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>
-{%- elif name == 'download' %}<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>
-{%- elif name == 'share' %}<path d="M12 15V4M7 9l5-5 5 5M5 14v6h14v-6"/>
 {%- elif name == 'chevron' %}<path d="M6 9l6 6 6-6"/>
 {%- elif name == 'back' %}<path d="M15 6l-6 6 6 6"/>
 {%- elif name == 'search' %}<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>
@@ -20,75 +18,23 @@
 {%- elif name == 'lock' %}<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>
 {%- elif name == 'pin' %}<path d="M5 12l4 4 10-10"/>
 {%- elif name == 'external' %}<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>
-{%- elif name == 'back15' %}<path d="M5 12a7 7 0 1 0 2-5"/><path d="M7 3v4h4"/><text x="12" y="15.5" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" font-family="Rubik, sans-serif">15</text>
-{%- elif name == 'fwd15' %}<path d="M19 12a7 7 0 1 1-2-5"/><path d="M17 3v4h-4"/><text x="12" y="15.5" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" font-family="Rubik, sans-serif">15</text>
-{%- elif name == 'play' %}<path d="M7 4l13 8-13 8z" fill="currentColor"/>
-{%- elif name == 'pause' %}<path d="M7 4h3v16H7zM14 4h3v16h-3z" fill="currentColor"/>
+{%- elif name == 'user' %}<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>
 {%- endif %}</svg>
 {%- endmacro %}
 
-{# Likes, comments and share, as pills under a post #}
-{% macro post_actions(p, comments_link='') %}
-<div class="pfoot">
-  {% if p.like_count is not none %}<span class="pill">{{ icon('heart') }} {{ p.like_count }}</span>{% endif %}
-  {% if comments_link %}<a class="pill" href="{{ comments_link }}">{{ icon('comment') }} {{ p.comment_count or 0 }}</a>
-  {% else %}<span class="pill">{{ icon('comment') }} {{ p.comment_count or 0 }}</span>{% endif %}
-  {% if p.original_url %}<button type="button" class="pill" data-share="{{ p.original_url }}" data-title="{{ p.title }}">{{ icon('share') }} <span>Share</span></button>{% endif %}
-</div>
-{% endmacro %}
-
-{% macro counts(it) %}
+{% macro counts(it, link='') %}
 {% if it.like_count is not none %}<span class="pill">{{ icon('heart') }} {{ it.like_count }}</span>{% endif %}
-<span class="pill">{{ icon('comment') }} {{ it.comment_count or 0 }}</span>
+<{{ 'a' if link else 'span' }} class="pill" {% if link %}href="{{ link }}#comments"{% endif %}>{{ icon('comment') }} {{ it.comment_count or 0 }}</{{ 'a' if link else 'span' }}>
 {% endmacro %}
 
 {% macro durpill(it) %}
 {% if it.duration %}<span class="durpill">{{ icon('audio' if it.audio and not it.video else 'video') }} {{ human_duration(it.duration) }}</span>{% endif %}
 {% endmacro %}
 
-{# Pictures shown whole, on the average colour of the picture, like the site's audio posts #}
-{% macro fit_img(src, extra='') %}<span class="fit" data-avg>{% if src %}<img src="{{ src }}" alt="" loading="lazy">{% endif %}{{ extra }}</span>{% endmacro %}
-
-{# Up to four of a post's images, the fourth showing how many more there are #}
-{% macro image_grid(images, link='') %}
-{% set n = images | length %}
-<div class="igrid n{{ n if n < 4 else 4 }}">
-  {% for i in images[:4] %}
-    <a href="{{ link or i.url }}" {% if not link %}target="_blank"{% endif %} class="fit" data-avg>
-      <img loading="lazy" src="{{ i.url }}" alt="">
-      {% if loop.index == 4 and n > 4 %}<span class="more">+{{ n - 4 }}</span>{% endif %}
-    </a>
-  {% endfor %}
-  {% if n > 1 %}<span class="icount">{{ icon('image') }} {{ n }}</span>{% endif %}
-</div>
-{% endmacro %}
-
-{# The text of a post, shortened like the site with "...Continue reading", which opens it in place #}
-{% macro post_text(p) %}
-{% if p.body_html %}
-<div class="rich clamp" data-clamp>{{ p.body_html | safe }}</div>
-<button type="button" class="more-link" data-unclamp hidden>...Continue reading</button>
-{% endif %}
-{% endmacro %}
-
-{% macro post_files(p) %}
-{% if p.attachments or p.documents %}
-<div class="filelist">
-  {% for f in p.attachments %}<a href="{{ f.url }}" download>{{ icon('link') }}<span>{{ f.name }}</span></a>{% endfor %}
-  {% for f in p.documents %}<a href="{{ f.url }}" target="_blank">{{ icon('doc') }}<span>{{ f.name }}</span></a>{% endfor %}
-</div>
-{% endif %}
-{% endmacro %}
-
-{% macro post_tags(p) %}
-{% if p.tags %}<div class="chips">{% for t in p.tags %}<span class="chip">{{ t }}</span>{% endfor %}</div>{% endif %}
-{% endmacro %}
-
 {# A post in a grid, like the site's "Watch now" cards #}
 {% macro item_card(it) %}
 <a class="card {% if it.locked %}locked{% endif %}" href="/items/{{ it.id }}">
-  <div class="thumb">
-    {{ fit_img(it.thumbnail) }}
+  <div class="thumb{% if it.audio and not it.video %} cover{% endif %}" {% if it.thumbnail %}style="background-image:url('{{ it.thumbnail }}')"{% endif %}>
     <div class="badges">
       {% if it.episode and it.tab == 'episodes' %}<span class="badge acc">#{{ it.episode }}</span>{% endif %}
       {% if it.paired and it.version %}<span class="badge">{{ version_name[it.version] }}</span>{% endif %}
@@ -104,29 +50,46 @@
 </a>
 {% endmacro %}
 
-{# A post in the feed, laid out like the site's posts #}
+{# A post in the feed, like the site's post cards #}
 {% macro post_card(p) %}
 {% set url = '/items/' ~ p.id %}
 <article class="pcard {% if p.locked %}locked{% endif %}">
-  {% if p.video and p.thumbnail %}
-    <a class="pmedia video" href="{{ url }}">{{ fit_img(p.thumbnail) }}{{ durpill(p) }}</a>
-  {% elif p.audio and p.thumbnail %}
-    <a class="pmedia audio" href="{{ url }}">{{ fit_img(p.thumbnail) }}{{ durpill(p) }}</a>
+  {% if p.video or (p.audio and p.thumbnail) %}
+    {% if p.audio and not p.video %}
+      <a class="pmedia audio" href="{{ url }}"><div class="bgblur" style="background-image:url('{{ p.thumbnail }}')"></div>
+        <img src="{{ p.thumbnail }}" alt="">{{ durpill(p) }}</a>
+    {% elif p.thumbnail %}
+      <a class="pmedia" href="{{ url }}"><img class="cover-img" src="{{ p.thumbnail }}" alt="">{{ durpill(p) }}</a>
+    {% endif %}
   {% elif p.images %}
-    {{ image_grid(p.images, url if p.images | length > 4 else '') }}
+    {% set n = p.images | length %}
+    <div class="pgallery n{{ 1 if n == 1 else 2 }}">
+      {% for i in p.images[:4] %}
+        <a href="{{ url }}"><img loading="lazy" src="{{ i.url }}" alt="">{% if loop.index == 4 and n > 4 %}<span class="more">+{{ n - 4 }}</span>{% endif %}</a>
+      {% endfor %}
+    </div>
   {% endif %}
   <div class="pbody">
     <div class="pmeta">
       <a href="{{ url }}">{{ nice_date(p.date) }}</a>
       {% if p.pinned %}<span class="tag">{{ icon('pin') }} Pinned</span>{% endif %}
       {% if p.paired and p.version %}<span class="tag">{{ version_name[p.version] }}</span>{% endif %}
+      <span>{{ tab_name(p.tab) }}</span>
       {% if p.locked %}<span class="tag">{{ icon('lock') }} Not in your tier</span>{% endif %}
     </div>
     <h2 class="ptitle"><a href="{{ url }}">{{ p.title }}</a></h2>
-    {{ post_text(p) }}
-    {{ post_files(p) }}
-    {{ post_tags(p) }}
-    {{ post_actions(p, url ~ '#comments') }}
+    {% if p.body_html %}
+      {% set long = (p.body_text or '') | length > 420 %}
+      <div class="rich {% if long %}clamp{% endif %}">{{ p.body_html | safe }}</div>
+      {% if long %}<a class="more-link" href="{{ url }}">...Continue reading</a>{% endif %}
+    {% endif %}
+    {% if p.attachments or p.documents %}
+      <div class="files">
+        {% for f in p.attachments %}<a href="{{ f.url }}" download>{{ icon('file') }} {{ f.name }}</a>{% endfor %}
+        {% for f in p.documents %}<a href="{{ f.url }}" target="_blank">{{ icon('doc') }} {{ f.name }}</a>{% endfor %}
+      </div>
+    {% endif %}
+    <div class="pfoot">{{ counts(p, url) }}</div>
   </div>
 </article>
 {% endmacro %}
@@ -134,7 +97,8 @@
 {# A small row in the post page's side list #}
 {% macro mini(it) %}
 <a class="mini" href="/items/{{ it.id }}">
-  <div class="th">{{ fit_img(it.thumbnail) }}{% if it.duration %}<span class="d">{{ human_duration(it.duration) }}</span>{% endif %}</div>
+  <div class="th{% if it.audio and not it.video %} cover{% endif %}" {% if it.thumbnail %}style="background-image:url('{{ it.thumbnail }}')"{% endif %}>
+    {% if it.duration %}<span class="d">{{ human_duration(it.duration) }}</span>{% endif %}</div>
   <div><div class="t">{{ it.title }}</div><div class="m">{{ nice_date(it.date) }}{% if it.paired and it.version %} · {{ version_name[it.version] }}{% endif %}</div></div>
 </a>
 {% endmacro %}
@@ -150,7 +114,7 @@
         {%- if b.name and not b.image %}{{ b.name }}{% endif %}</span>{% endfor %}
       {%- if c.pinned %}<span class="mbadge pin">Pinned</span>{% endif %}<span class="when" {% if c.date_text %}title="Shown on the site as {{ c.date_text }}"{% endif %}>{{ nice_date(c.date) or c.date_text }}</span></div>
     <div class="rich">{{ c.body_html | safe if c.body_html else c.body_text }}</div>
-    <div class="cfoot">{{ icon('heart') }} {{ c.like_count or 0 }}{% if c.replies %}<span>{{ icon('comment') }} {{ c.replies | length }}</span>{% endif %}</div>
+    {% if c.like_count %}<div class="cfoot">{{ icon('heart') }} {{ c.like_count }}</div>{% endif %}
     {% if c.replies %}<div class="replies">{% for r in c.replies %}{{ comment_tree(r) }}{% endfor %}</div>{% endif %}
   </div>
 </div>

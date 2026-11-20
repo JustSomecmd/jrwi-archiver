@@ -457,23 +457,19 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                       pages=math.ceil(total / 20) or 1, locked=locked, order=order)
 
     @app.get("/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def item_page(request: Request, post_id: int, csort: str = "top"):
+    def item_page(request: Request, post_id: int):
         post = db.post(post_id)
         if not post:
             raise HTTPException(404, "No such post")
         item = ser.post_full(post)
         comments = ser.comments(post, 1, 1000, only_post=post["id"])
-        csort = "new" if csort == "new" else "top"
-        if csort == "top":
-            # Most relevant, as on the site: pinned first, then the most liked
-            comments["items"].sort(key=lambda c: (not c["pinned"], -(c["like_count"] or 0)))
         show = db.one("SELECT id, name FROM shows WHERE id=?", (item["show"],))
         progress = api_progress(item["audio"]["post_id"]) if item["audio"] else None
         # The side list, like the site's "Recently uploaded": newest posts from the same show
         sql, args = item_query(show=item["show"], separate=True)
         more = [ser.post_summary(r) for r in db.q(f"SELECT * FROM ({sql}) WHERE id != ? LIMIT 8", args + [post["id"]])]
         return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=progress,
-                      more=more, csort=csort)
+                      more=more)
 
     @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def pages_index(request: Request):

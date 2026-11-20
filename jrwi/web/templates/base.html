@@ -10,20 +10,6 @@
 <body>
 <header class="site-header">
   <div class="hwrap">
-    <details class="mobnav">
-      <summary aria-label="Menu">{{ icon('menu') }}</summary>
-      <nav class="drawer">
-        <a href="/">Home</a>
-        <a href="/feed">Feed</a>
-        {% if shows_nav %}<div class="label">Shows</div>
-        <div class="sub">{% for s in shows_nav %}<a href="/shows/{{ s.id }}">{{ s.name }}</a>{% endfor %}</div>{% endif %}
-        <div class="label">Archive</div>
-        <a href="/pages">Site pages</a>
-        <a href="/admin">Admin</a>
-        <a href="/admin/settings">Settings</a>
-        <a href="/logout">Log out</a>
-      </nav>
-    </details>
     <a class="logo" href="/">
       {% if logo %}<img src="{{ logo }}" alt="Just Roll With It">{% else %}<span class="word">JRWI</span>{% endif %}
       <span class="archive-tag">Archive</span>
@@ -44,6 +30,20 @@
     <div class="hright">
       {% if status.running %}<a class="run" href="/admin" title="{{ status.phase }}"><span class="dot"></span><span class="label">{{ status.phase }}</span></a>{% endif %}
       <a class="iconbtn logout" href="/logout" title="Log out">{{ icon('logout') }}</a>
+      <details class="mobnav">
+        <summary aria-label="Menu">{{ icon('menu') }}</summary>
+        <nav class="drawer">
+          <a href="/">Home</a>
+          <a href="/feed">Feed</a>
+          {% if shows_nav %}<div class="label">Shows</div>
+          <div class="sub">{% for s in shows_nav %}<a href="/shows/{{ s.id }}">{{ s.name }}</a>{% endfor %}</div>{% endif %}
+          <div class="label">Archive</div>
+          <a href="/pages">Site pages</a>
+          <a href="/admin">Admin</a>
+          <a href="/admin/settings">Settings</a>
+          <a href="/logout">Log out</a>
+        </nav>
+      </details>
     </div>
   </div>
 </header>
