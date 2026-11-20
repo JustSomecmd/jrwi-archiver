@@ -481,6 +481,13 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                 p["progress_start"] = prog.get("position") if prog and not prog.get("finished") else 0
             posts.append(p)
         shows = [ser.show(s, separate=True) for s in db.q("SELECT * FROM shows ORDER BY sort, name")]
+        for s in shows:
+            # Until the show's own art is saved, its newest thumbnail stands in
+            s["tile"] = s["banner"] or s["poster"]
+            if not s["tile"]:
+                row = db.one("SELECT thumbnail FROM posts WHERE show_id=? AND thumbnail IS NOT NULL "
+                             "AND status IN ('complete', 'partial') ORDER BY published DESC LIMIT 1", (s["id"],))
+                s["tile"] = files_url(row["thumbnail"]) if row else None
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
                       pages=math.ceil(total / 20) or 1, locked=locked, order=order,
                       tiles=[s for s in shows if s["item_count"]],

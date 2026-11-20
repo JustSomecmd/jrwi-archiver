@@ -163,6 +163,12 @@ document.querySelectorAll("[data-aplayer]").forEach((box) => {
   const cur = box.querySelector("[data-cur]");
   const dur = box.querySelector("[data-dur]");
   const speed = box.querySelector("[data-speed]");
+  const mute = box.querySelector("[data-mute]");
+  if (mute) mute.addEventListener("click", () => {
+    audio.muted = !audio.muted;
+    mute.classList.toggle("muted", audio.muted);
+    mute.setAttribute("aria-label", audio.muted ? "Unmute" : "Mute");
+  });
   const speeds = [1, 1.25, 1.5, 1.75, 2, 0.75];
   let dragging = false;
   play.addEventListener("click", () => (audio.paused ? audio.play() : audio.pause()));
@@ -221,4 +227,107 @@ document.querySelectorAll("[data-comments]").forEach((box) => {
     a.closest("details").open = false;
     load(0, 2, true);
   }));
+});
+
+// Picture viewer: tapping a post's picture opens it full screen. Swipe, the arrows or the arrow keys go through the
+// post's pictures; tapping the picture zooms in; Esc, the X or the phone's back button closes it.
+const viewer = (() => {
+  const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+  let box, stage, img, count, save, prevBtn, nextBtn, list = [], at = 0, pushed = false, touchX = null;
+  const build = () => {
+    box = document.createElement("div");
+    box.className = "lb";
+    box.hidden = true;
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Picture viewer");
+    box.innerHTML = `
+      <div class="lb-top"><span class="lb-count"></span>
+        <a class="lb-btn lb-save" download title="Download">${svg('<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>')}</a>
+        <button type="button" class="lb-btn lb-close" title="Close">${svg('<path d="M6 6l12 12M18 6L6 18"/>')}</button></div>
+      <div class="lb-stage"><img alt=""></div>
+      <button type="button" class="lb-nav lb-prev" title="Previous">${svg('<path d="M15 6l-6 6 6 6"/>')}</button>
+      <button type="button" class="lb-nav lb-next" title="Next">${svg('<path d="M9 6l6 6-6 6"/>')}</button>`;
+    document.body.append(box);
+    stage = box.querySelector(".lb-stage");
+    img = stage.querySelector("img");
+    count = box.querySelector(".lb-count");
+    save = box.querySelector(".lb-save");
+    prevBtn = box.querySelector(".lb-prev");
+    nextBtn = box.querySelector(".lb-next");
+    box.querySelector(".lb-close").addEventListener("click", () => close());
+    prevBtn.addEventListener("click", () => show(at - 1));
+    nextBtn.addEventListener("click", () => show(at + 1));
+    stage.addEventListener("click", (e) => {
+      if (e.target !== img) { if (!box.classList.contains("zoom")) close(); return; }
+      zoom(e);
+    });
+    stage.addEventListener("touchstart", (e) => { touchX = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+    stage.addEventListener("touchend", (e) => {
+      if (touchX === null || box.classList.contains("zoom")) return;
+      const dx = e.changedTouches[0].clientX - touchX;
+      if (Math.abs(dx) > 50) show(at + (dx < 0 ? 1 : -1));
+      touchX = null;
+    });
+    document.addEventListener("keydown", (e) => {
+      if (box.hidden) return;
+      if (e.key === "Escape") close();
+      else if (e.key === "ArrowLeft") show(at - 1);
+      else if (e.key === "ArrowRight") show(at + 1);
+    });
+    window.addEventListener("popstate", () => { if (!box.hidden) { pushed = false; close(); } });
+  };
+  const unzoom = () => { box.classList.remove("zoom"); img.style.width = ""; };
+  const zoom = (e) => {
+    if (box.classList.contains("zoom")) { unzoom(); return; }
+    const r = img.getBoundingClientRect();
+    const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+    box.classList.add("zoom");
+    img.style.width = Math.max(img.naturalWidth, stage.clientWidth * 2) + "px";
+    stage.scrollLeft = fx * img.offsetWidth - stage.clientWidth / 2;
+    stage.scrollTop = fy * img.offsetHeight - stage.clientHeight / 2;
+  };
+  const show = (n) => {
+    if (!list.length) return;
+    at = (n + list.length) % list.length;
+    unzoom();
+    img.src = list[at];
+    save.href = list[at];
+    count.textContent = list.length > 1 ? `${at + 1} / ${list.length}` : "";
+    prevBtn.hidden = nextBtn.hidden = list.length < 2;
+  };
+  const open = (urls, n) => {
+    if (!box) build();
+    list = urls;
+    box.hidden = false;
+    document.documentElement.classList.add("lb-open");
+    if (!pushed) { history.pushState({ viewer: true }, ""); pushed = true; }
+    show(n);
+  };
+  const close = () => {
+    if (!box || box.hidden) return;
+    box.hidden = true;
+    unzoom();
+    img.removeAttribute("src");
+    document.documentElement.classList.remove("lb-open");
+    if (pushed) { pushed = false; history.back(); }
+  };
+  return { open };
+})();
+
+document.addEventListener("click", (e) => {
+  if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  // Pictures in a post's grid or gallery
+  const a = e.target.closest("a[data-lightbox]");
+  if (a) {
+    e.preventDefault();
+    const group = [...document.querySelectorAll(`a[data-lightbox="${a.dataset.lightbox}"]`)];
+    viewer.open(group.map((x) => x.href), group.indexOf(a));
+    return;
+  }
+  // Pictures inside a post's text (not ones that are links)
+  const pic = e.target.closest(".post-info .rich img, .pbody .rich img");
+  if (pic && !pic.closest("a")) {
+    const pics = [...pic.closest(".rich").querySelectorAll("img")].filter((x) => !x.closest("a"));
+    viewer.open(pics.map((x) => x.currentSrc || x.src), pics.indexOf(pic));
+  }
 });

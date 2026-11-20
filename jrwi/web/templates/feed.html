@@ -15,7 +15,7 @@
     {% if tiles %}
     <div class="tiles">
       {% for s in tiles %}
-      <a class="tile" href="/shows/{{ s.id }}" {% if s.banner or s.poster %}style="background-image:url('{{ s.banner or s.poster }}')"{% endif %}>
+      <a class="tile" href="/shows/{{ s.id }}" {% if s.tile %}style="background-image:url('{{ s.tile }}')"{% endif %}>
         <span>{{ s.name }}</span><small>{{ s.item_count }}</small></a>
       {% endfor %}
     </div>

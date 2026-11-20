@@ -44,7 +44,7 @@
     <h1>{{ item.title }}</h1>
     <div class="rich">{{ item.body_html | safe }}</div>
     {% if item.images %}
-      <div class="gallery">{% for i in item.images %}<a href="{{ i.url }}" target="_blank" class="fit" data-avg><img loading="lazy" src="{{ i.url }}" alt=""></a>{% endfor %}</div>
+      <div class="gallery">{% for i in item.images %}<a href="{{ i.url }}" class="fit" data-avg data-lightbox="g{{ item.id }}"><img loading="lazy" src="{{ i.url }}" alt=""></a>{% endfor %}</div>
     {% endif %}
     {% if item.attachments or item.documents %}
       <div class="files">

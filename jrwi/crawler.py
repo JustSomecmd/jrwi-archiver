@@ -139,12 +139,14 @@ class Archiver:
         try:
             organize.ensure_default_shows(self.db)
             feed_soup = self.crawl_feed(full=full)
+            # Site pages first: a few pages (skipped when saved recently) that give the logo and the show art, so
+            # those show up straight away instead of after a long archive
+            if s["public_pages"]:
+                self.archive_pages(feed_soup)
             organize.classify_all(self.db)
             archived = self.archive_posts()
             if s["comments"]:
                 self.refresh_comments()
-            if s["public_pages"]:
-                self.archive_pages(feed_soup)
             organize.classify_all(self.db)
             organize.reorganize(self.db, self.paths)
             organize.refresh_jellyfin(self.db, self.paths)
