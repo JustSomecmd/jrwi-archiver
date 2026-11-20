@@ -24,6 +24,7 @@ from .site import parse as P
 from .site.client import (HTML_ACCEPT, TURBO_ACCEPT, Blocked, Client, LoginFailed, NotFound, SessionExpired,
                           SiteError, logged_in)
 from .site.download import Downloader, DownloadError, glob_escape, probe_height
+from .sync import find_offset, probe_duration
 
 log = logging.getLogger("jrwi.crawler")
 
@@ -147,6 +148,7 @@ class Archiver:
             archived = self.archive_posts()
             if s["comments"]:
                 self.refresh_comments()
+            self.line_up()
             organize.classify_all(self.db)
             organize.reorganize(self.db, self.paths)
             organize.refresh_jellyfin(self.db, self.paths)
@@ -351,6 +353,51 @@ class Archiver:
         self.db.update("posts", "id", post["id"], fields)
         return {**post, **fields}
 
+    def line_up(self) -> int:
+        """Measure video and audio files that have no length yet, and work out how far each episode's video and
+        audio version are apart (sync). Only pairs that are new or whose files changed are compared again."""
+        posts = self.db.q("SELECT id, media FROM posts WHERE media IS NOT NULL AND media != '{}'")
+        for p in posts:
+            media = p["media"] or {}
+            changed = False
+            for part, root in (("video", self.paths.media), ("audio", self.paths.archive)):
+                m = media.get(part)
+                if m and m.get("path") and not m.get("duration"):
+                    m["duration"] = probe_duration(root / m["path"])
+                    changed = changed or bool(m["duration"])
+            if changed:
+                self.db.update("posts", "id", p["id"], {"media": media})
+        pairs = []
+        for primary in self.db.q("SELECT * FROM posts WHERE pair_id IS NULL AND id IN (SELECT pair_id FROM posts)"):
+            members = [primary] + self.db.q("SELECT * FROM posts WHERE pair_id=? ORDER BY id", (primary["id"],))
+            video = next(((m["id"], (m["media"] or {})["video"]) for m in members
+                          if (m["media"] or {}).get("video") and (self.paths.media / m["media"]["video"]["path"]).exists()), None)
+            audio = next(((m["id"], (m["media"] or {})["audio"]) for m in members
+                          if (m["media"] or {}).get("audio") and (self.paths.archive / m["media"]["audio"]["path"]).exists()), None)
+            if not video or not audio:
+                continue
+            key = {"video_post": video[0], "video_size": video[1].get("size"),
+                   "audio_post": audio[0], "audio_size": audio[1].get("size")}
+            old = primary.get("sync") or {}
+            if all(old.get(k) == v for k, v in key.items()):
+                continue
+            pairs.append((primary, video, audio, key))
+        if not pairs:
+            return 0
+        self.status.set(phase="lining up video and audio", detail="", done=0, total=len(pairs), current=None)
+        for n, (primary, video, audio, key) in enumerate(pairs):
+            if self.stop_event.is_set():
+                break
+            self.status.set(done=n, detail=primary["title"] or "")
+            try:
+                result = find_offset(self.paths.media / video[1]["path"], self.paths.archive / audio[1]["path"],
+                                     video[1].get("duration"), audio[1].get("duration"))
+            except Exception as e:  # a broken file shouldn't stop the check
+                log.warning("couldn't line up %s: %s", primary["id"], e)
+                result = {"offset": 0.0, "checked": False, "score": 0.0}
+            self.db.update("posts", "id", primary["id"], {"sync": {**result, **key, "at": now()}})
+        return len(pairs)
+
     def grow_archive_size(self, post: dict) -> None:
         """Add a newly archived post to the archive size shown on the admin page. The full count at the end of
         each check corrects any difference."""
@@ -491,7 +538,8 @@ class Archiver:
                         p = downloader.file(it["url"], d, it.get("filename") or f"{title_base}{ext or '.m4a'}",
                                             referer=final)
                         files[key] = self.rel(p)
-                        media["audio"] = {"path": self.rel(p), "mime": mime_of(p), "size": p.stat().st_size}
+                        media["audio"] = {"path": self.rel(p), "mime": mime_of(p), "size": p.stat().st_size,
+                                          "duration": probe_duration(p)}
                     elif cls == "video":
                         if "video" in media and (self.paths.media / media["video"]["path"]).exists():
                             continue
@@ -525,7 +573,8 @@ class Archiver:
                         if p is None:
                             url = it.get("url") or f"{MUX_BASE}/{pid}.m3u8{q}"
                             p = downloader.stream(url, d, title_base, referer=final, audio_only=True)
-                        media["audio"] = {"path": self.rel(p), "mime": mime_of(p), "size": p.stat().st_size}
+                        media["audio"] = {"path": self.rel(p), "mime": mime_of(p), "size": p.stat().st_size,
+                                          "duration": probe_duration(p)}
                     else:
                         if "video" in media and (self.paths.media / media["video"]["path"]).exists():
                             continue
@@ -621,7 +670,7 @@ class Archiver:
         row.update({k: v for k, v in update.items() if k in ("title", "body_text", "duration", "published")})
         dest = organize.place_video(self.db, self.paths, row, file)
         media["video"] = {"path": dest.relative_to(self.paths.media).as_posix(), "size": dest.stat().st_size,
-                          "height": probe_height(dest)}
+                          "height": probe_height(dest), "duration": probe_duration(dest)}
 
     # ------------------------------------------------------------------ comments
 

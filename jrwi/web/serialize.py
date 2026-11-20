@@ -81,11 +81,13 @@ class Serializer:
             v = (m["media"] or {}).get("video")
             if v and (self.paths.media / v["path"]).exists():
                 return {"post_id": m["id"], "jellyfin_path": str(self.paths.media / v["path"]),
-                        "url": f"/api/video/{m['id']}", "height": v.get("height"), "size": v.get("size")}
+                        "url": f"/api/video/{m['id']}", "height": v.get("height"), "size": v.get("size"),
+                        "duration": v.get("duration")}
         for m in members:
             for e in m["embeds"] or []:
                 if e.get("kind") == "youtube" and e.get("youtube_id"):
-                    return {"post_id": m["id"], "youtube_id": e["youtube_id"], "youtube_url": e["url"]}
+                    return {"post_id": m["id"], "youtube_id": e["youtube_id"], "youtube_url": e["url"],
+                            "duration": m["duration"]}
         return None
 
     def _audio(self, members: list[dict]) -> dict | None:
@@ -93,8 +95,19 @@ class Serializer:
             a = (m["media"] or {}).get("audio")
             if a and (self.paths.archive / a["path"]).exists():
                 return {"post_id": m["id"], "url": f"/api/audio/{m['id']}", "mime": a.get("mime"),
-                        "size": a.get("size")}
+                        "size": a.get("size"), "duration": a.get("duration") or m["duration"]}
         return None
+
+    @staticmethod
+    def sync_of(primary: dict, video: dict | None, audio: dict | None) -> dict | None:
+        """How far apart an item's video and audio are (audio position = video position + offset), or None when it
+        has only one of them. Unchecked pairs, like YouTube-only videos, get an offset of 0."""
+        if not video or not audio:
+            return None
+        s = primary.get("sync") or {}
+        if s.get("video_post") == video["post_id"] and s.get("audio_post") == audio["post_id"] and s.get("checked"):
+            return {"offset": s["offset"], "checked": True}
+        return {"offset": 0.0, "checked": False}
 
     def summary(self, primary: dict, members: list[dict] | None = None) -> dict:
         members = members or self.members(primary)
@@ -116,12 +129,14 @@ class Serializer:
         if not thumb:
             first_img = next((i["url"] for m in members for i in (m["images"] or [])), None)
             thumb = first_img
-        durations = [m["duration"] for m in members if m["duration"]]
+        durations = [m["duration"] for m in members if m["duration"]] + [
+            p["duration"] for p in (video, audio) if p and p.get("duration")]
         return {
             "id": primary["id"], "title": primary["title"], "date": iso(primary["published"]),
             "show": primary["show_id"] or "other", "tab": tab, "kind": kind, "episode": primary["episode"],
             "pinned": bool(primary["pinned"]), "thumbnail": files_url(thumb),
             "duration": max(durations) if durations else None, "video": video, "audio": audio,
+            "sync": self.sync_of(primary, video, audio),
             "comment_count": primary["comment_count"], "like_count": primary["like_count"],
             "locked": bool(primary["locked"]) or primary["status"] == "locked",
             "archived": primary["status"] in ("complete", "partial"),

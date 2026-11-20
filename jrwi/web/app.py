@@ -24,9 +24,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from .. import NAME, VERSION
 from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
-from ..db import Db, now
+from ..db import Db
 from ..organize import TABS, classify_all, reorganize
 from ..scheduler import Scheduler
+from .progress import Progress
 from .serialize import Serializer, clean_html, files_url, iso, safe_join, tab_name
 
 log = logging.getLogger("jrwi.web")
@@ -117,6 +118,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     archiver = Archiver(db, paths)
     scheduler = Scheduler(archiver, db)
     ser = Serializer(db, paths)
+    progress = Progress(db, ser)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -331,21 +333,19 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/api/progress/{post_id}", dependencies=[Depends(api_auth)])
     def api_progress(post_id: int):
-        row = db.one("SELECT * FROM progress WHERE post_id=?", (post_id,))
-        if not row:
-            return {"position": 0, "duration": None, "finished": False, "updated_at": None}
-        return {"position": row["position"], "duration": row["duration"], "finished": bool(row["finished"]),
-                "updated_at": row["updated_at"]}
+        """Where you are in the episode, in the timeline of this post's video or audio (contract v0.9)."""
+        p = db.post(post_id)
+        if not p:
+            raise HTTPException(404, "no such post")
+        return progress.get(p)
 
     @app.put("/api/progress/{post_id}", dependencies=[Depends(api_auth)])
     async def api_set_progress(post_id: int, request: Request):
         body = await request.json()
-        if not db.post(post_id):
+        p = db.post(post_id)
+        if not p:
             raise HTTPException(404, "no such post")
-        db.upsert("progress", "post_id", {"post_id": post_id, "position": float(body.get("position") or 0),
-                                          "duration": body.get("duration"), "finished": bool(body.get("finished")),
-                                          "updated_at": now()})
-        return api_progress(post_id)
+        return progress.set(p, body)
 
     @app.get("/api/events", dependencies=[Depends(api_auth)])
     def api_events(since: str | None = None):
@@ -522,11 +522,13 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         csort = "new" if csort == "new" else "top"
         comments = {"items": sorted_comments(post, csort)}
         show = db.one("SELECT id, name FROM shows WHERE id=?", (item["show"],))
-        progress = api_progress(item["audio"]["post_id"]) if item["audio"] else None
+        audio_at = api_progress(item["audio"]["post_id"]) if item["audio"] else None
+        video_at = api_progress(item["video"]["post_id"]) if item["video"] and item["video"].get("url") else None
         # The side list, like the site's "Recently uploaded": newest posts from the same show
         sql, args = item_query(show=item["show"], separate=True)
         more = [ser.post_summary(r) for r in db.q(f"SELECT * FROM ({sql}) WHERE id != ? LIMIT 8", args + [post["id"]])]
-        return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=progress,
+        return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=audio_at,
+                      video_progress=video_at,
                       more=more, csort=csort)
 
     @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])

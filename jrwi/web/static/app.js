@@ -11,25 +11,40 @@ document.querySelectorAll("[data-switch]").forEach((sw) => {
       p.hidden = !on;
       if (!on) p.querySelectorAll("video,audio").forEach((m) => m.pause());
     });
+    // The video and the audio share one place: pick it up again in the one now shown
+    document.querySelectorAll(`[data-pane="${btn.dataset.show}"] [data-progress]`).forEach((m) => resume(m));
   });
 });
 
-// Remember where you are in audio, on the server, so the apps pick up from the same spot
-document.querySelectorAll("audio[data-progress]").forEach((audio) => {
-  const id = audio.dataset.progress;
-  const start = parseFloat(audio.dataset.start || "0");
-  if (start > 5) audio.addEventListener("loadedmetadata", () => { audio.currentTime = start; }, { once: true });
+// Remember where you are in an episode, on the server, so the apps and the other version pick up from the same
+// spot. Positions are in each post's own timeline; the server converts between video and audio.
+let saving = Promise.resolve();
+const save = (media, finished) => {
+  saving = fetch(`/api/progress/${media.dataset.progress}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ position: media.currentTime, duration: media.duration || null, finished: !!finished }),
+  }).catch(() => {});
+  return saving;
+};
+const seek = (media, at) => {
+  if (!(at > 5)) return;
+  if (media.readyState >= 1) media.currentTime = at;
+  else media.addEventListener("loadedmetadata", () => { media.currentTime = at; }, { once: true });
+};
+function resume(media) {
+  saving.then(() => fetch(`/api/progress/${media.dataset.progress}`))
+    .then((r) => (r && r.ok ? r.json() : null))
+    .then((p) => { if (p && !p.finished && media.paused) seek(media, p.position); })
+    .catch(() => {});
+}
+document.querySelectorAll("audio[data-progress], video[data-progress]").forEach((media) => {
+  seek(media, parseFloat(media.dataset.start || "0"));
   let last = 0;
-  const save = (finished) =>
-    fetch(`/api/progress/${id}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ position: audio.currentTime, duration: audio.duration || null, finished: !!finished }),
-    }).catch(() => {});
-  audio.addEventListener("timeupdate", () => {
-    if (Math.abs(audio.currentTime - last) > 15) { last = audio.currentTime; save(false); }
+  media.addEventListener("timeupdate", () => {
+    if (Math.abs(media.currentTime - last) > 15) { last = media.currentTime; save(media, false); }
   });
-  audio.addEventListener("pause", () => save(false));
-  audio.addEventListener("ended", () => save(true));
+  media.addEventListener("pause", () => { if (!media.ended) save(media, false); });
+  media.addEventListener("ended", () => save(media, true));
 });
 
 // Live status on the admin page

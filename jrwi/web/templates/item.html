@@ -12,7 +12,9 @@
   {% endif %}
   {% if v and v.url %}
     <div class="player" data-pane="video">
-      <video controls preload="metadata" src="{{ v.url }}" {% if item.thumbnail %}poster="{{ item.thumbnail }}"{% endif %}></video>
+      <video controls preload="metadata" src="{{ v.url }}" {% if item.thumbnail %}poster="{{ item.thumbnail }}"{% endif %}
+        data-progress="{{ v.post_id }}"
+        data-start="{{ video_progress.position if video_progress and not video_progress.finished else 0 }}"></video>
     </div>
   {% elif v and v.youtube_id %}
     <div class="player" data-pane="video" style="aspect-ratio:16/9">

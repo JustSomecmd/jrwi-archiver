@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS posts (
     show_id TEXT, tab TEXT, episode INTEGER, special INTEGER, pair_id INTEGER,
     show_override TEXT, tab_override TEXT, episode_override INTEGER,
     status TEXT DEFAULT 'new', problems TEXT DEFAULT '[]', skipped TEXT DEFAULT '[]',
-    first_seen TEXT, last_fetched TEXT, comments_fetched TEXT, refetch TEXT
+    first_seen TEXT, last_fetched TEXT, comments_fetched TEXT, refetch TEXT, sync TEXT
 );
 CREATE INDEX IF NOT EXISTS posts_show ON posts(show_id, tab);
 CREATE INDEX IF NOT EXISTS posts_published ON posts(published);
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS pages (
 );
 
 CREATE TABLE IF NOT EXISTS progress (
-    post_id INTEGER PRIMARY KEY, position REAL, duration REAL, finished INTEGER, updated_at TEXT
+    post_id INTEGER PRIMARY KEY, position REAL, duration REAL, finished INTEGER, updated_at TEXT, timeline TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 JSON_FIELDS = {"tag_ids", "links", "images", "attachments", "documents", "embeds", "media", "files",
-               "problems", "skipped", "aliases", "author_badges"}
+               "problems", "skipped", "aliases", "author_badges", "sync"}
 
 
 def now() -> str:
@@ -87,7 +87,8 @@ class Db:
 
     def _migrate(self) -> None:
         """Add columns that newer versions use to databases made by older ones."""
-        wanted = {"posts": {"refetch": "TEXT"},
+        wanted = {"posts": {"refetch": "TEXT", "sync": "TEXT"},
+                  "progress": {"timeline": "TEXT"},
                   "comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'", "author_color": "TEXT"}}
         for table, cols in wanted.items():
             have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}

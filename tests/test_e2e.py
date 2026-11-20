@@ -182,6 +182,51 @@ def test_audio_progress_and_range(client):
     assert client.get("/api/progress/298").json()["position"] == 12.5
 
 
+def test_video_and_audio_line_up(app, client):
+    """The test video's soundtrack and the audio version are the same noise, the audio starting 2 s in."""
+    item = client.get("/api/items/300").json()
+    assert item["sync"]["checked"] and abs(item["sync"]["offset"] + 2.0) < 0.1
+    assert abs(item["video"]["duration"] - 20) < 0.5 and abs(item["audio"]["duration"] - 20) < 0.5
+    # A YouTube video can't be compared with the audio: no offset, and the apps know it wasn't checked
+    assert client.get("/api/items/289").json()["sync"] == {"offset": 0.0, "checked": False}
+    # Posts on their own have one part, so nothing to line up
+    assert client.get("/api/posts/300").json()["sync"] is None
+    # Lined-up pairs aren't measured again while their files stay the same
+    at = app.state.db.post(300)["sync"]["at"]
+    app.state.archiver.line_up()
+    assert app.state.db.post(300)["sync"]["at"] == at
+
+
+def test_progress_is_shared_between_video_and_audio(app, client):
+    db = app.state.db
+    offset = client.get("/api/items/300").json()["sync"]["offset"]
+    db.x("DELETE FROM progress WHERE post_id IN (298, 300)")
+    r = client.put("/api/progress/300", json={"position": 10, "duration": 20})
+    assert r.json()["post_id"] == 300 and r.json()["position"] == 10
+    audio = client.get("/api/progress/298").json()
+    assert audio["post_id"] == 298 and abs(audio["position"] - (10 + offset)) < 0.01
+    client.put("/api/progress/298", json={"position": 5})
+    assert abs(client.get("/api/progress/300").json()["position"] - (5 - offset)) < 0.01
+    # One place per episode, kept under the item's main post
+    assert [r["post_id"] for r in db.q("SELECT post_id FROM progress WHERE post_id IN (298, 300)")] == [300]
+    client.put("/api/progress/298", json={"position": 19.9, "finished": True})
+    video = client.get("/api/progress/300").json()
+    assert video["finished"] and video["position"] <= video["duration"]
+    # Saved before v0.9, under the audio post: read in the audio's timeline, then moved on the next save
+    db.x("DELETE FROM progress WHERE post_id IN (298, 300)")
+    db.upsert("progress", "post_id", {"post_id": 298, "position": 6.0, "duration": 20, "finished": False,
+                                      "updated_at": "2026-11-01T00:00:00+00:00"})
+    assert abs(client.get("/api/progress/300").json()["position"] - (6 - offset)) < 0.01
+    assert client.get("/api/progress/298").json()["position"] == 6.0
+    client.put("/api/progress/300", json={"position": 9})
+    assert [r["post_id"] for r in db.q("SELECT post_id FROM progress WHERE post_id IN (298, 300)")] == [300]
+    # The post page starts the video where you are
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    page = web.get("/items/300").text
+    assert 'data-progress="300"' in page and 'data-start="9.0"' in page
+
+
 def test_locked_hidden_and_auth(app, client):
     ids = [i["id"] for i in client.get("/api/items").json()["items"]]
     assert 296 not in ids

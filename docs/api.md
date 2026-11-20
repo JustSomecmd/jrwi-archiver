@@ -1,18 +1,15 @@
 # JRWI archiver API (contract v0.9)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) and v0.9 (video progress) aren't built yet.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.4.0.
 
-**Changes since v0.1** (v0.3 items are not in the service yet)
-- **`sync`** on items with both versions: the offset between the video and the audio, and whether it was checked.
-- **`duration`** on the `video` and `audio` parts.
-- **`/api/progress/{postId}`** takes either post ID of an item.
-- **v0.3:** when the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared.
+**Changes since v0.1**
+- **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
 - **v0.4:** comments gain `pinned` and `link`. In the service since 0.2.0.
 - **v0.5:** comment authors gain `badges`. In the service since 0.2.4.
 - **v0.6:** the status's `progress` gains `current`. In the service since 0.2.5.
-- **v0.9 (planned, not built yet):** progress for every post with a video or audio, with `position` in that post's own timeline (see Progress).
-- **v0.8:** comment authors gain `color`. In the service since 0.3.4.
 - **v0.7:** `/api/posts`, `/api/posts/{postId}` and `/api/posts/{postId}/comments` for single posts. Item `versions` gain `version`, `main`, `date`, `like_count` and `comment_count`. Comments gain `post_id`. In the service since 0.2.6.
+- **v0.8:** comment authors gain `color`. In the service since 0.3.4.
+- **v0.9:** progress for every post with a video or audio, with `position` in that post's own timeline (see Progress). Progress responses gain `post_id`. In the service since 0.4.0.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
 
 **General rules**
@@ -26,7 +23,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.2.1"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.4.0"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, `other` last. `?include_empty=true` lists all of them. |
@@ -41,8 +38,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/posts/{postId}/comments?page=` | (v0.7) Only that post's comments |
 | `GET /api/audio/{postId}` | The audio file, with HTTP range support |
 | `GET /api/video/{postId}` | The video file, with HTTP range support. This is a fallback; Jellyfin is the main way to play video. |
-| `GET /api/progress/{postId}` | `{"position": 1234.5, "duration": 11695, "finished": false, "updated_at": "..."}` |
-| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11695, "finished": false}`. Saves progress. Audio only until v0.9; from v0.9, video too. |
+| `GET /api/progress/{postId}` | `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`, in the timeline of the post in the address (see Progress) |
+| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`. Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`. |
 | `GET /api/events?since=<time>` | New items and failures since a time (default: the last 24 hours) |
 | `GET /api/problems` | Posts that couldn't be fully saved |
 | `GET /api/feed.xml?token=<key>` | Private podcast RSS of all audio |
@@ -50,13 +47,14 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 Item lists leave out posts above the user's tier. Add `include_locked=true` to include them; they'll have `"locked": true` and no media.
 
-**Progress (v0.3):** progress is kept once per item. Either post ID of the item works in `/api/progress/{postId}`, so the apps can use the item's `id` or `audio.post_id`. `position` is always an audio position. `finished: true` is also how the apps record that the episode was watched through the video, so the podcast feed and the web app show it as played.
-
-**Progress (v0.9, planned, not built yet; decision 9):** video progress is kept in the archive too.
-- **Every video and audio post:** `/api/progress/{postId}` works for any post with a video (archived or YouTube-only) or audio, including items with only a video.
-- **Each post's own timeline:** `position` is in the timeline of the post whose ID is in the address. Send the video position to `video.post_id` and the audio position to `audio.post_id`. The archiver converts between the two with `sync.offset` and still keeps one position and one watched state per item, so reading either post ID gives the same moment in that version's timeline.
-- **Still compatible:** apps that keep sending the audio position to `audio.post_id`, as in v0.3, work unchanged.
-- **Responses** add `post_id`, the post whose timeline `position` is in: `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`.
+**Progress (v0.3 and v0.9):** the archive keeps one position and one watched state per item (decisions 8 and 9).
+- **Any video or audio post:** `/api/progress/{postId}` works for every post with a video (archived or YouTube-only) or audio, including items with only a video.
+- **Each post's own timeline:** `position` is in the timeline of the post whose ID is in the address. Send the video position to `video.post_id` and the audio position to `audio.post_id`. The archiver converts between the two with `sync.offset` and keeps the result between 0 and that version's `duration`, so reading either post ID gives the same moment in that version's timeline.
+- **The item's `id`** is its video post when it has one, so a position sent there is a video position.
+- **Still compatible:** apps that send the audio position to `audio.post_id`, as v0.3 described, work unchanged.
+- **`finished`** is shared by both versions. `finished: true` is also how the apps record that the episode was watched through the video, so the podcast feed and the web app show it as played.
+- **Older saves:** progress saved before 0.4.0 (audio only, under the audio post) is read in the audio's timeline and moved to the item's record on the next save.
+- **Responses** include `post_id`, the post whose timeline `position` is in.
 
 ## Objects
 
@@ -74,7 +72,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **`last_result`:** one of `ok`, `login_failed`, `blocked`, `error` or `stopped`.
 - **`next_check`:** `null` when checks only run by hand.
 - **`progress` (`current` since v0.6):** `done` of `total` steps in the current phase, for example posts. `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the phase has no known length yet, such as while reading the feed.
-- **`phase`** can also be `re-reading saved pages`. The service does that by itself after an update that reads pages differently, before its next check.
+- **`phase`** can also be `re-reading saved pages`. The service does that by itself after an update that reads pages differently, before its next check. At the end of a check it can be `lining up video and audio`, counting the pairs it measures.
 
 ### Show
 
@@ -109,16 +107,16 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 
 **`video` takes one of two shapes, or is `null`:**
 - **Archived file:** `{post_id, jellyfin_path, url, height, size, duration}`. `jellyfin_path` is the path as the archiver sees it. Match Jellyfin items on the `[jrwi-<post id>]` tag in the file name, not on the full path.
-- **YouTube only:** `{post_id, youtube_id, youtube_url}`. The video exists only as a YouTube embed. If TubeArchivist has that video ID, play it from there.
+- **YouTube only:** `{post_id, youtube_id, youtube_url, duration}`. The video exists only as a YouTube embed. If TubeArchivist has that video ID, play it from there.
 
 **`audio`** is `null` when there's no archived audio version.
 
-**`duration` on `video` and `audio` (v0.3):** that version's own length in seconds, or `null` when unknown. The item's `duration` stays as it was.
+**`duration` on `video` and `audio` (v0.3):** that version's own length in seconds, or `null` when unknown. Archived files are measured when they're downloaded; for YouTube-only videos it's the length the site shows, if it shows one. The item's `duration` stays as it was.
 
 **`sync` (v0.3):** `{"offset": <seconds>, "checked": <true or false>}` on every item with both a video (archived or YouTube-only) and an audio version.
 - **Meaning:** `audio position = video position + offset`. In the example, the video has 17.2 seconds at the start that the audio doesn't, so 1:00:00 in the video is 59:42.8 in the audio.
 - **`checked`:** `true` when the archiver compared the two versions and found the offset. `false` when it couldn't or wasn't sure, in which case the offset is 0.
-- **`null`** only when the item has just one version.
+- **`null`** only when the item has just one version, and on single posts (`/api/posts`).
 - **Apps** keep a carried-over position between 0 and the other version's `duration`.
 
 ### Item (full)
