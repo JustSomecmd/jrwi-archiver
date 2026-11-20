@@ -22,7 +22,7 @@ SameSite = Callable[[str], bool]
 
 # Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
 # it has saved, so fixes reach posts and comments that were archived before the update.
-PARSER_VERSION = 4
+PARSER_VERSION = 5
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
@@ -829,6 +829,9 @@ def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
         author_el = next((x for x in own.select("[class*=author], [class*=name], strong, b")
                           if norm_space(x.get_text(" ", strip=True))), None)
     author = norm_space(author_el.get_text(" ", strip=True)) if author_el is not None else ""
+    # The site colours each name by the member's tier
+    color_m = re.search(r"(?:^|;)\s*color:\s*(rgba?\([\d\s.,%]+\)|#[0-9a-fA-F]{3,8})", (author_el.get("style") or "")
+                        if author_el is not None else "")
     body_el = (own.select_one(".comment__body") or own.select_one("[class*=rich-text]")
                or own.select_one("[class*=body]") or own.select_one("[class*=content]") or own.find("p"))
     avatar_el = _comment_avatar(own, body_el)
@@ -852,6 +855,7 @@ def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
         "id": str(cid), "author_name": author,
         "author_avatar": urljoin(page_url, avatar_el["src"]) if avatar_el is not None and avatar_el.get("src") else None,
         "author_badges": badges,
+        "author_color": color_m.group(1).strip() if color_m else None,
         "date": when, "date_text": shown,
         "body_html": body_el.decode_contents().strip() if body_el is not None else "",
         "body_text": norm_space(body_el.get_text(" ", strip=True)) if body_el is not None else "",

@@ -126,9 +126,12 @@ def test_versions_stay_separate_posts(app, client):
     feed = web.get("/feed").text
     zombie = feed[feed.index('data-comments="299"'):]
     zombie = zombie[:zombie.index("</article>")]
-    assert zombie.index("Sam") < zombie.index("Jo") and "Lee" not in zombie and "View 1 reply" in zombie
+    assert zombie.index("Sam") < zombie.index("Jo") and "Lee" not in zombie and "Load replies" in zombie
     rest = web.get("/items/299/comments-html?csort=top&offset=2&limit=10")
     assert "Lee" in rest.text and rest.headers["X-More"] == "0"
+    # Home is the feed, like the site's members page, with the shows as tiles
+    home = web.get("/").text
+    assert 'data-comments="299"' in home and 'class="tile" href="/shows/riptide"' in home
     newest = web.get("/items/299/comments-html?csort=new&offset=0&limit=2")
     assert newest.headers["X-More"] == "1"
 

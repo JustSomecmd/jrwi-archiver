@@ -215,9 +215,17 @@ button.pill:hover { background: transparent; color: var(--text); border-color: v
 .chips { display: flex; gap: .6rem; flex-wrap: wrap; margin: 1.1rem 0 0; }
 .chip { background: #262835; color: #c8c9d0; border-radius: 6px; padding: .45rem .9rem; font-size: .95rem; }
 .fcomments { margin-top: 1.3rem; }
-.fcomments .clist .comment:first-child { border-top: 0; }
-.replies-fold > summary { color: var(--muted); font-size: .88rem; cursor: pointer; margin-top: .3rem; }
-.replies-fold > summary:hover { color: var(--text); }
+.fcomments .clamp::after { background: linear-gradient(transparent, var(--card)); }
+/* The shows as tiles above the feed, like the site's tag tiles */
+.tiles { display: flex; gap: .7rem; overflow-x: auto; margin-bottom: 1.4rem; padding-bottom: .3rem; scrollbar-width: thin; }
+.tile { flex: 0 0 112px; height: 80px; border: 1px solid var(--line); border-radius: var(--radius); position: relative;
+  background: #0b0c14 center/cover no-repeat; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: .4rem; color: #fff; overflow: hidden; }
+.tile::before { content: ""; position: absolute; inset: 0; background: rgba(10, 8, 20, .62); }
+.tile span, .tile small { position: relative; }
+.tile span { font-weight: 700; font-size: .88rem; line-height: 1.15; }
+.tile small { font-weight: 500; color: #d7d7de; font-size: .8rem; }
+.tile:hover { text-decoration: none; border-color: var(--muted); }
 /* The site-style audio player */
 .aplayer .apad { padding: 0 1.5rem; }
 .acontrols { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin: 1rem 0 .5rem; }
@@ -286,28 +294,40 @@ audio { width: 100%; }
 /* ------------------------------------------------------------------ comments */
 .comments { margin-top: 2.5rem; }
 .comments > h2 { font-size: 1.4rem; margin-bottom: 1rem; }
-.comment { display: flex; gap: .8rem; padding: 1rem 0; border-top: 1px solid var(--line-soft); }
-.comment .av { width: 40px; height: 40px; border-radius: 50%; background: var(--pill) center/cover; flex: none; }
-.comment .av.initial { display: grid; place-items: center; font-weight: 700; color: var(--pill-text); text-transform: lowercase; }
-.comment .who { font-weight: 700; color: var(--text); }
-.comment .when { color: var(--muted); font-size: .82rem; margin-left: .4rem; }
-.comment .rich { margin-top: .25rem; }
+/* Comments, laid out like the site's */
+.comment { display: flex; gap: .9rem; padding: .9rem 0; }
+.comment .av { width: 48px; height: 48px; border-radius: 50%; background: #2a2c37 center/cover; flex: none; }
+.comment .av.initial { display: grid; place-items: center; font-weight: 700; font-size: 1.3rem; color: #fff; }
+.cmain { flex: 1; min-width: 0; }
+.chead { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-height: 1.6rem; }
+.comment .who { font-weight: 700; color: var(--text); font-size: 1.02rem; }
+.comment .when { color: var(--muted); font-size: .88rem; margin-left: auto; }
+.cmenu { color: var(--muted); font-size: .9rem; letter-spacing: .08em; padding: 0 .1rem; }
+.cmenu:hover { color: var(--text); text-decoration: none; }
+.comment .rich { margin-top: .3rem; color: var(--body-text); }
 .comment .rich p { margin: 0 0 .4rem; }
-.comment .cfoot { display: flex; gap: 1rem; color: var(--muted); font-size: .85rem; align-items: center; margin-top: .2rem; }
-.comment .cfoot span { display: inline-flex; align-items: center; gap: .3rem; }
+.crich.clamp { max-height: 7.4rem; overflow: hidden; position: relative; }
+.comments .clamp::after { background: linear-gradient(transparent, var(--bg)); }
+.comment .more-link { font-size: .95rem; margin: .1rem 0 .2rem; }
+.comment .cfoot { display: flex; gap: 1.3rem; color: var(--muted); font-size: .95rem; align-items: center; margin-top: .35rem; }
+.comment .cfoot > span { display: inline-flex; align-items: center; gap: .4rem; }
+.comment .cfoot .icon { width: 1.2rem; height: 1.2rem; }
+.cfold > summary { cursor: pointer; list-style: none; width: max-content; }
+.cfold > summary:hover { color: var(--text); }
+.cfold[open] .loadr, .cfold:not([open]) .hider { display: none; }
 .comments-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .6rem; }
 .comments-head h2 { margin: 0; font-size: 1.4rem; }
 .sortdd summary { color: var(--body-text); cursor: pointer; display: inline-flex; align-items: center; gap: .3rem; }
 .sortdd .dd-menu { left: 0; transform: none; min-width: 180px; }
 .comments-head .sortdd .dd-menu { left: auto; right: 0; }
 .comment .replies { margin-top: .4rem; }
-.comment .replies .comment { border-top: 0; padding: .6rem 0 0; }
-.comment .replies .av { width: 32px; height: 32px; }
-.mbadge { display: inline-flex; align-items: center; gap: .25rem; margin-left: .35rem; padding: .05rem .5rem;
-  border: 1px solid var(--line); border-radius: 999px; font-size: .72rem; color: var(--pill-text); vertical-align: middle;
-  line-height: 1.4; }
+.comment .replies .comment { padding: .6rem 0 0; }
+.comment .replies .av { width: 36px; height: 36px; font-size: 1rem; }
+.mbadge { display: inline-flex; align-items: center; gap: .3rem; padding: .08rem .55rem; border: 1px solid var(--line);
+  border-radius: 6px; font-size: .82rem; color: var(--body-text); line-height: 1.4; }
 .mbadge img { height: 1rem; width: auto; }
-.mbadge.pin { background: var(--pill); border-color: var(--pill); }
+.mbadge.pin { background: var(--pill); border-color: var(--pill); color: var(--pill-text); }
+.tierbadge { height: 1.05rem; width: auto; }
 
 /* ------------------------------------------------------------------ show page */
 .hero { position: relative; margin: -2rem 0 2.5rem; background: #0b0c14 center/cover no-repeat; min-height: 320px;

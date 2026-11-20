@@ -1,22 +1,37 @@
 {% extends "base.html" %}
 {% from "macros.html" import pager, post_card, icon %}
-{% set active = 'feed' %}
-{% block title %}Feed · JRWI archive{% endblock %}
+{% set active = 'home' %}
+{% block title %}JRWI archive{% endblock %}
 {% block content %}
+{% if empty %}
+  <div class="panel">
+    <h1>Nothing archived yet</h1>
+    <p>Add your jrwishow.com login under <a href="/admin/settings">Settings</a>, then press <b>Check now</b> on the
+      <a href="/admin">Admin</a> page. The first check reads the whole members feed, which takes a while.</p>
+  </div>
+{% endif %}
 <div class="feedlayout">
   <div>
-    <form class="toolbar" method="get" action="/feed">
-      <a class="pill" href="/feed?q={{ q | urlencode }}{{ '&locked=on' if locked else '' }}&order={{ 'asc' if order == 'desc' else 'desc' }}">
+    {% if tiles %}
+    <div class="tiles">
+      {% for s in tiles %}
+      <a class="tile" href="/shows/{{ s.id }}" {% if s.banner or s.poster %}style="background-image:url('{{ s.banner or s.poster }}')"{% endif %}>
+        <span>{{ s.name }}</span><small>{{ s.item_count }}</small></a>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <form class="toolbar" method="get" action="/">
+      <a class="pill" href="/?q={{ q | urlencode }}{{ '&locked=on' if locked else '' }}&order={{ 'asc' if order == 'desc' else 'desc' }}">
         {{ icon('sort' if order == 'desc' else 'sortup') }} {{ 'Newest to oldest' if order == 'desc' else 'Oldest to newest' }}</a>
-      <a class="pill {% if locked %}on{% endif %}" href="/feed?q={{ q | urlencode }}&order={{ order }}{{ '' if locked else '&locked=on' }}">
+      <a class="pill {% if locked %}on{% endif %}" href="/?q={{ q | urlencode }}&order={{ order }}{{ '' if locked else '&locked=on' }}">
         {{ icon('lock') }} Show locked</a>
       <input type="hidden" name="order" value="{{ order }}">
       {% if locked %}<input type="hidden" name="locked" value="on">{% endif %}
       <label class="search">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="Search" aria-label="Search titles and text"></label>
     </form>
-    {% if q %}<p class="muted small">Posts with "{{ q }}" in the title or text. <a class="linkish" href="/feed?order={{ order }}">Clear</a></p>{% endif %}
+    {% if q %}<p class="muted small">Posts with "{{ q }}" in the title or text. <a class="linkish" href="/?order={{ order }}">Clear</a></p>{% endif %}
     {% for p in posts %}{{ post_card(p) }}{% else %}<p class="empty">Nothing found.</p>{% endfor %}
-    {{ pager(page, pages, '/feed?q=' ~ (q|urlencode) ~ ('&locked=on' if locked else '') ~ '&order=' ~ order ~ '&') }}
+    {{ pager(page, pages, '/?q=' ~ (q|urlencode) ~ ('&locked=on' if locked else '') ~ '&order=' ~ order ~ '&') }}
   </div>
   <aside class="aside">
     <div class="avatar-circle" {% if logo %}style="background-image:url('{{ logo }}')"{% endif %}></div>

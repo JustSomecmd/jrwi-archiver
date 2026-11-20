@@ -185,7 +185,9 @@ def more_form(pid, marker, cid=None):
 
 COMMENT_PAGES = {
     (299, None): [real_comment(299, 501, "Sam", "Love these rules!", likes=4, replies=1),
-                  real_comment(299, 503, "Jo", "Printing these now.")], 
+                  real_comment(299, 503, "Jo", "Printing these now. I love rules so much, and this is a genuinely good ruleset: short, "
+                               "simple to learn, with only a couple of caveats that make the game better defined overall. "
+                               "If you're at all interested in survival games, give it a go with your own group.")], 
     (299, "p2"): [real_comment(299, 504, "Lee", "Great work, thanks!", when="2w", picture=False, badges=True)],
     (300, None): [real_comment(300, 601, "Kim", "Best episode yet.", likes=327, pinned=True)],
     (298, None): [real_comment(298, 701, "Pat", "Listening on my commute.", likes=2)],

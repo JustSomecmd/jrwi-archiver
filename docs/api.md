@@ -1,4 +1,4 @@
-# JRWI archiver API (contract v0.7)
+# JRWI archiver API (contract v0.8)
 
 This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) aren't built yet.
 
@@ -10,6 +10,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.4:** comments gain `pinned` and `link`. In the service since 0.2.0.
 - **v0.5:** comment authors gain `badges`. In the service since 0.2.4.
 - **v0.6:** the status's `progress` gains `current`. In the service since 0.2.5.
+- **v0.8:** comment authors gain `color`. In the service since 0.3.4.
 - **v0.7:** `/api/posts`, `/api/posts/{postId}` and `/api/posts/{postId}/comments` for single posts. Item `versions` gain `version`, `main`, `date`, `like_count` and `comment_count`. Comments gain `post_id`. In the service since 0.2.6.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
 
@@ -154,7 +155,8 @@ A single post, never merged with its other versions. It has the same fields as a
 {"id": "286486:1016036", "post_id": 286486,
  "author": {"name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
             "badges": [{"name": "4-month member", "icon": "🔥", "image": null},
-                       {"name": "JRWiener", "icon": null, "image": "/files/badges/0c1d2e3f4a5b6c7d.webp"}]},
+                       {"name": "JRWiener", "icon": null, "image": "/files/badges/0c1d2e3f4a5b6c7d.webp"}],
+            "color": "rgb(247, 221, 210)"},
  "date": "2026-11-07T00:00:00+00:00", "date_text": "13d",
  "body_html": "<p>for anyone not reading the description: ...</p>", "body_text": "for anyone not reading ...",
  "like_count": 327, "pinned": true, "link": "https://jrwishow.com/supporters/videos/...?cid=comment_...",
@@ -166,6 +168,7 @@ A single post, never merged with its other versions. It has the same fields as a
 - **`link` (v0.4):** the comment's own address on the site, or `null`.
 - **`author.avatar`:** `null` for members without a profile picture. The site shows their initial instead, and apps can do the same.
 - **`author.badges` (v0.5):** the badges next to the name, in the site's order: the membership tier (an image, with the tier name as `name`), months as a member (an emoji `icon` and text) and `Verified` on verified accounts. Any of `name`, `icon` and `image` can be `null`. An empty list when there are none.
+- **`author.color` (v0.8):** the CSS colour the site shows the name in, which follows the member's tier, such as `rgb(247, 221, 210)`, or `null`.
 - **Fields that can be missing:** `date` and `like_count` are `null` when the site didn't show them.
 - **Which comments:** every comment and reply, fetched from the site's comments endpoint with paging. For an item, they come from every version, starting with the main post's, newest first; `/api/posts/{postId}/comments` gives one post's only.
 - **`post_id` (v0.7):** the post the comment was made on, so apps can show which version it belongs to.

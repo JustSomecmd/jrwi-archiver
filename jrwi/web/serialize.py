@@ -230,7 +230,7 @@ class Serializer:
                       for b in (r.get("author_badges") or [])]
             return {"id": r["id"], "post_id": r["post_id"],
                     "author": {"name": r["author_name"] or "", "avatar": local(r["author_avatar"]),
-                               "badges": badges},
+                               "badges": badges, "color": r.get("author_color")},
                     "date": iso(r["date"]), "date_text": r["date_text"],
                     "body_html": clean_html(r["body_html"]), "body_text": r["body_text"] or "",
                     "like_count": r["like_count"], "pinned": bool(r.get("pinned")), "link": r.get("link"),

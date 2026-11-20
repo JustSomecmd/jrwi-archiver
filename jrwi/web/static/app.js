@@ -119,8 +119,8 @@ document.querySelectorAll("[data-avg]").forEach((box) => {
   else img.addEventListener("load", paint, { once: true });
 });
 
-// "...Continue reading": only shown when the text is cut off, and opens it in place
-document.querySelectorAll("[data-clamp]").forEach((el) => {
+// "...Continue reading" and "Read more": only shown when the text is cut off, and open it in place
+const initClamps = (root) => root.querySelectorAll("[data-clamp]").forEach((el) => {
   const btn = el.nextElementSibling && el.nextElementSibling.matches("[data-unclamp]") ? el.nextElementSibling : null;
   const check = () => {
     if (el.scrollHeight > el.clientHeight + 4) { if (btn) btn.hidden = false; }
@@ -130,6 +130,7 @@ document.querySelectorAll("[data-clamp]").forEach((el) => {
   el.querySelectorAll("img").forEach((i) => i.addEventListener("load", check, { once: true }));
   if (btn) btn.addEventListener("click", () => { el.classList.remove("clamp"); btn.hidden = true; });
 });
+initClamps(document);
 
 // Share: the original post on jrwishow.com
 document.querySelectorAll("[data-share]").forEach((btn) => {
@@ -205,7 +206,10 @@ document.querySelectorAll("[data-comments]").forEach((box) => {
     const r = await fetch(`/items/${box.dataset.comments}/comments-html?csort=${box.dataset.sort}&offset=${offset}&limit=${limit}`);
     if (!r.ok) return;
     const html = await r.text();
-    if (replace) list.innerHTML = html; else list.insertAdjacentHTML("beforeend", html);
+    const holder = document.createElement("div");
+    holder.innerHTML = html;
+    initClamps(holder);
+    if (replace) list.replaceChildren(...holder.childNodes); else list.append(...holder.childNodes);
     box.dataset.offset = String(offset + limit);
     if (more) more.hidden = r.headers.get("X-More") !== "1";
   };

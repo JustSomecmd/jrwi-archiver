@@ -73,6 +73,27 @@ def nice_date(value) -> str:
     return f"{d:%b} {d.day}, {d.year}"
 
 
+
+def ago(value) -> str:
+    """How long ago, the way the site writes it under comments: '4d', '2w', '5mo', '1y'."""
+    if not value:
+        return ""
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    except ValueError:
+        return ""
+    days = (datetime.now(timezone.utc).date() - d).days
+    if days < 1:
+        return "today"
+    if days < 7:
+        return f"{days}d"
+    if days < 30:
+        return f"{days // 7}w"
+    if days < 365:
+        return f"{days // 30}mo"
+    return f"{days // 365}y"
+
+
 def human_duration(s) -> str:
     if not s:
         return ""
@@ -110,7 +131,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.globals.update(files_url=files_url, human_size=human_size, human_duration=human_duration,
-                                 tab_name=tab_name, version=VERSION, quote=quote, nice_date=nice_date,
+                                 tab_name=tab_name, version=VERSION, quote=quote, nice_date=nice_date, ago=ago,
                                  version_name={"video": "Video version", "audio": "Audio version",
                                                "youtube": "YouTube version"})
     app.state.db, app.state.archiver, app.state.scheduler = db, archiver, scheduler
@@ -420,12 +441,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     # ------------------------------------------------------------------ archive website
 
     @app.get("/", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def home(request: Request):
-        sql, args = item_query(separate=True)
-        latest = [ser.post_summary(r) for r in db.q(f"{sql} LIMIT 12", args)]
-        shows = [ser.show(r, separate=True) for r in db.q("SELECT * FROM shows ORDER BY sort, name")]
-        shows = [s for s in shows if s["item_count"]]
-        return render(request, "home.html", latest=latest, shows=shows)
+    def home(request: Request, q: str | None = None, page: int = 1, locked: bool = False, order: str = "desc"):
+        # Like the site's members page: the feed, with the shows as tiles above it
+        return feed(request, q, page, locked, order)
 
     @app.get("/shows/{show_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def show_page(request: Request, show_id: str, tab: str | None = None, page: int = 1, order: str = "desc"):
@@ -462,8 +480,11 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                 prog = api_progress(p["audio"]["post_id"])
                 p["progress_start"] = prog.get("position") if prog and not prog.get("finished") else 0
             posts.append(p)
+        shows = [ser.show(s, separate=True) for s in db.q("SELECT * FROM shows ORDER BY sort, name")]
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
-                      pages=math.ceil(total / 20) or 1, locked=locked, order=order)
+                      pages=math.ceil(total / 20) or 1, locked=locked, order=order,
+                      tiles=[s for s in shows if s["item_count"]],
+                      empty=not total and not q and not db.one("SELECT 1 FROM posts LIMIT 1"))
 
     def sorted_comments(post: dict, csort: str = "top") -> list[dict]:
         """A post's own comments. 'top' (most relevant, as on the site): pinned first, then the most liked.

@@ -156,26 +156,36 @@
 </a>
 {% endmacro %}
 
-{# A comment and its replies. In the feed, replies stay folded until opened. #}
+{# A comment and its replies, laid out like the site's: name in the tier's colour, badges, how long ago, the text
+   (long ones shortened with "Read more"), likes, and replies behind "Load replies" #}
 {% macro comment_tree(c, fold=False) %}
 <div class="comment">
   {% if c.author.avatar %}<div class="av" style="background-image:url('{{ c.author.avatar }}')"></div>
-  {% else %}<div class="av initial">{{ (c.author.name or '?')[:1] }}</div>{% endif %}
-  <div style="flex:1;min-width:0">
-    <div><span class="who">{{ c.author.name or 'Member' }}</span>
-      {%- for b in c.author.badges %}<span class="mbadge" {% if b.name %}title="{{ b.name }}"{% endif %}>
-        {%- if b.image %}<img src="{{ b.image }}" alt="">{% elif b.icon %}{{ b.icon }} {% endif %}
-        {%- if b.name and not b.image %}{{ b.name }}{% endif %}</span>{% endfor %}
-      {%- if c.pinned %}<span class="mbadge pin">Pinned</span>{% endif %}<span class="when" {% if c.date_text %}title="Shown on the site as {{ c.date_text }}"{% endif %}>{{ nice_date(c.date) or c.date_text }}</span></div>
-    <div class="rich">{{ c.body_html | safe if c.body_html else c.body_text }}</div>
-    <div class="cfoot"><span>{{ icon('heart') }} {{ c.like_count or 0 }}</span></div>
-    {% if c.replies %}
-      {% if fold %}
-        <details class="replies-fold"><summary>View {{ c.replies | length }} {{ 'reply' if c.replies | length == 1 else 'replies' }}</summary>
-          <div class="replies">{% for r in c.replies %}{{ comment_tree(r) }}{% endfor %}</div></details>
-      {% else %}
+  {% else %}<div class="av initial">{{ (c.author.name or '?')[:1] | upper }}</div>{% endif %}
+  <div class="cmain">
+    <div class="chead">
+      <span class="who" {% if c.author.color %}style="color: {{ c.author.color }}"{% endif %}>{{ c.author.name or 'Member' }}</span>
+      {%- for b in c.author.badges %}
+        {%- if b.image and not b.icon %}<img class="tierbadge" src="{{ b.image }}" alt="{{ b.name or '' }}" title="{{ b.name or '' }}">
+        {%- else %}<span class="mbadge" {% if b.name %}title="{{ b.name }}"{% endif %}>{% if b.image %}<img src="{{ b.image }}" alt="">{% elif b.icon %}{{ b.icon }} {% endif %}{{ b.name or '' }}</span>{% endif %}
+      {%- endfor %}
+      {%- if c.pinned %}<span class="mbadge pin">Pinned</span>{% endif %}
+      <span class="when" title="{{ nice_date(c.date) }}{% if c.date_text %} (shown on the site as {{ c.date_text }}){% endif %}">{{ ago(c.date) or c.date_text }}</span>
+      {% if c.link %}<a class="cmenu" href="{{ c.link }}" target="_blank" rel="noopener" title="Open this comment on jrwishow.com">&bull;&bull;&bull;</a>{% endif %}
+    </div>
+    <div class="rich crich clamp" data-clamp>{{ c.body_html | safe if c.body_html else c.body_text }}</div>
+    <button type="button" class="more-link" data-unclamp hidden>Read more</button>
+    {% set nr = c.replies | length %}
+    {% if nr and fold %}
+      <details class="cfold">
+        <summary class="cfoot"><span>{{ icon('heart') }}{% if c.like_count %} {{ c.like_count }}{% endif %}</span>
+          <span>{{ icon('comment') }} {{ nr }} <span class="loadr">Load replies</span><span class="hider">Hide replies</span></span></summary>
         <div class="replies">{% for r in c.replies %}{{ comment_tree(r) }}{% endfor %}</div>
-      {% endif %}
+      </details>
+    {% else %}
+      <div class="cfoot"><span>{{ icon('heart') }}{% if c.like_count %} {{ c.like_count }}{% endif %}</span>
+        {% if nr %}<span>{{ icon('comment') }} {{ nr }}</span>{% endif %}</div>
+      {% if nr %}<div class="replies">{% for r in c.replies %}{{ comment_tree(r) }}{% endfor %}</div>{% endif %}
     {% endif %}
   </div>
 </div>

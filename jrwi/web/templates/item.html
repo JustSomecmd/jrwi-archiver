@@ -81,7 +81,7 @@
       {% endif %}
     </div>
     {% if comments %}
-      {% for c in comments %}{{ comment_tree(c) }}{% endfor %}
+      {% for c in comments %}{{ comment_tree(c, True) }}{% endfor %}
     {% else %}
       <p class="muted">No comments saved for this post.</p>
     {% endif %}
