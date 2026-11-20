@@ -91,6 +91,14 @@ def test_post_with_attachment_and_comments(client):
     assert first["author"]["name"] == "Sam" and first["like_count"] == 4
     assert first["body_text"] == "Love these rules!"
     assert first["replies"][0]["body_text"] == "Same here."
+    assert first["author"]["avatar"].startswith("/files/avatars/") and first["author"]["badges"] == []
+    # No profile picture: no avatar, and the badges stay badges
+    lee = next(c for c in comments["items"] if c["author"]["name"] == "Lee")
+    assert lee["author"]["avatar"] is None
+    badges = lee["author"]["badges"]
+    assert [(b["name"], b["icon"]) for b in badges] == [("4-month member", "🔥"), ("JRWiener", None)]
+    assert badges[0]["image"] is None and badges[1]["image"].startswith("/files/badges/")
+    assert client.get(badges[1]["image"]).status_code == 200
     pinned = client.get("/api/items/300/comments").json()["items"][0]
     assert pinned["pinned"] and pinned["author"]["name"] == "Kim" and pinned["like_count"] == 327
 

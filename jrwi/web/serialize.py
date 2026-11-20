@@ -176,10 +176,14 @@ class Serializer:
         for r in rows:
             by_parent.setdefault(r["parent_id"], []).append(r)
 
+        def local(path):
+            return files_url(path) if path and not path.startswith("http") else path
+
         def build(r: dict) -> dict:
-            avatar = r["author_avatar"]
-            return {"id": r["id"], "author": {"name": r["author_name"] or "",
-                                              "avatar": files_url(avatar) if avatar and not avatar.startswith("http") else avatar},
+            badges = [{"name": b.get("name"), "icon": b.get("icon"), "image": local(b.get("image"))}
+                      for b in (r.get("author_badges") or [])]
+            return {"id": r["id"], "author": {"name": r["author_name"] or "", "avatar": local(r["author_avatar"]),
+                                              "badges": badges},
                     "date": iso(r["date"]), "date_text": r["date_text"],
                     "body_html": clean_html(r["body_html"]), "body_text": r["body_text"] or "",
                     "like_count": r["like_count"], "pinned": bool(r.get("pinned")), "link": r.get("link"),

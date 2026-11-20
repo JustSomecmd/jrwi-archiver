@@ -18,9 +18,14 @@
 
 {% macro comment_tree(c) %}
 <div class="comment">
-  <div class="av" {% if c.author.avatar %}style="background-image:url('{{ c.author.avatar }}')"{% endif %}></div>
+  {% if c.author.avatar %}<div class="av" style="background-image:url('{{ c.author.avatar }}')"></div>
+  {% else %}<div class="av initial">{{ (c.author.name or '?')[:1] | upper }}</div>{% endif %}
   <div style="flex:1">
-    <div><span class="who">{{ c.author.name or 'Member' }}</span><span class="when">{{ c.date_text or (c.date or '')[:10] }}</span>
+    <div><span class="who">{{ c.author.name or 'Member' }}</span>
+      {%- for b in c.author.badges %}<span class="mbadge" {% if b.name %}title="{{ b.name }}"{% endif %}>
+        {%- if b.image %}<img src="{{ b.image }}" alt="">{% elif b.icon %}{{ b.icon }} {% endif %}
+        {%- if b.name and not b.image %}{{ b.name }}{% endif %}</span>{% endfor %}
+      {%- if c.pinned %}<span class="mbadge">Pinned</span>{% endif %}<span class="when">{{ c.date_text or (c.date or '')[:10] }}</span>
       {% if c.like_count %}<span class="when">♥ {{ c.like_count }}</span>{% endif %}</div>
     <div class="rich">{{ c.body_html | safe if c.body_html else c.body_text }}</div>
     {% if c.replies %}<div class="replies">{% for r in c.replies %}{{ comment_tree(r) }}{% endfor %}</div>{% endif %}

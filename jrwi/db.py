@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS comments (
     id TEXT PRIMARY KEY, post_id INTEGER, parent_id TEXT,
     author_name TEXT, author_avatar TEXT, date TEXT, date_text TEXT,
     body_html TEXT, body_text TEXT, like_count INTEGER, position INTEGER,
-    raw TEXT, pinned INTEGER DEFAULT 0, link TEXT
+    raw TEXT, pinned INTEGER DEFAULT 0, link TEXT, author_badges TEXT DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id, position);
 
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 JSON_FIELDS = {"tag_ids", "links", "images", "attachments", "documents", "embeds", "media", "files",
-               "problems", "skipped", "aliases"}
+               "problems", "skipped", "aliases", "author_badges"}
 
 
 def now() -> str:
@@ -87,7 +87,7 @@ class Db:
 
     def _migrate(self) -> None:
         """Add columns that newer versions use to databases made by older ones."""
-        wanted = {"comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT"}}
+        wanted = {"comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'"}}
         for table, cols in wanted.items():
             have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
             for col, decl in cols.items():

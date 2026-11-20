@@ -50,7 +50,7 @@ try:
 except ImportError:
     sys.exit("Some required packages are missing. Run this first:\n\n    pip install -r requirements.txt\n")
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 DEFAULT_BASE = "https://jrwishow.com"
 DEFAULT_MUX = "https://stream.mux.com"
@@ -339,6 +339,8 @@ class Client:
     def page(self, url: str, accept: str = HTML_ACCEPT) -> tuple[str, str]:
         """Fetch a page on the members site. Returns (final URL, text)."""
         r = self.request("GET", url, accept=accept)
+        if "charset" not in (r.headers.get("Content-Type") or "").lower():
+            r.encoding = "utf-8"  # the site is UTF-8; without this, Turbo-stream pages could be read as Latin-1
         text = r.text
         if r.status_code == 403 and (r.headers.get("cf-mitigated") or "Just a moment" in text[:5000]
                                      or "challenge-platform" in text):

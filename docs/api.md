@@ -1,4 +1,4 @@
-# JRWI archiver API (contract v0.4)
+# JRWI archiver API (contract v0.5)
 
 This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) aren't built yet.
 
@@ -8,6 +8,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **`/api/progress/{postId}`** takes either post ID of an item.
 - **v0.3:** when the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared.
 - **v0.4:** comments gain `pinned` and `link`. In the service since 0.2.0.
+- **v0.5:** comment authors gain `badges`. In the service since 0.2.4.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
 
 **General rules**
@@ -128,7 +129,10 @@ The list fields, plus:
 ### Comment
 
 ```json
-{"id": "286486:1016036", "author": {"name": "grizzly", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp"},
+{"id": "286486:1016036",
+ "author": {"name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
+            "badges": [{"name": "4-month member", "icon": "🔥", "image": null},
+                       {"name": "JRWiener", "icon": null, "image": "/files/badges/0c1d2e3f4a5b6c7d.webp"}]},
  "date": "2026-11-07T00:00:00+00:00", "date_text": "13d",
  "body_html": "<p>for anyone not reading the description: ...</p>", "body_text": "for anyone not reading ...",
  "like_count": 327, "pinned": true, "link": "https://jrwishow.com/supporters/videos/...?cid=comment_...",
@@ -138,7 +142,9 @@ The list fields, plus:
 - **Dates:** the site only shows how long ago a comment was posted ("13d"), so `date` is worked out from that when the comment was saved. `date_text` is what the site showed.
 - **`pinned` (v0.4):** pinned comments come first, as on the site.
 - **`link` (v0.4):** the comment's own address on the site, or `null`.
-- **Fields that can be missing:** `date`, `like_count` and `author.avatar` are `null` when the site didn't show them.
+- **`author.avatar`:** `null` for members without a profile picture. The site shows their initial instead, and apps can do the same.
+- **`author.badges` (v0.5):** the badges next to the name, in the site's order: the membership tier (an image, with the tier name as `name`), months as a member (an emoji `icon` and text) and `Verified` on verified accounts. Any of `name`, `icon` and `image` can be `null`. An empty list when there are none.
+- **Fields that can be missing:** `date` and `like_count` are `null` when the site didn't show them.
 - **Which comments:** every comment and reply, fetched from the site's comments endpoint with paging. They come from every version of the item, starting with the main post's, newest first.
 
 ### Event

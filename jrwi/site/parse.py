@@ -745,6 +745,44 @@ def _comment_nodes(soup) -> list:
             or any(c.lower() in ("comment-item", "comments__item") for c in el.get("class") or [])]
 
 
+def _comment_avatar(own, body_el):
+    """The commenter's picture. Members without one get their initial instead, and then there's no picture:
+    never fall back to a badge or an image in the comment."""
+    box = own.select_one(".comment__aside .avatar") or own.select_one(".avatar")
+    if box is not None:
+        return box.find("img", src=True)
+    for img in own.find_all("img", src=True):
+        if img.find_parent(class_=re.compile(r"badge", re.I)) is not None:
+            continue
+        if body_el is not None and (img is body_el or body_el in img.parents):
+            continue
+        return img
+    return None
+
+
+def _author_badges(own, page_url: str) -> list[dict]:
+    """Badges next to a commenter's name: tier, months as a member, verified."""
+    box = own.select_one(".comment__author-badges") or own.select_one("[class*=author-badges]")
+    if box is None:
+        return []
+    out = []
+    for b in box.select(".badge"):
+        img = b.find("img", src=True)
+        icon_el = b.select_one(".badge__icon")
+        icon = norm_space(icon_el.get_text(" ", strip=True)) if icon_el is not None and img is None else ""
+        text_copy = BeautifulSoup(str(b), "html.parser").find()
+        for x in text_copy.select(".badge__icon"):
+            x.decompose()
+        name = norm_space(b.get("data-tippy-content") or "") or norm_space(text_copy.get_text(" ", strip=True))
+        if not name and "badge--verified" in (b.get("class") or []):
+            name = "Verified"
+        if not (name or icon or img):
+            continue
+        out.append({"name": name or None, "icon": icon or None,
+                    "image": urljoin(page_url, img["src"]) if img is not None else None})
+    return out
+
+
 def _parse_comment(el, page_url: str) -> dict:
     m = COMMENT_FRAME_RE.match(el.get("id") or "")
     cid = m.group(1) if m else (el.get("data-comment-id") or el.get("data-id") or str(abs(hash(str(el)[:400]))))
@@ -762,9 +800,10 @@ def _parse_comment(el, page_url: str) -> dict:
         author_el = next((x for x in own.select("[class*=author], [class*=name], strong, b")
                           if norm_space(x.get_text(" ", strip=True))), None)
     author = norm_space(author_el.get_text(" ", strip=True)) if author_el is not None else ""
-    avatar_el = own.select_one("img.avatar__image") or own.find("img", src=True)
     body_el = (own.select_one(".comment__body") or own.select_one("[class*=rich-text]")
                or own.select_one("[class*=body]") or own.select_one("[class*=content]") or own.find("p"))
+    avatar_el = _comment_avatar(own, body_el)
+    badges = _author_badges(own, page_url)
     for b in (body_el.find_all("button") if body_el is not None else []):
         b.decompose()
     date_el = own.select_one(".comment__date")
@@ -783,6 +822,7 @@ def _parse_comment(el, page_url: str) -> dict:
     return {
         "id": str(cid), "author_name": author,
         "author_avatar": urljoin(page_url, avatar_el["src"]) if avatar_el is not None and avatar_el.get("src") else None,
+        "author_badges": badges,
         "date": when, "date_text": shown,
         "body_html": body_el.decode_contents().strip() if body_el is not None else "",
         "body_text": norm_space(body_el.get_text(" ", strip=True)) if body_el is not None else "",

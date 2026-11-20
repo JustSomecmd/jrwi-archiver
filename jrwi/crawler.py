@@ -650,29 +650,37 @@ class Archiver:
 
     def store_comments(self, post_id: int, parts: list, page_url: str) -> int:
         comments = P.parse_comments(parts, page_url)
-        avatars_dir = self.paths.archive / "avatars"
+        # Pictures first, so the database isn't held while they download
+        for c in comments:
+            c["author_avatar"] = self.small_image(c.get("author_avatar"), "avatars")
+            for b in c.get("author_badges") or []:
+                b["image"] = self.small_image(b.get("image"), "badges")
         if comments or self.db.one("SELECT 1 FROM comments WHERE post_id=? LIMIT 1", (post_id,)):
             with self.db.lock:
                 self.db.x("DELETE FROM comments WHERE post_id=?", (post_id,))
                 for c in comments:
-                    avatar = c.get("author_avatar")
-                    if avatar and avatar.startswith("http"):
-                        local = avatars_dir / asset_name(avatar)
-                        if not local.exists():
-                            try:
-                                r = self.client.request("GET", avatar, pace=False, tries=2, timeout=(10, 30))
-                                if r.status_code == 200:
-                                    avatars_dir.mkdir(parents=True, exist_ok=True)
-                                    local.write_bytes(r.content)
-                            except SiteError:
-                                pass
-                        c["author_avatar"] = self.rel(local) if local.exists() else avatar
                     row = {k: v for k, v in c.items() if k not in ("pinned", "link")}
                     self.db.upsert("comments", "id", {**row, "id": f"{post_id}:{c['id']}", "post_id": post_id,
                                                       "parent_id": f"{post_id}:{c['parent_id']}" if c["parent_id"] else None,
                                                       "pinned": c.get("pinned", False), "link": c.get("link")})
         self.db.update("posts", "id", post_id, {"comments_fetched": now()})
         return len(comments)
+
+    def small_image(self, url: str | None, folder: str) -> str | None:
+        """Save a profile picture or badge once (they repeat a lot) and return its archive path.
+        Keeps the web address if it can't be downloaded."""
+        if not url or not url.startswith("http"):
+            return url
+        local = self.paths.archive / folder / asset_name(url)
+        if not local.exists():
+            try:
+                r = self.client.request("GET", url, pace=False, tries=2, timeout=(10, 30))
+                if r.status_code == 200:
+                    local.parent.mkdir(parents=True, exist_ok=True)
+                    local.write_bytes(r.content)
+            except SiteError:
+                pass
+        return self.rel(local) if local.exists() else url
 
     def refresh_comments(self) -> None:
         days = int(self.s["comment_refresh_days"] or 0)
@@ -781,7 +789,8 @@ class Archiver:
     # ------------------------------------------------------------------ re-reading saved pages
 
     def reparse(self) -> int:
-        """Re-read every saved post page, card and comment page with the current parser. No downloads."""
+        """Re-read every saved post page, card and comment page with the current parser. Nothing is downloaded
+        again, apart from small pictures (badges, profile pictures) that weren't saved yet."""
         n = 0
         for post in self.db.q("SELECT * FROM posts"):
             d = self.paths.archive / "posts" / str(post["id"])

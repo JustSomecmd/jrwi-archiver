@@ -113,3 +113,7 @@ code { background: var(--panel-2); padding: .1rem .35rem; border-radius: 4px; fo
 @media (max-width: 640px) { header.top .wrap { height: auto; padding: .6rem 1rem; flex-wrap: wrap; } .banner { aspect-ratio: 3/1; } }
 .admin-links { display: flex; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 1rem; }
 .admin-links .btn:hover { text-decoration: none; border-color: var(--muted); }
+.comment .av.initial { display: grid; place-items: center; font-weight: 700; color: var(--muted); }
+.mbadge { display: inline-flex; align-items: center; gap: .25rem; margin-left: .35rem; padding: 0 .4rem; height: 1.25rem;
+  border: 1px solid var(--line); border-radius: 999px; font-size: .72rem; color: var(--muted); vertical-align: middle; }
+.mbadge img { height: .95rem; width: auto; }

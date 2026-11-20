@@ -142,18 +142,29 @@ TAGS = ('<div class="filters">'
         '<button value="102"><img alt="Riptide Rolled\'s tag thumbnail" src="x"><span>Riptide Rolled</span><span>125</span></button>'
         '<button value="103"><img alt="Art\'s tag thumbnail" src="x"><span>Art</span><span>136</span></button></div>')
 
-def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when="13d"):
-    """A comment as the real site renders it, including the parts that must be ignored."""
+BADGES = ('<div class="badge badge--small"><div class="badge__icon">🔥</div> 4-month member</div>'
+          '<div class="badge badge--small badge--minimal" data-controller="tooltip" data-tippy-content="JRWiener">'
+          f'<div class="badge__icon"><img alt="Badge icon" class="badge__image" src="{B}/imgproxy/badge-tier/b.webp"></div></div>')
+
+
+def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when="13d", picture=True, badges=False):
+    """A comment as the real site renders it, including the parts that must be ignored. Members without a
+    profile picture get their initial instead, and their badges are then the first images in the comment."""
     badge = '<div class="comment__badge-container"><div class="pill">Pinned</div></div>' if pinned else ""
+    avatar = (f'<div class="avatar"><img class="avatar__image" alt="{author}" src="{B}/imgproxy/av-{author}/a.webp"></div>'
+              if picture else f'<div class="avatar avatar--medium">\n        {author[0].lower()}\n</div>')
+    author_badges = f'<div class="comment__author-badges">{BADGES if badges else ""}</div>'
+    popover = (f'<div class="hidden"><div class="profile-popover"><div class="profile-popover__user">{avatar}'
+               f'<div class="profile-popover__badges">{BADGES}</div></div></div></div>')
     load = (f'<form action="/supporters/posts/{pid}/comments/{cid}/replies" data-testid="Post.LoadRepliesButton" '
             f'data-turbo-stream="true" method="get"><input type="hidden" name="limit" value="10"><button>{replies} '
             f'<turbo-frame id="comment_{cid}_reply_text">{"Load replies" if replies else "Reply"}</turbo-frame></button></form>')
     return (f'<turbo-frame class="comments__comment" id="comment_{cid}"><div class="comment" data-testid="Post.Comment">{badge}'
-            f'<div class="comment__aside"><div class="avatar"><img class="avatar__image" alt="{author}" src="{B}/imgproxy/av-{author}/a.webp"></div></div>'
+            f'<div class="comment__aside">{popover}<div>{avatar}</div></div>'
             f'<turbo-frame id="comment_{cid}_edit_form"></turbo-frame><div class="comment__main"><div class="comment__header">'
             f'<span class="comment__author"><div class="hidden"><div class="profile-popover"><div class="profile-popover__nickname">{author}</div>'
             '<time datetime="2025-07-16T22:34:22Z">Jul 16, 2025</time></div></div>'
-            f'<div class="comment__author-name"><div data-testid="Post.CommentAuthor">{author}</div></div></span>'
+            f'<div class="comment__author-name"><div data-testid="Post.CommentAuthor">{author}</div></div>{author_badges}</span>'
             f'<div class="comment__date-and-actions"><a href="/supporters/posts/x?cid=comment_h{cid}"><span class="comment__date">{when}</span></a>'
             '<div class="comment__dropdown"><div class="dropdown"><div class="modal"><p>Block someone?</p></div></div></div></div></div>'
             f'<div class="comment__content"><div><div class="comment__body"><p>{body}</p></div><button>Read more</button></div></div>'
@@ -172,7 +183,7 @@ def more_form(pid, marker, cid=None):
 COMMENT_PAGES = {
     (299, None): [real_comment(299, 501, "Sam", "Love these rules!", likes=4, replies=1),
                   real_comment(299, 503, "Jo", "Printing these now.")], 
-    (299, "p2"): [real_comment(299, 504, "Lee", "Great work, thanks!", when="2w")],
+    (299, "p2"): [real_comment(299, 504, "Lee", "Great work, thanks!", when="2w", picture=False, badges=True)],
     (300, None): [real_comment(300, 601, "Kim", "Best episode yet.", likes=327, pinned=True)],
 }
 REPLY_PAGES = {(299, 501): [real_comment(299, 502, "Alex", "Same here.")]}
