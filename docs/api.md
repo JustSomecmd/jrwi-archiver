@@ -1,4 +1,4 @@
-# JRWI archiver API (contract v0.6)
+# JRWI archiver API (contract v0.7)
 
 This is the same text as the integration contract in the user's "Multimedia Server" project. Items marked v0.3 (`sync`, part durations, progress by either post ID) aren't built yet.
 
@@ -10,6 +10,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.4:** comments gain `pinned` and `link`. In the service since 0.2.0.
 - **v0.5:** comment authors gain `badges`. In the service since 0.2.4.
 - **v0.6:** the status's `progress` gains `current`. In the service since 0.2.5.
+- **v0.7:** `/api/posts`, `/api/posts/{postId}` and `/api/posts/{postId}/comments` for single posts. Item `versions` gain `version`, `main`, `date`, `like_count` and `comment_count`. Comments gain `post_id`. In the service since 0.2.6.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
 
 **General rules**
@@ -32,7 +33,10 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/items?q=&show=&tab=&kind=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. |
 | `GET /api/latest?limit=20` | Newest items, for a home screen |
 | `GET /api/items/{postId}` | Full item. Either post ID of a video/audio pair works. |
-| `GET /api/items/{postId}/comments?page=` | Threaded comments, paged by top-level comment |
+| `GET /api/items/{postId}/comments?page=` | Threaded comments from every version of the item, paged by top-level comment. Each says which post it's on (`post_id`). |
+| `GET /api/posts?q=&show=&tab=&order=desc` | (v0.7) Paged single posts, every version listed on its own. Same filters as items. |
+| `GET /api/posts/{postId}` | (v0.7) One post on its own: only its own text, likes, files and media |
+| `GET /api/posts/{postId}/comments?page=` | (v0.7) Only that post's comments |
 | `GET /api/audio/{postId}` | The audio file, with HTTP range support |
 | `GET /api/video/{postId}` | The video file, with HTTP range support. This is a fallback; Jellyfin is the main way to play video. |
 | `GET /api/progress/{postId}` | `{"position": 1234.5, "duration": 11695, "finished": false, "updated_at": "..."}` |
@@ -121,18 +125,33 @@ The list fields, plus:
  "links": [{"text": "Episode transcription here.", "url": "https://docs.google.com/..."}],
  "documents": [{"name": "Riptide 135 - Blue Jay [TRANSCRIPT] [1B_ZJmqV].pdf", "url": "/files/google-docs/..."}],
  "embeds": [{"kind": "youtube", "url": "https://www.youtube.com/watch?v=CzZ13VPQOcw"}],
- "versions": [{"post_id": 300, "title": "Through the Fire | Riptide #136", "url": "https://..."},
-              {"post_id": 298, "title": "Through the Fire | Riptide #136 (AUDIO ONLY)", "url": "https://..."}],
+ "versions": [{"post_id": 300, "version": "video", "main": true, "title": "Through the Fire | Riptide #136",
+               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 469, "comment_count": 12},
+              {"post_id": 298, "version": "audio", "main": false, "title": "Through the Fire | Riptide #136 (AUDIO ONLY)",
+               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 10, "comment_count": 1}],
  "problems": []}
 ```
 
 - **`body_html`:** cleaned of scripts, with images pointing at the archived copies.
 - **`attachments`, `documents` and `images`:** collected from every version of the item.
+- **`versions` (fields beyond `post_id`, `title` and `url` since v0.7):** every post of the item, main post first, each with its own counts. `version` is `video` (members-only video), `audio`, `youtube`, or `null` for a post without either.
+
+### Post (v0.7)
+
+A single post, never merged with its other versions. It has the same fields as an item, list or full, but only from this one post: its own `body_html`, `like_count`, `comment_count`, `tags`, files, and `video` or `audio` only if this post has them. Plus:
+
+```json
+{"id": 298, "version": "audio", "item_id": 300, "paired": true}
+```
+
+- **`version`:** which version of its episode this post is: `video`, `audio`, `youtube`, or `null`.
+- **`item_id`:** the item it's grouped into. The same as `id` for a main post or a post on its own.
+- **`paired`:** `true` when the item has other versions.
 
 ### Comment
 
 ```json
-{"id": "286486:1016036",
+{"id": "286486:1016036", "post_id": 286486,
  "author": {"name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
             "badges": [{"name": "4-month member", "icon": "🔥", "image": null},
                        {"name": "JRWiener", "icon": null, "image": "/files/badges/0c1d2e3f4a5b6c7d.webp"}]},
@@ -148,7 +167,8 @@ The list fields, plus:
 - **`author.avatar`:** `null` for members without a profile picture. The site shows their initial instead, and apps can do the same.
 - **`author.badges` (v0.5):** the badges next to the name, in the site's order: the membership tier (an image, with the tier name as `name`), months as a member (an emoji `icon` and text) and `Verified` on verified accounts. Any of `name`, `icon` and `image` can be `null`. An empty list when there are none.
 - **Fields that can be missing:** `date` and `like_count` are `null` when the site didn't show them.
-- **Which comments:** every comment and reply, fetched from the site's comments endpoint with paging. They come from every version of the item, starting with the main post's, newest first.
+- **Which comments:** every comment and reply, fetched from the site's comments endpoint with paging. For an item, they come from every version, starting with the main post's, newest first; `/api/posts/{postId}/comments` gives one post's only.
+- **`post_id` (v0.7):** the post the comment was made on, so apps can show which version it belongs to.
 
 ### Event
 

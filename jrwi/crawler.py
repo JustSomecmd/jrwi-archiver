@@ -23,7 +23,7 @@ from .db import Db, now
 from .site import parse as P
 from .site.client import (HTML_ACCEPT, TURBO_ACCEPT, Blocked, Client, LoginFailed, NotFound, SessionExpired,
                           SiteError, logged_in)
-from .site.download import Downloader, DownloadError, probe_height
+from .site.download import Downloader, DownloadError, glob_escape, probe_height
 
 log = logging.getLogger("jrwi.crawler")
 
@@ -285,7 +285,7 @@ class Archiver:
         todo = []
         for p in self.db.q("SELECT * FROM posts WHERE status NOT IN ('locked', 'gone') AND url IS NOT NULL "
                            "ORDER BY published DESC, id DESC"):
-            if p["status"] != "complete" or any(wanted.get(k) for k in (p["skipped"] or [])):
+            if p["status"] != "complete" or p.get("refetch") or any(wanted.get(k) for k in (p["skipped"] or [])):
                 todo.append(p)
         self.status.set(phase="archiving posts", total=len(todo), done=0)
         archived = 0
@@ -295,6 +295,8 @@ class Archiver:
             self.status.set(done=n - 1, detail=post["title"], current=None)
             first_time = post["status"] == "new"
             try:
+                if post.get("refetch") == "files":
+                    post = self.forget_files(post)
                 self.archive_post(post, wanted)
                 archived += 1
                 fresh = self.db.post(post["id"])
@@ -316,6 +318,36 @@ class Archiver:
                 self.db.update("posts", "id", post["id"], {"status": "error",
                                                           "problems": [f"{type(e).__name__}: {e}"]})
         return archived
+
+    def forget_files(self, post: dict) -> dict:
+        """Delete what was downloaded for a post (video, audio, images, attachments, documents, thumbnail), so it's
+        downloaded again. The saved page, card and comment pages stay until they're replaced."""
+        rels = set((post.get("files") or {}).values())
+        media = post.get("media") or {}
+        if (media.get("audio") or {}).get("path"):
+            rels.add(media["audio"]["path"])
+        rels |= {i.get("url") for i in post.get("images") or []}
+        rels |= {a.get("url") for a in post.get("attachments") or []}
+        # Google Docs can be linked from several posts; keep the ones another post still uses
+        for doc in post.get("documents") or []:
+            url = doc.get("url")
+            if url and not self.db.one("SELECT 1 FROM posts WHERE id != ? AND documents LIKE ? LIMIT 1",
+                                       (post["id"], f"%{url}%")):
+                rels.add(url)
+        rels.add(post.get("thumbnail"))
+        for rel in filter(None, rels):
+            f = self.paths.archive / rel
+            if f.is_file() and self.paths.archive.resolve() in f.resolve().parents:
+                f.unlink()
+        video = (media.get("video") or {}).get("path")
+        if video:
+            v = self.paths.media / video
+            for side in v.parent.glob(glob_escape(v.stem) + "*"):
+                if side.is_file():
+                    side.unlink()
+        fields = {"files": {}, "media": {}, "images": [], "attachments": [], "documents": [], "thumbnail": None}
+        self.db.update("posts", "id", post["id"], fields)
+        return {**post, **fields}
 
     def grow_archive_size(self, post: dict) -> None:
         """Add a newly archived post to the archive size shown on the admin page. The full count at the end of
@@ -549,7 +581,7 @@ class Archiver:
         images = [i for i in images if i["url"] not in seen_img and not seen_img.add(i["url"])]
         update.update(files=files, media=media, images=images, attachments=dedupe(attachments, "url"),
                       documents=dedupe(documents, "url"), embeds=embeds, thumbnail=thumbnail,
-                      problems=failures + notes, skipped=sorted(skipped),
+                      problems=failures + notes, skipped=sorted(skipped), refetch=None,
                       status="partial" if failures else "complete")
         self.db.update("posts", "id", post["id"], update)
 

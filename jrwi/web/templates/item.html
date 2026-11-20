@@ -32,6 +32,7 @@
     {% if show %}<a href="/shows/{{ show.id }}?tab={{ item.tab }}">{{ show.name }} · {{ tab_name(item.tab) }}</a>{% endif %}
     {% if item.like_count is not none %}<span>♥ {{ item.like_count }}</span>{% endif %}
     {% if item.duration %}<span>{{ human_duration(item.duration) }}</span>{% endif %}
+    {% if item.paired and item.version %}<span class="badge">{{ version_name[item.version] }}</span>{% endif %}
     {% if item.pinned %}<span class="badge acc">Pinned</span>{% endif %}
     {% for t in item.tags %}<span class="badge">{{ t }}</span>{% endfor %}
   </div>
@@ -47,9 +48,16 @@
     </div>
   {% endif %}
   {% if v and v.youtube_url %}<p class="small"><a href="{{ v.youtube_url }}" target="_blank" rel="noopener">Watch on YouTube</a></p>{% endif %}
-  <p class="small muted">
-    {% for ver in item.versions %}<a href="{{ ver.url }}" target="_blank" rel="noopener">Original{% if item.versions|length > 1 %}: {{ ver.title }}{% endif %}</a>{% if not loop.last %} · {% endif %}{% endfor %}
-  </p>
+  <p class="small muted"><a href="{{ item.original_url }}" target="_blank" rel="noopener">Original post</a></p>
+  {% if item.paired %}
+  <div class="versions small">
+    <div class="muted">This is the <b>{{ (version_name[item.version] or 'post') | lower }}</b> of this episode. Its other versions are separate posts, with their own text, likes and comments:</div>
+    {% for ver in item.versions if ver.post_id != item.id %}
+      <a href="/items/{{ ver.post_id }}">{{ version_name[ver.version] or 'Post' }}: {{ ver.title }}</a>
+      <span class="muted">{{ (ver.date or '')[:10] }}{% if ver.like_count is not none %} · ♥ {{ ver.like_count }}{% endif %}{% if ver.comment_count %} · {{ ver.comment_count }} comments{% endif %}</span><br>
+    {% endfor %}
+  </div>
+  {% endif %}
   {% if item.problems %}<div class="notice small">{% for p in item.problems %}<div>{{ p }}</div>{% endfor %}</div>{% endif %}
 </div>
 
@@ -64,6 +72,6 @@
 
 <details class="admin-tools">
   <summary>Admin</summary>
-  <p><a href="/admin/items/{{ item.id }}">Change this post's show, tab or episode number</a></p>
+  <p><a href="/admin/items/{{ item.id }}">Change this post's show, tab or episode number, or download it again</a></p>
 </details>
 {% endblock %}

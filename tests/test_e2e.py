@@ -85,6 +85,36 @@ def test_pairs_and_tabs(client):
     assert tabs == ["episodes", "aftershow", "art"]
 
 
+def test_versions_stay_separate_posts(app, client):
+    """Items group an episode's video and audio for the players; the archive keeps each post on its own."""
+    item = client.get("/api/items/300").json()
+    versions = {v["post_id"]: v for v in item["versions"]}
+    assert versions[300]["version"] == "video" and versions[300]["main"]
+    assert versions[298]["version"] == "audio" and not versions[298]["main"]
+    # Item comments come from both posts, each saying which post it's on
+    merged = client.get("/api/items/300/comments").json()["items"]
+    assert {(c["author"]["name"], c["post_id"]) for c in merged} == {("Kim", 300), ("Pat", 298)}
+    # Each post on its own: its own comments, likes and files, and flags to recognise it
+    audio = client.get("/api/posts/298").json()
+    assert audio["version"] == "audio" and audio["item_id"] == 300 and audio["paired"]
+    assert audio["video"] is None and audio["audio"]["post_id"] == 298
+    assert [c["author"]["name"] for c in client.get("/api/posts/298/comments").json()["items"]] == ["Pat"]
+    assert [c["author"]["name"] for c in client.get("/api/posts/300/comments").json()["items"]] == ["Kim"]
+    ids = [p["id"] for p in client.get("/api/posts?show=riptide&tab=episodes").json()["items"]]
+    assert 298 in ids and 300 in ids
+    assert 298 not in [i["id"] for i in client.get("/api/shows/riptide/items?tab=episodes").json()["items"]]
+    # The web app shows each post on its own
+    web = TestClient(app)
+    if not app.state.db.setting("web_password_hash"):
+        web.post("/setup", data={"password": "test-password", "password2": "test-password"})
+    web.post("/login", data={"password": "test-password"})
+    for path in ("/", "/feed", "/shows/riptide", "/items/298", "/items/300", "/admin/items/298", "/admin"):
+        r = web.get(path)
+        assert r.status_code == 200, path
+    page = web.get("/items/298").text
+    assert "Audio version" in page and "Pat" in page and "Kim" not in page
+
+
 def test_jellyfin_layout():
     media = Path(os.environ["JRWI_MEDIA"])
     assert (media / "Riptide/Season 01/Riptide - S01E136 - Through the Fire [jrwi-300].mp4").exists()
@@ -175,3 +205,18 @@ def test_reparse_fixes_old_archives(app, client):
     post = db.post(299)
     assert [a["name"] for a in post["attachments"]] == ["Zombie Character Sheets.pdf"]
     assert "attachments" not in (post["skipped"] or [])
+
+
+def test_download_a_post_again(app, client):
+    archiver, db = app.state.archiver, app.state.db
+    post = db.post(299)
+    rel = next(a["url"] for a in post["attachments"] if a["name"] == "Zombie Character Sheets.pdf")
+    before = (archiver.paths.archive / rel).stat().st_mtime_ns
+    events_before = db.one("SELECT COUNT(*) AS n FROM events WHERE type='new_item'")["n"]
+    db.update("posts", "id", 299, {"refetch": "files"})
+    assert archiver.run_check()["result"] == "ok"
+    post = db.post(299)
+    assert post["refetch"] is None and post["status"] == "complete"
+    assert (archiver.paths.archive / rel).stat().st_mtime_ns != before   # deleted and downloaded again
+    assert len(client.get("/api/items/299/comments").json()["items"]) == 3
+    assert db.one("SELECT COUNT(*) AS n FROM events WHERE type='new_item'")["n"] == events_before

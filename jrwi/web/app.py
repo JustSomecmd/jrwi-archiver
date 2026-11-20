@@ -98,7 +98,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.globals.update(files_url=files_url, human_size=human_size, human_duration=human_duration,
-                                 tab_name=tab_name, version=VERSION, quote=quote)
+                                 tab_name=tab_name, version=VERSION, quote=quote,
+                                 version_name={"video": "Video version", "audio": "Audio version",
+                                               "youtube": "YouTube version"})
     app.state.db, app.state.archiver, app.state.scheduler = db, archiver, scheduler
 
     # ------------------------------------------------------------------ auth
@@ -163,14 +165,16 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             "disk": scheduler.disk(),
         }
 
-    def paged(rows_sql: str, args: list, page: int, page_size: int) -> dict:
+    def paged(rows_sql: str, args: list, page: int, page_size: int, one=None) -> dict:
         page, page_size = max(1, page), max(1, min(page_size, 200))
         total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
         rows = db.q(f"{rows_sql} LIMIT ? OFFSET ?", args + [page_size, (page - 1) * page_size])
-        return {"items": [ser.summary(r) for r in rows], "page": page, "page_size": page_size, "total": total}
+        return {"items": [(one or ser.summary)(r) for r in rows], "page": page, "page_size": page_size, "total": total}
 
-    def item_query(show=None, tab=None, kind=None, q=None, order="desc", include_locked=False) -> tuple[str, list]:
-        where, args = ["pair_id IS NULL", "status != 'gone'"], []
+    def item_query(show=None, tab=None, kind=None, q=None, order="desc", include_locked=False,
+                   separate=False) -> tuple[str, list]:
+        """Items group an episode's versions under its main post. separate=True lists every post on its own."""
+        where, args = ([] if separate else ["pair_id IS NULL"]) + ["status != 'gone'"], []
         if not include_locked:
             where.append("status != 'locked'")
         if show:
@@ -250,6 +254,28 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     @app.get("/api/items/{post_id}/comments", dependencies=[Depends(api_auth)])
     def api_comments(post_id: int, page: int = 1, page_size: int = 50):
         return ser.comments(get_primary(post_id), max(1, page), max(1, min(page_size, 200)))
+
+    # Single posts, never merged with their other versions: the archive as the site has it
+    def get_post(post_id: int) -> dict:
+        p = db.post(post_id)
+        if not p:
+            raise HTTPException(404, "no such post")
+        return p
+
+    @app.get("/api/posts", dependencies=[Depends(api_auth)])
+    def api_posts(q: str | None = None, show: str | None = None, tab: str | None = None, order: str = "desc",
+                  page: int = 1, page_size: int = 50, include_locked: bool = False):
+        sql, args = item_query(show=show, tab=tab, q=q, order=order, include_locked=include_locked, separate=True)
+        return paged(sql, args, page, page_size, ser.post_summary)
+
+    @app.get("/api/posts/{post_id}", dependencies=[Depends(api_auth)])
+    def api_post(post_id: int):
+        return ser.post_full(get_post(post_id))
+
+    @app.get("/api/posts/{post_id}/comments", dependencies=[Depends(api_auth)])
+    def api_post_comments(post_id: int, page: int = 1, page_size: int = 50):
+        p = get_post(post_id)
+        return ser.comments(p, max(1, page), max(1, min(page_size, 200)), only_post=p["id"])
 
     @app.get("/api/audio/{post_id}", dependencies=[Depends(api_auth)])
     def api_audio(post_id: int):
@@ -383,9 +409,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def home(request: Request):
-        sql, args = item_query()
-        latest = [ser.summary(r) for r in db.q(f"{sql} LIMIT 12", args)]
-        shows = [ser.show(r) for r in db.q("SELECT * FROM shows ORDER BY sort, name")]
+        sql, args = item_query(separate=True)
+        latest = [ser.post_summary(r) for r in db.q(f"{sql} LIMIT 12", args)]
+        shows = [ser.show(r, separate=True) for r in db.q("SELECT * FROM shows ORDER BY sort, name")]
         shows = [s for s in shows if s["item_count"]]
         return render(request, "home.html", latest=latest, shows=shows)
 
@@ -394,10 +420,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         row = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
         if not row:
             raise HTTPException(404, "No such show")
-        show = ser.show(row, with_tabs=True)
+        show = ser.show(row, with_tabs=True, separate=True)
         tab = tab or (show["tabs"][0]["id"] if show["tabs"] else None)
-        sql, args = item_query(show=show_id, tab=tab, order=order)
-        data = paged(sql, args, page, 48)
+        sql, args = item_query(show=show_id, tab=tab, order=order, separate=True)
+        data = paged(sql, args, page, 48, ser.post_summary)
         return render(request, "show.html", show=show, tab=tab, data=data, order=order,
                       pages=math.ceil(data["total"] / data["page_size"]) or 1)
 
@@ -412,20 +438,17 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         rows_sql = f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY published DESC, id DESC"
         total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
         rows = db.q(f"{rows_sql} LIMIT 20 OFFSET ?", args + [(max(1, page) - 1) * 20])
-        posts = []
-        for r in rows:
-            full = ser.full(ser.primary_of(r["id"]) or r) if not r["pair_id"] else ser.full(r)
-            full["self_id"] = r["id"]
-            full["self_title"] = r["title"]
-            posts.append(full)
+        posts = [ser.post_full(r) for r in rows]
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
                       pages=math.ceil(total / 20) or 1, locked=locked)
 
     @app.get("/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def item_page(request: Request, post_id: int):
-        primary = get_primary(post_id)
-        item = ser.full(primary)
-        comments = ser.comments(primary, 1, 1000)
+        post = db.post(post_id)
+        if not post:
+            raise HTTPException(404, "No such post")
+        item = ser.post_full(post)
+        comments = ser.comments(post, 1, 1000, only_post=post["id"])
         show = db.one("SELECT id, name FROM shows WHERE id=?", (item["show"],))
         progress = api_progress(item["audio"]["post_id"]) if item["audio"] else None
         return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=progress)
@@ -570,12 +593,12 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return RedirectResponse("/admin/shows", 303)
 
     @app.get("/admin/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def admin_item(request: Request, post_id: int):
+    def admin_item(request: Request, post_id: int, queued: str = ""):
         p = db.post(post_id)
         if not p:
             raise HTTPException(404, "No such post")
         return render(request, "admin_item.html", p=p, shows=db.q("SELECT id, name FROM shows ORDER BY sort"),
-                      tabs=TABS)
+                      tabs=TABS, queued=queued, st=status_obj())
 
     @app.post("/admin/items/{post_id}", dependencies=[Depends(web_auth)])
     async def admin_item_post(request: Request, post_id: int):
@@ -583,12 +606,26 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         fields = {"show_override": form.get("show_override") or None, "tab_override": form.get("tab_override") or None}
         ep = (form.get("episode_override") or "").strip()
         fields["episode_override"] = int(ep) if ep.isdigit() else None
-        if form.get("rearchive"):
-            fields["status"] = "new"
         db.update("posts", "id", post_id, fields)
         classify_all(db)
         reorganize(db, paths)
         return RedirectResponse(f"/admin/items/{post_id}", 303)
+
+    @app.post("/admin/items/{post_id}/refetch", dependencies=[Depends(web_auth)])
+    def admin_item_refetch(post_id: int, what: str = Form("page")):
+        """Download a post again from the site: its page and comments, or (what=files) everything, files included."""
+        if not db.post(post_id):
+            raise HTTPException(404, "No such post")
+        db.update("posts", "id", post_id, {"refetch": "files" if what == "files" else "page"})
+        started = scheduler.check_now()
+        return RedirectResponse(f"/admin/items/{post_id}?queued={'now' if started else 'later'}", 303)
+
+    @app.post("/admin/refetch-all", dependencies=[Depends(web_auth)])
+    def admin_refetch_all():
+        """Fetch every archived post's page and comments again. Downloaded files are kept."""
+        db.x("UPDATE posts SET refetch='page' WHERE status IN ('complete', 'partial') AND refetch IS NULL")
+        scheduler.check_now()
+        return RedirectResponse("/admin", 303)
 
     @app.post("/admin/reparse", dependencies=[Depends(web_auth)])
     def admin_reparse():

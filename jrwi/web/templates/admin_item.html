@@ -17,9 +17,23 @@
     {% for t, name in tabs %}<option value="{{ t }}" {% if p.tab_override == t %}selected{% endif %}>{{ name }}</option>{% endfor %}</select>
   <label for="ep">Episode number</label>
   <input id="ep" type="number" name="episode_override" value="{{ p.episode_override if p.episode_override is not none else '' }}" placeholder="Automatic">
-  <label class="check"><input type="checkbox" name="rearchive"> Download this post again on the next check</label>
   <p><button type="submit">Save</button></p>
 </form>
+<div class="panel">
+  <h3>Download again</h3>
+  {% if queued %}<div class="notice small">Queued. {% if queued == 'now' %}A check has started and fetches it.{% else %}It's fetched when the check that's running gets to it, or on the next check.{% endif %}</div>
+  {% elif p.refetch %}<div class="notice small">Waiting to be downloaded again ({{ 'with its files' if p.refetch == 'files' else 'page and comments' }}).</div>{% endif %}
+  <p class="muted small">If this post looks wrong or incomplete, fetch it from the site again. <b>Re-read saved pages</b> on the
+    Admin page is quicker and fixes most reading mistakes without downloading; use this when the saved copy itself is
+    wrong or out of date.</p>
+  <form method="post" action="/admin/items/{{ p.id }}/refetch" onsubmit="return confirm('Fetch this post\'s page and comments again?')">
+    <input type="hidden" name="what" value="page"><button class="ghost">Page and comments</button>
+    <div class="muted small">Keeps the downloaded files.</div></form>
+  <form method="post" action="/admin/items/{{ p.id }}/refetch" style="margin-top:.9rem"
+        onsubmit="return confirm('Delete this post\'s downloaded files (video, audio, images, attachments) and download everything again?')">
+    <input type="hidden" name="what" value="files"><button class="ghost">Everything, files included</button>
+    <div class="muted small">Deletes and re-downloads its video, audio, images and attachments.</div></form>
+</div>
 <div class="panel">
   <h3>Details</h3>
   <table>

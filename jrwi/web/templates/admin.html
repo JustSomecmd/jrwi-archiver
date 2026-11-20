@@ -79,4 +79,13 @@
     {%- if last_reparse.stopped %} (stopped before the end){% endif %}.</p>{% endif %}
   <form method="post" action="/admin/reparse"><button class="ghost" {% if st.running %}disabled{% endif %}>Re-read saved pages</button></form>
 </div>
+<div class="panel">
+  <h3>Download posts again</h3>
+  <p class="muted small">Fetches every archived post's page and all its comments from the site again, as a check. Downloaded
+    video, audio and other files are kept. This takes about as long as reading every post once, so try
+    <b>Re-read saved pages</b> first; a single post can be fetched again from <b>Admin</b> at the bottom of its page.</p>
+  <form method="post" action="/admin/refetch-all"
+        onsubmit="return confirm('Fetch every archived post\'s page and comments again? Files are kept.')">
+    <button class="ghost" {% if st.running %}disabled{% endif %}>Fetch all posts again</button></form>
+</div>
 {% endblock %}

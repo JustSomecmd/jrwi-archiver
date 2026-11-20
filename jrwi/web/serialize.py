@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 
 from ..config import Paths
 from ..db import Db
-from ..organize import TAB_NAMES, TABS
+from ..organize import TAB_NAMES, TABS, is_audio_post
 from ..site.parse import url_key
 
 ALLOWED_TAGS = {
@@ -135,8 +135,52 @@ class Serializer:
                     out[url_key(img["source"])] = files_url(img["url"])
         return out
 
-    def full(self, primary: dict) -> dict:
-        members = self.members(primary)
+    @staticmethod
+    def version_of(post: dict) -> str | None:
+        """Which version of an episode a post is: 'video' (members-only video), 'audio' or 'youtube'.
+        None for posts without a video or audio."""
+        if is_audio_post(post):
+            return "audio"
+        if post["path_kind"] == "videos":
+            return "video"
+        if post["path_kind"] == "video_embeds":
+            return "youtube"
+        media = post["media"] or {}
+        if media.get("video"):
+            return "video"
+        if media.get("audio"):
+            return "audio"
+        if any(e.get("kind") == "youtube" for e in post["embeds"] or []):
+            return "youtube"
+        return None
+
+    def versions(self, post: dict) -> list[dict]:
+        """Every post of the episode this post belongs to, main post first, each with its own counts."""
+        primary = self.primary_of(post["id"]) or post
+        return [{"post_id": m["id"], "version": self.version_of(m), "title": m["title"], "url": m["url"],
+                 "date": iso(m["published"]), "like_count": m["like_count"], "comment_count": m["comment_count"],
+                 "main": m["id"] == primary["id"]}
+                for m in self.members(primary)]
+
+    def post_flags(self, post: dict) -> dict:
+        item_id = post["pair_id"] or post["id"]
+        others = self.db.one("SELECT COUNT(*) AS n FROM posts WHERE (pair_id=? OR id=?) AND id != ?",
+                             (item_id, item_id, post["id"]))["n"]
+        return {"version": self.version_of(post), "item_id": item_id, "paired": bool(others)}
+
+    def post_summary(self, post: dict) -> dict:
+        """One post on its own: its own likes, comment count and files, never merged with its other versions."""
+        out = self.summary(post, [post])
+        out.update(self.post_flags(post))
+        return out
+
+    def post_full(self, post: dict) -> dict:
+        out = self.full(post, [post])
+        out.update(self.post_flags(post))
+        return out
+
+    def full(self, primary: dict, members: list[dict] | None = None) -> dict:
+        members = members or self.members(primary)
         out = self.summary(primary, members)
         tag_names = {t["id"]: t["name"] for t in self.db.q("SELECT id, name FROM tags")}
         local = self.local_images(members)
@@ -163,13 +207,15 @@ class Serializer:
             "links": collect("links"),
             "documents": [{"name": d["name"], "url": files_url(d["url"])} for d in collect("documents")],
             "embeds": [{"kind": e["kind"], "url": e["url"]} for e in collect("embeds")],
-            "versions": [{"post_id": m["id"], "title": m["title"], "url": m["url"]} for m in members],
+            "versions": self.versions(primary),
             "problems": [p for m in members for p in (m["problems"] or [])],
         })
         return out
 
-    def comments(self, primary: dict, page: int = 1, page_size: int = 50) -> dict:
-        ids = [m["id"] for m in self.members(primary)]
+    def comments(self, primary: dict, page: int = 1, page_size: int = 50, only_post: int | None = None) -> dict:
+        """Threaded comments. For an item: from every version, the main post's first. With only_post: just the
+        comments on that one post."""
+        ids = [only_post] if only_post else [m["id"] for m in self.members(primary)]
         rows = self.db.q(f"SELECT * FROM comments WHERE post_id IN ({','.join('?' * len(ids))}) "
                          "ORDER BY post_id = ? DESC, position", ids + [primary["id"]])
         by_parent: dict[str | None, list[dict]] = {}
@@ -182,8 +228,9 @@ class Serializer:
         def build(r: dict) -> dict:
             badges = [{"name": b.get("name"), "icon": b.get("icon"), "image": local(b.get("image"))}
                       for b in (r.get("author_badges") or [])]
-            return {"id": r["id"], "author": {"name": r["author_name"] or "", "avatar": local(r["author_avatar"]),
-                                              "badges": badges},
+            return {"id": r["id"], "post_id": r["post_id"],
+                    "author": {"name": r["author_name"] or "", "avatar": local(r["author_avatar"]),
+                               "badges": badges},
                     "date": iso(r["date"]), "date_text": r["date_text"],
                     "body_html": clean_html(r["body_html"]), "body_text": r["body_text"] or "",
                     "like_count": r["like_count"], "pinned": bool(r.get("pinned")), "link": r.get("link"),
@@ -196,15 +243,17 @@ class Serializer:
         return {"items": [build(r) for r in top[start:start + page_size]], "page": page, "page_size": page_size,
                 "total": len(top)}
 
-    def show(self, row: dict, with_tabs: bool = False) -> dict:
+    def show(self, row: dict, with_tabs: bool = False, separate: bool = False) -> dict:
+        """A show. Counts are of items (versions grouped), or of single posts with separate=True."""
+        grouped = "" if separate else "AND pair_id IS NULL "
         stats = self.db.one("SELECT COUNT(*) AS n, MAX(published) AS latest FROM posts WHERE show_id=? "
-                            "AND pair_id IS NULL AND status NOT IN ('locked', 'gone')", (row["id"],))
+                            f"{grouped}AND status NOT IN ('locked', 'gone')", (row["id"],))
         out = {"id": row["id"], "name": row["name"], "description": row["description"] or "",
                "poster": files_url(row["poster"]), "banner": files_url(row["banner"]),
                "item_count": stats["n"], "latest": iso(stats["latest"])}
         if with_tabs:
             counts = {r["tab"]: r["n"] for r in self.db.q(
-                "SELECT tab, COUNT(*) AS n FROM posts WHERE show_id=? AND pair_id IS NULL "
+                f"SELECT tab, COUNT(*) AS n FROM posts WHERE show_id=? {grouped}"
                 "AND status NOT IN ('locked', 'gone') GROUP BY tab", (row["id"],))}
             out["tabs"] = [{"id": t, "name": name, "count": counts[t]} for t, name in TABS if counts.get(t)]
         return out

@@ -80,6 +80,15 @@ Every post page, comment page, feed card and site page is kept as it was downloa
 - **Nothing big is downloaded again.** If the re-read finds files an older version never downloaded, the next check fetches just those posts again.
 - **Clean-up:** profile pictures and badges that no comment uses any more are deleted.
 
+When the saved copy itself is wrong or out of date, posts can be **downloaded again** from the site:
+
+- **One post:** open **Admin** at the bottom of the post's page. Choose between its page and comments only, or everything including its video, audio, images and attachments.
+- **Every post:** **Admin > Fetch all posts again** fetches every post's page and comments again. Downloaded files are kept.
+
+### Versions of an episode
+
+On the site, an episode's members-only video, its YouTube embed and its "(AUDIO ONLY)" post are separate posts, each with its own description, likes and comments. The archive keeps them separate: the web app shows each post on its own, labelled as the video, audio or YouTube version, with links to the others. The API groups them into one **item** for players such as Tubedroid, and also gives every **post** on its own (see [docs/api.md](docs/api.md)).
+
 ## Settings
 
 | Setting | Default | What it does |

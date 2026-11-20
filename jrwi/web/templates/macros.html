@@ -3,8 +3,11 @@
   <div class="thumb" {% if it.thumbnail %}style="background-image:url('{{ it.thumbnail }}')"{% endif %}>
     <div class="badges">
       {% if it.episode and it.tab == 'episodes' %}<span class="badge acc">#{{ it.episode }}</span>{% endif %}
-      {% if it.video %}<span class="badge">Video</span>{% endif %}
-      {% if it.audio %}<span class="badge">Audio</span>{% endif %}
+      {% if it.paired and it.version %}<span class="badge">{{ version_name[it.version] }}</span>
+      {% else %}
+        {% if it.video %}<span class="badge">Video</span>{% endif %}
+        {% if it.audio %}<span class="badge">Audio</span>{% endif %}
+      {% endif %}
       {% if it.locked %}<span class="badge">Locked</span>{% endif %}
     </div>
     {% if it.duration %}<span class="dur">{{ human_duration(it.duration) }}</span>{% endif %}

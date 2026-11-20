@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS posts (
     show_id TEXT, tab TEXT, episode INTEGER, special INTEGER, pair_id INTEGER,
     show_override TEXT, tab_override TEXT, episode_override INTEGER,
     status TEXT DEFAULT 'new', problems TEXT DEFAULT '[]', skipped TEXT DEFAULT '[]',
-    first_seen TEXT, last_fetched TEXT, comments_fetched TEXT
+    first_seen TEXT, last_fetched TEXT, comments_fetched TEXT, refetch TEXT
 );
 CREATE INDEX IF NOT EXISTS posts_show ON posts(show_id, tab);
 CREATE INDEX IF NOT EXISTS posts_published ON posts(published);
@@ -87,7 +87,8 @@ class Db:
 
     def _migrate(self) -> None:
         """Add columns that newer versions use to databases made by older ones."""
-        wanted = {"comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'"}}
+        wanted = {"posts": {"refetch": "TEXT"},
+                  "comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'"}}
         for table, cols in wanted.items():
             have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
             for col, decl in cols.items():
