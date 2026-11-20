@@ -29,7 +29,15 @@ def header(logged_in):
 
 def page(body, logged_in, head=""):
     return (f'<!DOCTYPE html><html><head><title>JRWI</title><link rel="icon" href="{B}/imgproxy/icon/fav.webp">'
+            f'<meta name="csrf-param" content="authenticity_token"><meta name="csrf-token" content="{CSRF}">'
             f'{head}</head><body>{header(logged_in)}<main>{body}</main></body></html>')
+
+
+# Like the real site may do: the form has no hidden token; the browser adds the page's token when it submits
+LOGIN_FORM = ('<form action="/supporters/sign_in" method="post" data-turbo="true">'
+              '<input type="email" name="supporter[email]" id="supporter_email" autocomplete="email">'
+              '<input type="password" name="supporter[password]" id="supporter_password">'
+              '<button type="submit">Login</button></form>')
 
 
 def share(path):
@@ -178,10 +186,7 @@ class H(BaseHTTPRequestHandler):
         li = self.li()
         p = u.path
         if p == "/supporters/sign_in":
-            return self.send(200, page(
-                f'<form action="/supporters/sign_in" method="post"><input type="hidden" name="authenticity_token" value="{CSRF}">'
-                '<input type="email" name="supporter[email]"><input type="password" name="supporter[password]">'
-                '<button type="submit">Login</button></form>', False))
+            return self.send(200, page(LOGIN_FORM, False))
         if p == "/supporters":
             return self.send(200, feed_page1(li))
         if p == "/supporters/load_more":
@@ -237,11 +242,14 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         form = parse_qs(self.rfile.read(n).decode())
         if u.path == "/supporters/sign_in":
-            if (form.get("authenticity_token") == [CSRF] and form.get("supporter[email]") == ["fan@example.com"]
-                    and form.get("supporter[password]") == ["hunter2"]):
+            token_ok = form.get("authenticity_token") == [CSRF] or self.headers.get("X-CSRF-Token") == CSRF
+            if not token_ok:
+                return self.send(422, "<html><body><h1>The change you wanted was rejected.</h1></body></html>")
+            if form.get("supporter[email]") == ["fan@example.com"] and form.get("supporter[password]") == ["hunter2"]:
                 return self.send(303, "", headers={"Location": "/supporters",
                                                     "Set-Cookie": f"_jrwi_session={SESSION}; path=/; HttpOnly"})
-            return self.send(422, page('<form action="/supporters/sign_in" method="post"><input type="password" name="p"></form>', False))
+            return self.send(422, page('<div class="flash flash--alert" role="alert">Invalid Email or password.</div>'
+                                       + LOGIN_FORM, False))
         return self.send(404, "nope")
 
 

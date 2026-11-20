@@ -23,7 +23,9 @@ The archive is for personal use. Keep it private: don't put it on the open inter
 2. Add the service from [`docker-compose.example.yml`](docker-compose.example.yml) to your compose file. Change `/srv/media/jrwi` to wherever your media lives, and `user:` to your own user and group IDs (run `id` to see them).
 3. Start it with `docker compose up -d jrwi-archiver` and open `http://<server>:8090`.
 4. Choose a password for the web app. You'll go straight to **Settings**.
-5. Enter your jrwishow.com email and password, then save.
+5. Enter your jrwishow.com email and password, save, then press **Test login**.
+   - If it fails, the message gives the site's reason, and **login details** shows what was sent and what came back (never the password).
+   - If the site won't take a login from the server at all, use **Log in with your browser instead** on the same page. Export your browser's jrwishow.com cookies with the **Get cookies.txt LOCALLY** extension, then upload the file.
 6. Go to **Admin** and press **Check now**.
    - The first check reads the whole members feed and downloads everything, which takes a long time.
    - After that, it checks every 4 hours by default and only fetches what's new.

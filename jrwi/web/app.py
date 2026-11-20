@@ -466,9 +466,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return render(request, "problems.html", rows=api_problems())
 
     @app.get("/admin/settings", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def admin_settings(request: Request, saved: bool = False):
-        return render(request, "settings.html", s=db.settings(), saved=saved,
-                      env_login=bool(os.environ.get("JRWI_EMAIL")))
+    def admin_settings(request: Request, saved: bool = False, msg: str | None = None):
+        return render(request, "settings.html", s=db.settings(), saved=saved, msg=msg,
+                      env_login=bool(os.environ.get("JRWI_EMAIL")),
+                      has_session=any(True for _ in archiver.client.session.cookies))
 
     @app.post("/admin/settings", dependencies=[Depends(web_auth)])
     async def admin_settings_post(request: Request):
@@ -495,6 +496,62 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if form.get("regenerate_token"):
             db.set_setting("api_token", new_token())
         return RedirectResponse("/admin/settings?saved=1", 303)
+
+    def check_site_login() -> tuple[bool, str]:
+        """Ask the members feed whether the saved session is logged in."""
+        from ..site.client import SiteError, logged_in
+        from ..site.parse import soup_of
+        try:
+            _, text = archiver.client.page(archiver.client.abs("/supporters"))
+        except SiteError as e:
+            return False, f"Couldn't reach jrwishow.com: {e}"
+        if logged_in(soup_of(text)):
+            return True, "Logged in to jrwishow.com."
+        return False, "jrwishow.com shows the login button, so this login doesn't work."
+
+    @app.post("/admin/test-login", dependencies=[Depends(web_auth)])
+    def admin_test_login():
+        from ..site.client import SiteError
+        if archiver.status.running:
+            return RedirectResponse("/admin/settings?msg=" + quote("A check is running; try again when it's done."), 303)
+        s = db.settings()
+        email = os.environ.get("JRWI_EMAIL") or s["site_email"]
+        password = os.environ.get("JRWI_PASSWORD") or s["site_password"]
+        try:
+            archiver.client.login(email, password, debug_file=paths.data / "login-debug.txt")
+            msg = "Login worked."
+        except SiteError as e:
+            msg = f"Login failed: {e} (the login details page has more)."
+        return RedirectResponse("/admin/settings?msg=" + quote(msg), 303)
+
+    @app.post("/admin/cookies", dependencies=[Depends(web_auth)])
+    async def admin_cookies(request: Request):
+        form = await request.form()
+        raw = form.get("cookies_text") or ""
+        upload = form.get("cookies_file")
+        if upload is not None and hasattr(upload, "read"):
+            data = await upload.read()
+            if data:
+                raw = data.decode("utf-8", errors="replace")
+        if not raw.strip():
+            return RedirectResponse("/admin/settings?msg=" + quote("No cookies were given."), 303)
+        try:
+            n = archiver.client.import_cookies(raw)
+        except (ValueError, KeyError):
+            n = 0
+        if n == 0:
+            msg = "That file has no jrwishow.com cookies. Export them while you're logged in on jrwishow.com."
+        else:
+            ok, detail = check_site_login()
+            msg = f"Imported {n} cookies. {detail}"
+        return RedirectResponse("/admin/settings?msg=" + quote(msg), 303)
+
+    @app.get("/admin/login-details", dependencies=[Depends(web_auth)])
+    def admin_login_details():
+        f = paths.data / "login-debug.txt"
+        if not f.exists():
+            return Response("No failed login has been recorded.", media_type="text/plain")
+        return Response(f.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
 
     @app.get("/admin/shows", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def admin_shows(request: Request):

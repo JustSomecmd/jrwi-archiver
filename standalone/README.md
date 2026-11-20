@@ -24,7 +24,7 @@ It only saves what your tier can see. Posts above your tier still appear in the 
 
 Double-click **`Run on Windows.bat`** or **`Run on Mac.command`**.
 
-The first run takes a minute to set itself up. Then it asks for your jrwishow.com email and password. The password isn't shown while you type, and it isn't saved anywhere.
+The first run takes a minute to set itself up. Then it asks for your jrwishow.com email and password. The password is shown as you type, so you can check it (add `--hide-password` if you'd rather hide it). It isn't saved anywhere.
 
 On a Mac, the first time you open the file, right-click it and choose **Open** (macOS blocks double-clicking scripts downloaded from the internet). Windows may show a SmartScreen warning: click **More info**, then **Run anyway**.
 
@@ -51,7 +51,9 @@ Video takes up nearly all of the space. A 3-hour episode at full quality can be 
 
 ## Other ways to log in
 
-If the email and password login stops working (for example, the site adds a captcha), the script can reuse the login from your browser instead. Log in on jrwishow.com in that browser first.
+If the login fails, the script tells you why, using the site's own message when there is one (for example "Invalid Email or password."). It also saves `login-debug.txt` in the archive folder, which describes the login form and the site's answer. Your password is never written to it, so you can send it to me if the reason isn't clear.
+
+It then offers to use your browser's login instead: type `firefox` (or another browser), or the path to a cookies.txt file, and it carries on. You can also choose this from the start with the options below. Log in on jrwishow.com in that browser first.
 
 - `--browser firefox` reads Firefox's login cookies. Also works with `safari`, `chrome`, `edge` and `brave`, except Chrome and Edge on Windows: since Chrome 127 they encrypt cookies so other programs can't read them. On Windows, use Firefox or the next option.
 - `--cookies cookies.txt` uses a file exported with the **Get cookies.txt LOCALLY** browser extension (available for Chrome and Firefox). Open jrwishow.com while logged in, click the extension, export, and save the file in this folder. Treat that file like a password and delete it when you're done.
@@ -64,6 +66,7 @@ If the email and password login stops working (for example, the site adds a capt
 | `--email ADDRESS` | Skip the email prompt |
 | `--browser NAME` | Reuse your browser's login (see above) |
 | `--cookies FILE` | Reuse a cookies.txt export (see above) |
+| `--hide-password` | Hide the password while you type it |
 | `--limit N` | Only archive N posts this run |
 | `--no-video` | Skip members-only video |
 | `--no-audio` | Skip audio episodes |
@@ -103,7 +106,8 @@ JRWI Archive/
 ## If something goes wrong
 
 - **Check `problems.txt`.** It lists every post with an issue. Failed downloads are retried automatically the next time you run the script.
-- **"Login problem"**: your login expired or didn't work. Run it again. If you use `--browser` or `--cookies`, log in on the site in your browser first, and export a fresh cookies file.
+- **"Login failed"**: the message says why. Check `login-debug.txt` in the archive folder, or use your browser's login when the script offers it.
+- **"Login problem"**: your login expired part way through. Run it again. If you use `--browser` or `--cookies`, log in on the site in your browser first, and export a fresh cookies file.
 - **"Blocked"**: the site answered with a bot check. Open jrwishow.com in your browser, then run with `--browser firefox` and `--delay 5`.
 - **A post's attachments or video didn't download**: I built this tool from the public parts of the site, so members-only pages might be laid out a little differently. Send me the `card.html` file from that post's folder and I can adjust the script. That file only contains the one post.
 

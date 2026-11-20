@@ -5,6 +5,7 @@
 <p class="small"><a href="/admin">Admin</a></p>
 <h1>Settings</h1>
 {% if saved %}<div class="notice">Saved.</div>{% endif %}
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
 <form method="post" action="/admin/settings">
 <div class="cols">
   <div class="panel">
@@ -14,7 +15,9 @@
     <input id="email" type="email" name="site_email" value="{{ s.site_email }}" autocomplete="off">
     <label for="pw">Password</label>
     <input id="pw" type="password" name="site_password" placeholder="{{ 'Saved; leave empty to keep it' if s.site_password else '' }}" autocomplete="new-password">
-    <div class="hint">Stored in this server's database so it can log in again by itself.</div>
+    <div class="hint">Stored in this server's database so it can log in again by itself.
+      Save, then <button form="test-login" class="ghost" style="padding:.15rem .6rem">Test login</button>.
+      If a login fails, the <a href="/admin/login-details" target="_blank">login details</a> show why (never the password).</div>
 
     <h3 style="margin-top:1.4rem">Schedule</h3>
     <label for="iv">Check every (hours)</label>
@@ -64,4 +67,21 @@
 </div>
 <p><button type="submit">Save settings</button></p>
 </form>
+<form id="test-login" method="post" action="/admin/test-login"></form>
+
+<div class="panel">
+  <h3>Log in with your browser instead</h3>
+  <p class="muted small">If the site won't accept a login from this server, give it your browser's login session instead.
+    Log in on jrwishow.com in your browser, export its cookies with the <b>Get cookies.txt LOCALLY</b> extension
+    (Chrome or Firefox), and upload the file here. The session lasts as long as it does in your browser; when it runs out,
+    you'll get a login problem notice and can upload a fresh one.
+    {% if has_session %}<br>A login session is saved right now.{% endif %}</p>
+  <form method="post" action="/admin/cookies" enctype="multipart/form-data">
+    <label for="cf">Cookie file</label>
+    <input id="cf" type="file" name="cookies_file" accept=".txt,.json">
+    <label for="ct">Or paste its contents</label>
+    <textarea id="ct" name="cookies_text" rows="4" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:.5rem"></textarea>
+    <p><button type="submit">Use this login</button></p>
+  </form>
+</div>
 {% endblock %}

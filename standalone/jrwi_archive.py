@@ -48,7 +48,7 @@ try:
 except ImportError:
     sys.exit("Some required packages are missing. Run this first:\n\n    pip install -r requirements.txt\n")
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 DEFAULT_BASE = "https://jrwishow.com"
 DEFAULT_MUX = "https://stream.mux.com"
@@ -399,13 +399,63 @@ def load_browser_cookies(browser: str, client: Client) -> int:
     return count
 
 
-def login_with_password(client: Client, email: str, password: str) -> None:
-    final, text = client.page(client.abs("/supporters/sign_in"))
+CAPTCHA_HINTS = ("cf-turnstile", "challenges.cloudflare.com/turnstile", "g-recaptcha", "recaptcha/api",
+                 "hcaptcha", "data-sitekey")
+BROWSER_HINT = ("To skip the login form, use your browser's login instead: log in on jrwishow.com in Firefox, "
+                "then run with --browser firefox (or --cookies cookies.txt; see README).")
+
+
+def page_message(soup) -> str:
+    """The site's own error or notice text, such as 'Invalid Email or password.'"""
+    for sel in ("[role=alert]", "[class*=flash]", "[class*=alert]", "[class*=error]", "[class*=notice]",
+                "[class*=toast]", "[class*=invalid]"):
+        for el in soup.select(sel):
+            t = norm_space(el.get_text(" ", strip=True))
+            if 3 <= len(t) <= 300:
+                return t
+    return ""
+
+
+def describe_form(form) -> list[str]:
+    lines = [f"form: action={form.get('action')!r} method={form.get('method')!r} "
+             f"data-turbo={form.get('data-turbo')!r} data-controller={form.get('data-controller')!r}"]
+    for el in form.find_all(["input", "select", "textarea", "button"]):
+        lines.append(f"  <{el.name}> type={el.get('type')!r} name={el.get('name')!r} id={el.get('id')!r} "
+                     f"autocomplete={el.get('autocomplete')!r} has_value={bool(el.get('value'))}")
+    return lines
+
+
+def login_with_password(client: Client, email: str, password: str, debug_file: Path | None = None) -> None:
+    notes: list[str] = []
+    response_text = ""
+
+    def fail(message: str, blocked: bool = False):
+        if debug_file is not None:
+            scrubbed = re.sub(r"(<input\b[^>]*?\bvalue=)(\"[^\"]*\"|'[^']*')", r'\1""', response_text)
+            debug_file.write_text("JRWI archiver login details (no password in here)\n\n" + "\n".join(notes)
+                                  + "\n\n--- the site's answer (first 6000 characters) ---\n" + scrubbed[:6000],
+                                  encoding="utf-8")
+            message += f"\nDetails, without your password, are saved in: {debug_file}"
+        raise (Blocked if blocked else ArchiveError)(message + "\n" + BROWSER_HINT)
+
+    sign_in = client.abs("/supporters/sign_in")
+    final, text = client.page(sign_in)
     soup = BeautifulSoup(text, "html.parser")
+    meta_token = soup.find("meta", attrs={"name": "csrf-token"})
+    meta_param = soup.find("meta", attrs={"name": "csrf-param"})
+    notes.append(f"login page: {final}")
+    notes.append(f"security token in page header: {'yes' if meta_token else 'no'}")
+    notes.append(f"captcha signs: {[h for h in CAPTCHA_HINTS if h in text.lower()] or 'none'}")
     pw = soup.find("input", attrs={"type": "password"})
     form = pw.find_parent("form") if pw else None
-    if not form:
-        raise ArchiveError("couldn't find the login form on /supporters/sign_in")
+    if form is not None:
+        notes += describe_form(form)
+    if pw is None:
+        response_text = text
+        fail("login failed: the login page has no password box this script can see.")
+    if form is None:
+        response_text = text
+        fail("login failed: the login page builds its form with JavaScript, which this script can't fill in.")
 
     data: list[tuple[str, str]] = []
     email_done = False
@@ -414,9 +464,10 @@ def login_with_password(client: Client, email: str, password: str) -> None:
         if not name:
             continue
         typ = (inp.get("type") or "text").lower()
+        hints = " ".join([name, inp.get("id") or "", inp.get("autocomplete") or ""]).lower()
         if typ == "password":
             data.append((name, password))
-        elif typ == "email" or ("email" in name.lower() and typ in ("text", "email")):
+        elif typ == "email" or (typ == "text" and any(w in hints for w in ("email", "login", "username"))):
             data.append((name, email))
             email_done = True
         elif typ in ("checkbox", "radio"):
@@ -427,22 +478,50 @@ def login_with_password(client: Client, email: str, password: str) -> None:
         else:
             data.append((name, inp.get("value", "")))
     if not email_done:
-        first_text = form.find("input", attrs={"type": "text"})
+        first_text = form.find("input", attrs={"type": "text"}) or form.find("input", attrs={"type": None})
         if not first_text or not first_text.get("name"):
-            raise ArchiveError("couldn't find the email field on the login form")
+            response_text = text
+            fail("login failed: couldn't find the email box on the login form.")
         data = [(n, email if n == first_text["name"] else v) for n, v in data]
+        if not any(n == first_text["name"] for n, _ in data):
+            data.append((first_text["name"], email))
     submit = form.find(["button", "input"], attrs={"type": "submit"})
     if submit is not None and submit.get("name"):
         data.append((submit["name"], submit.get("value", "")))
+    # Browsers send the page's security token even when the form itself doesn't contain it
+    token_name = (meta_param.get("content") if meta_param else None) or "authenticity_token"
+    headers = {"Referer": final, "Origin": client.base}
+    if meta_token is not None and meta_token.get("content"):
+        headers["X-CSRF-Token"] = meta_token["content"]
+        if not any(n == token_name for n, _ in data):
+            data.append((token_name, meta_token["content"]))
+            notes.append("added the page's security token to the form")
+    notes.append("fields sent: " + ", ".join(n for n, _ in data))
 
     action = urljoin(final, form.get("action") or final)
     method = (form.get("method") or "post").upper()
-    r = client.request(method, action, data=data, accept=HTML_ACCEPT,
-                       headers={"Referer": final, "Origin": client.base})
-    after = BeautifulSoup(r.text, "html.parser")
-    if r.status_code >= 400 or (after.find("input", attrs={"type": "password"})
-                                and urlparse(r.url).path.rstrip("/").endswith("/sign_in")):
-        raise ArchiveError("login failed: the site didn't accept that email and password")
+    r = client.request(method, action, data=data, accept=TURBO_ACCEPT, headers=headers)
+    response_text = r.text
+    notes.append(f"sent to {action}: HTTP {r.status_code}, ended at {r.url}, {r.headers.get('Content-Type')}")
+    if r.status_code == 403 and (r.headers.get("cf-mitigated") or "Just a moment" in response_text[:5000]
+                                 or "challenge-platform" in response_text):
+        fail("login failed: the site's bot protection stopped the login before it checked the password.", blocked=True)
+    if r.status_code == 429:
+        fail("login failed: the site says there were too many login attempts. Wait 15 to 30 minutes and try again.")
+
+    # The answer to the login itself can be ambiguous, so ask the members feed whether we're logged in now
+    _, feed = client.page(client.abs("/supporters"))
+    if logged_in(BeautifulSoup(feed, "html.parser")):
+        return
+    after = BeautifulSoup(re.sub(r"</?template\b[^>]*>", "", response_text), "html.parser")
+    message = page_message(after)
+    notes.append(f"site message: {message!r}")
+    if message:
+        fail(f'login failed: the site said "{message}"')
+    if r.status_code == 422 and not after.find("input", attrs={"type": "password"}):
+        fail("login failed: the site rejected the login request itself (its security check failed), "
+             "so it never got as far as checking the email and password.")
+    fail(f"login failed: the site didn't log us in and gave no reason (HTTP {r.status_code}).")
 
 
 def logged_in(soup) -> bool:
@@ -458,24 +537,46 @@ def logged_in(soup) -> bool:
     return not any(is_sign_in(a) for a in anchors)
 
 
-def authenticate(client: Client, args) -> None:
-    if args.cookies:
-        n = load_cookie_file(args.cookies, client)
-        log(f"Loaded {n} cookies for {client.host} from {args.cookies}")
+def use_browser_login(client: Client, choice: str) -> None:
+    """choice is a browser name (firefox, chrome, edge, safari, brave) or the path to a cookie export."""
+    if os.path.exists(choice):
+        n = load_cookie_file(choice, client)
+        log(f"Loaded {n} cookies for {client.host} from {choice}")
         if n == 0:
-            raise ArchiveError(f"{args.cookies} has no cookies for {client.host}. "
+            raise ArchiveError(f"{choice} has no cookies for {client.host}. "
                                "Export them while you're logged in on that site.")
-    elif args.browser:
-        log(f"Reading your {args.browser} cookies (close the browser first if this fails)...")
-        n = load_browser_cookies(args.browser, client)
+    else:
+        log(f"Reading your {choice} cookies (close the browser first if this fails)...")
+        n = load_browser_cookies(choice, client)
         log(f"Found {n} cookies for {client.host}")
         if n == 0:
-            raise ArchiveError(f"No {client.host} cookies in {args.browser}. Log in there first.")
-    else:
-        email = args.email or os.environ.get("JRWI_EMAIL") or input("Email for jrwishow.com: ").strip()
-        password = os.environ.get("JRWI_PASSWORD") or getpass.getpass("Password (not shown while typing): ")
-        log("Logging in...")
-        login_with_password(client, email, password)
+            raise ArchiveError(f"No {client.host} cookies in {choice}. Log in on jrwishow.com in {choice} first.")
+
+
+def authenticate(client: Client, args, debug_file: Path | None = None) -> None:
+    if args.cookies or args.browser:
+        use_browser_login(client, args.cookies or args.browser)
+        return
+    email = args.email or os.environ.get("JRWI_EMAIL") or input("Email for jrwishow.com: ").strip()
+    password = os.environ.get("JRWI_PASSWORD")
+    if not password:
+        if args.hide_password:
+            password = getpass.getpass("Password (hidden while you type): ")
+        else:
+            password = input("Password (shown as you type): ")
+    log("Logging in...")
+    try:
+        login_with_password(client, email, password, debug_file)
+    except ArchiveError as e:
+        if not sys.stdin.isatty():
+            raise
+        log(f"\n{e}\n")
+        choice = input("Use your browser's login instead? Type firefox, chrome, edge, safari or brave, "
+                       "or the path to a cookies.txt file (or press Enter to stop): ").strip().strip('"')
+        if not choice:
+            raise ArchiveError("stopped at the login") from None
+        client.session.cookies.clear()
+        use_browser_login(client, choice)
 
 
 # --------------------------------------------------------------------------- parsing
@@ -1431,6 +1532,7 @@ def parse_args(argv=None):
     auth.add_argument("--email", help="your jrwishow.com email (you'll be asked for the password)")
     auth.add_argument("--browser", help="reuse the login from this browser: firefox, chrome, edge, safari, brave...")
     auth.add_argument("--cookies", help="path to a cookies.txt export from your browser")
+    auth.add_argument("--hide-password", action="store_true", help="hide the password while you type it")
     what = ap.add_argument_group("what to save")
     what.add_argument("--no-video", action="store_true", help="skip members-only video (the bulk of the disk space)")
     what.add_argument("--no-audio", action="store_true", help="skip audio episodes")
@@ -1477,7 +1579,7 @@ def main(argv=None) -> int:
             "(see README).")
 
     try:
-        authenticate(client, args)
+        authenticate(client, args, store.root / "login-debug.txt")
         crawl_feed(client, store, args)
 
         posts = store.state["posts"]

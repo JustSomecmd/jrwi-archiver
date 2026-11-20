@@ -103,7 +103,7 @@ class Archiver:
         email = os.environ.get("JRWI_EMAIL") or s["site_email"]
         password = os.environ.get("JRWI_PASSWORD") or s["site_password"]
         self.status.set(phase="logging in", detail="")
-        self.client.login(email, password)
+        self.client.login(email, password, debug_file=self.paths.data / "login-debug.txt")
 
     def page(self, url: str, accept: str = HTML_ACCEPT, headers: dict | None = None) -> tuple[str, str]:
         """GET a page, logging in again once if the session ran out."""
