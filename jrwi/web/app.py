@@ -485,9 +485,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             raise HTTPException(404, "No such show")
         show = ser.show(row, with_tabs=True, separate=True)
         tab = tab or (show["tabs"][0]["id"] if show["tabs"] else None)
-        # A show with more than one season gets a page per season in place of its Episodes
-        seasons = show.get("seasons") or []
-        if tab == "episodes" and len(seasons) > 1:
+        # A tab of a show with more than one season (Episodes, Just Rolled With It) gets a page per season
+        seasons = next((t.get("seasons") or [] for t in show["tabs"] if t["id"] == tab), [])
+        if len(seasons) > 1:
             season = season if season in [s["season"] for s in seasons] else seasons[0]["season"]
         else:
             season = None

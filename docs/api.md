@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.13)
+# JRWI archiver API (contract v0.14)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.7.0.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.7.1.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -14,6 +14,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.11:** items gain `season`, and the `episodes` tab is ordered by season, then episode. `PUT /api/progress` takes `updated_at`, for progress sent later (see Progress). A section on downloading audio for offline listening. In the service since 0.5.0.
 - **v0.12:** items and posts gain `tabs`, every tab they're in, and `?tab=` lists everything in that tab, so one item can be in two tabs' lists; tab counts count it in each. Shows gain `image`, never empty; `poster` and `banner` are now the same picture, the show's own, or `null`. Shows can come from the site's tags, not only its menu. In the service since 0.6.0.
 - **v0.13:** items and posts gain `places`, every show and tab they're in, and a show's lists and counts include the posts its tags place there from other shows. Shows gain `seasons` (with `GET /api/shows/{showId}`), and `GET /api/shows/{showId}/items` takes `?season=`. `season` is now also worked out when titles don't name it. In the service since 0.7.0.
+- **v0.14:** items in a show's own Just Rolled With It have a `season` too, and the show's `episodes` and `aftershow` tabs each list their `seasons`, so `?tab=aftershow&season=2` gives a season's Just Rolled With It. In the service since 0.7.1.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`.
 
 **General rules**
@@ -27,12 +28,12 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.7.0"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.7.1"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, then shows from the site's tags or added on the admin page, `other` last. `?include_empty=true` lists all of them. |
 | `GET /api/shows/{showId}` | One show, with `tabs` and `seasons` |
-| `GET /api/shows/{showId}/items?tab=episodes&season=2&order=desc` | Paged items in one tab: every item the show's tags place in it (v0.12, v0.13). `season` (v0.13) keeps one season of the show's own episodes. In `episodes`, items are ordered by season, then episode number. |
+| `GET /api/shows/{showId}/items?tab=episodes&season=2&order=desc` | Paged items in one tab: every item the show's tags place in it (v0.12, v0.13). `season` keeps one season of the show's own episodes (v0.13) or Just Rolled With It (v0.14). In `episodes`, items are ordered by season, then episode number, then upload date. |
 | `GET /api/items?q=&show=&tab=&kind=&youtube_id=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. `youtube_id` (v0.10) gives the items that embed that YouTube video (below). `show` includes items placed in that show from another. |
 | `GET /api/latest?limit=20` | Newest items, for a home screen |
 | `GET /api/items/{postId}` | Full item. Either post ID of a video/audio pair works. |
@@ -91,19 +92,22 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 ### Show
 
 ```json
-{"id": "unwitness-protection-program", "name": "Unwitness Protection Program", "description": "...",
+{"id": "prime-defenders", "name": "Prime Defenders", "description": "...",
  "poster": null, "banner": null, "image": "/files/site/assets/0d4c1b2a3e4f5a6b.webp",
- "item_count": 17, "latest": "2026-11-12T00:00:00+00:00",
- "tabs": [{"id": "episodes", "name": "Episodes", "count": 7},
-          {"id": "aftershow", "name": "Just Rolled With It", "count": 2}],
- "seasons": [{"season": 1, "name": "Diseased Residents", "count": 3},
-             {"season": 2, "name": "Empty Graves", "count": 4}]}
+ "item_count": 157, "latest": "2023-10-21T00:00:00+00:00",
+ "tabs": [{"id": "episodes", "name": "Episodes", "count": 64,
+           "seasons": [{"season": 1, "name": null, "count": 24}, {"season": 2, "name": null, "count": 40}]},
+          {"id": "aftershow", "name": "Just Rolled With It", "count": 56,
+           "seasons": [{"season": 1, "name": null, "count": 22}, {"season": 2, "name": null, "count": 34}]},
+          {"id": "extras", "name": "Extras", "count": 52}],
+ "seasons": [{"season": 1, "name": null, "count": 24}, {"season": 2, "name": null, "count": 40}]}
 ```
 
 - **`image` (v0.12):** the picture to show for the show: its own picture, or the JRWI logo when it has none. Never `null` once the site's logo has been saved.
 - **`poster` and `banner`:** since v0.12 both are the show's own picture (see Show pictures), or `null` when it has none. Before v0.12 they could differ, and a show without either showed its newest thumbnail.
 - **`tabs`:** only included in `GET /api/shows/{showId}`. A post in two tabs counts in both (v0.12), and posts from other shows that the site's tags place here count too (v0.13).
-- **`seasons` (v0.13):** only included in `GET /api/shows/{showId}`: the seasons of the show's own Episodes, with how many items each has, and the season's `name`, or `null` when its episodes don't share one. One entry for a show with one season, none for a show without Episodes. With more than one, apps can show a page per season (`?tab=episodes&season=2`), as the web app does in place of one Episodes page.
+- **`seasons` on a tab (v0.14):** the `episodes` and `aftershow` tabs list the seasons of the show's own posts in them, with how many items each has and the season's `name` (`null` when its episodes don't share one). With more than one, apps can show a page per season (`?tab=aftershow&season=2`), as the web app does in place of one page for the tab, titled such as "Season 2: Empty Graves" and "Just Rolled With It: Season 2".
+- **`seasons` on the show (v0.13):** only included in `GET /api/shows/{showId}`: the same list as the `episodes` tab's, kept for apps written for v0.13. One entry for a show with one season, none for a show without Episodes.
 - **Tab ids**, in this order: `episodes`, `aftershow`, `extras`, `art`, `posts`. Tabs with nothing in them are left out.
 
 ### Item (in lists)
@@ -128,7 +132,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **`tabs` (v0.12):** every tab the item is in within its own show, in the tab order, from the main post's tags (see Tabs). `tab` is the main one of them, the one Jellyfin files it under.
 - **`places` (v0.13):** every show and tab the item is in: its own show's `tabs` first, then other shows its tags name, such as `{"show": "prime-defenders", "tab": "extras"}` for UPP's first season.
 - **`kind`:** one of `episode`, `video`, `audio`, `youtube`, `art` or `post`. `episode` is a video or audio whose main tab is `episodes`.
-- **`season` (v0.11):** the season of an episode in its own show's `episodes` tab: named in the title or a tag, or since v0.13 worked out (see "Episode numbers and seasons"). `null` for posts that aren't in the `episodes` tab or have no number. Seasons can each start again at episode 1, so apps show both, as the web app does with "S2 #1" for seasons after the first.
+- **`season` (v0.11):** the season of an episode in its own show's `episodes` tab: named in the title or a tag, or since v0.13 worked out (see "Episode numbers and seasons"). Since v0.14 also the season of a post in its own show's `aftershow` tab. `null` for other posts, episodes without a number, and Just Rolled With It of a show without episodes. Seasons can each start again at episode 1, so apps show both, as the web app does with "S2 #1" for seasons after the first.
 - **`date`:** the site only shows a date, so the time is midnight UTC.
 
 **`video` takes one of two shapes, or is `null`:**

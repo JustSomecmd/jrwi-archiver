@@ -494,12 +494,13 @@ def test_seasons_from_restarting_numbers(app, client):
             ("2026-01-02", "Diseased Residents | Just Roll With It: Unwitness Protection Program #1"),   # a re-post
             ("2026-04-05", "Unwitness Protection Program - Empty Graves [Case File 1]"),
             ("2026-05-02", "Unwitness Protection Program - Empty Graves [Case File 2]"),
-            ("2026-08-02", "Just Rolled With It | Empty Graves [CASE FILE 1 & 2]")]):
+            ("2026-08-02", "Just Rolled With It | Empty Graves [CASE FILE 1 & 2]"),
+            ("2025-10-05", "Just Rolled With It | UPP #2")]):
         pid = 9401 + i
         audio = "AUDIO" in title
         db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "title": title,
                                   "path_kind": "audio" if audio else "videos", "status": "complete",
-                                  "tag_ids": {9401: ["9301", "9302"], 9408: ["9303"]}.get(pid, ["9301"]),
+                                  "tag_ids": {9401: ["9301", "9302"], 9408: ["9303"], 9409: ["9303"]}.get(pid, ["9301"]),
                                   "published": day + "T00:00:00+00:00"})
         rows.append(pid)
     try:
@@ -510,10 +511,15 @@ def test_seasons_from_restarting_numbers(app, client):
         assert (got[9405]["season"], got[9405]["pair_id"]) == (1, 9401)   # the re-post is a version of case file 1
         assert got[9402]["pair_id"] == 9401
         assert got[9408]["tab"] == "aftershow" and got[9408]["episode"] is None
+        # Just Rolled With It posts get the season of the episodes they're about: by its name, or by the number
+        assert (got[9408]["season"], got[9409]["season"]) == (2, 1)
         assert got[9401]["places"] == [f"{upp}:episodes", "prime-defenders:extras"]
         show = client.get(f"/api/shows/{upp}").json()
         assert [(s["season"], s["name"], s["count"]) for s in show["seasons"]] == \
             [(1, "Diseased Residents", 3), (2, "Empty Graves", 2)]
+        rolled = next(t for t in show["tabs"] if t["id"] == "aftershow")
+        assert [(s["season"], s["count"]) for s in rolled["seasons"]] == [(1, 1), (2, 1)]
+        assert [i["id"] for i in client.get(f"/api/shows/{upp}/items?tab=aftershow&season=1").json()["items"]] == [9409]
         s2 = client.get(f"/api/shows/{upp}/items?tab=episodes&season=2").json()["items"]
         assert [i["id"] for i in s2] == [9407, 9406] and s2[0]["season"] == 2
         pd = {i["id"] for i in client.get("/api/shows/prime-defenders/items?tab=extras&page_size=200").json()["items"]}
@@ -523,6 +529,7 @@ def test_seasons_from_restarting_numbers(app, client):
         web.post("/login", data={"password": "test-password"})
         page = web.get(f"/shows/{upp}").text
         assert "Season 1: Diseased Residents" in page and "Season 2: Empty Graves" in page
+        assert "Just Rolled With It: Season 1" in page and "Just Rolled With It: Season 2" in page
         assert f"/shows/{upp}?tab=episodes&amp;season=2" in page or f"/shows/{upp}?tab=episodes&season=2" in page
         assert "Empty Graves [Case File 2]" in web.get(f"/shows/{upp}?tab=episodes&season=2").text
         assert "Empty Graves [Case File 2]" not in web.get(f"/shows/{upp}?tab=episodes&season=1").text
@@ -532,4 +539,25 @@ def test_seasons_from_restarting_numbers(app, client):
     finally:
         db.x("DELETE FROM posts WHERE id >= 9401 AND id < 9500")
         db.x("DELETE FROM tags WHERE id IN ('9301', '9302', '9303')")
+        organize.classify_all(db)
+
+
+def test_same_number_twice_keeps_upload_order(app, client):
+    """Riptide has two episodes numbered 68 (on purpose, to skip 69): both stay, in upload order."""
+    from jrwi import organize
+    db = app.state.db
+    try:
+        for pid, day, title in [(9501, "2022-01-07", "The Greatest Form of Flattery | Riptide #68"),
+                                (9502, "2022-01-14", "A Stranger at Sea | Riptide #68"),
+                                (9503, "2022-01-21", "Next One | Riptide #70")]:
+            db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "title": title,
+                                      "path_kind": "videos", "status": "complete", "tag_ids": ["101"],
+                                      "published": day + "T00:00:00+00:00"})
+        organize.classify_all(db)
+        ids = [i["id"] for i in client.get("/api/shows/riptide/items?tab=episodes&order=asc&page_size=200").json()["items"]]
+        mine = [i for i in ids if i >= 9501]
+        assert mine == [9501, 9502, 9503]
+        assert {db.post(i)["pair_id"] for i in mine} == {None}   # two episodes, not two versions of one
+    finally:
+        db.x("DELETE FROM posts WHERE id >= 9501 AND id < 9600")
         organize.classify_all(db)

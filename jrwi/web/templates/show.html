@@ -15,10 +15,11 @@
   <div class="section-head">
     <div class="tabs">
       {% for t in show.tabs %}
-        {% if t.id == 'episodes' and show.seasons|length > 1 %}
-          {# A page per season, in place of one Episodes page #}
-          {% for s in show.seasons %}
-          <a class="pill {% if tab == 'episodes' and season == s.season %}on{% endif %}" href="/shows/{{ show.id }}?tab=episodes&season={{ s.season }}">Season {{ s.season }}{% if s.name %}: {{ s.name }}{% endif %} · {{ s.count }}</a>
+        {% if (t.seasons or [])|length > 1 %}
+          {# A page per season, in place of one page for the tab #}
+          {% for s in t.seasons %}
+          <a class="pill {% if tab == t.id and season == s.season %}on{% endif %}" href="/shows/{{ show.id }}?tab={{ t.id }}&season={{ s.season }}"
+             {% if s.name %}title="{{ s.name }}"{% endif %}>{% if t.id == 'episodes' %}Season {{ s.season }}{% if s.name %}: {{ s.name }}{% endif %}{% else %}{{ t.name }}: Season {{ s.season }}{% endif %} · {{ s.count }}</a>
           {% endfor %}
         {% else %}
         <a class="pill {% if t.id == tab %}on{% endif %}" href="/shows/{{ show.id }}?tab={{ t.id }}">{{ t.name }} · {{ t.count }}</a>

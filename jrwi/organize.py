@@ -397,6 +397,30 @@ def infer_seasons(posts: list[dict], show_names: list[str]) -> dict[int, int]:
     return out
 
 
+def aftershow_seasons(rolled: list[dict], episodes: list[dict], seasons: dict[int, int],
+                      named: dict[int, str]) -> dict[int, int]:
+    """Seasons for a show's Just Rolled With It posts: the one their title names ("Season 2 Episode 1", or a season's
+    name such as "Empty Graves"), else that of the episode with their number uploaded last before them ("#23 and
+    #24"), else that of the show's last episode before them. Nothing when the show has no episodes."""
+    timeline = sorted(((e["published"] or "")[:10], e["id"], seasons[e["id"]], e["episode"]) for e in episodes
+                      if e["path_kind"] in MEDIA_KINDS and e["id"] in seasons)
+    out: dict[int, int] = {}
+    for r in rolled:
+        day = (r["published"] or "")[:10]
+        before = [t for t in timeline if t[0] <= day]
+        name_hit = next((n for n, nm in named.items() if nm and f" {norm(nm)} " in f" {norm(r['title'])} "), None)
+        if r["explicit_season"] is not None:
+            out[r["id"]] = r["explicit_season"]
+        elif name_hit is not None:
+            out[r["id"]] = name_hit
+        elif r["episode"] is not None and (same := [t for t in before if t[3] == r["episode"]]
+                                           or [t for t in timeline if t[3] == r["episode"]][:1]):
+            out[r["id"]] = same[-1][2]
+        elif before or timeline:
+            out[r["id"]] = (before or timeline)[-1 if before else 0][2]
+    return out
+
+
 def season_names(posts: list[dict], seasons: dict[int, int], show_names: list[str]) -> dict[int, str]:
     """A season's name, when all its numbered episodes share one besides their own number, as UPP's do."""
     found: dict[int, list[tuple[str, str]]] = {}
@@ -498,14 +522,19 @@ def classify_all(db: Db) -> None:
         seasons = infer_seasons(eps, by_show.get(sid, []) + ["just roll with it", "jrwi"])
         for pid, season in seasons.items():
             new[pid]["season"] = season
+        named = season_names([e for e in eps if e["path_kind"] in MEDIA_KINDS], seasons, by_show.get(sid, []))
+        # The show's Just Rolled With It posts belong to the season of the episodes they talk about
+        rolled = [{**p, **new[p["id"]]} for p in posts if new[p["id"]]["show_id"] == sid
+                  and "aftershow" in new[p["id"]]["tabs"] and p["id"] not in seasons]
+        for pid, season in aftershow_seasons(rolled, eps, seasons, named).items():
+            new[pid]["season"] = season
         if sid in show_rows:
-            named = season_names([e for e in eps if e["path_kind"] in MEDIA_KINDS], seasons, by_show.get(sid, []))
             listed = [{"season": n, "name": named.get(n)} for n in sorted(set(seasons.values()))]
             if listed != (show_rows[sid]["seasons"] or []):
                 db.update("shows", "id", sid, {"seasons": listed})
     for p in posts:
         n = new[p["id"]]
-        n.setdefault("season", None)
+        n.setdefault("season", n["explicit_season"])
         fields = {k: n[k] for k in ("show_id", "tab", "tabs", "places", "episode", "season")}
         if any(fields[k] != p[k] for k in fields):
             db.update("posts", "id", p["id"], fields)

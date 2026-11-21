@@ -137,7 +137,8 @@ class Serializer:
             "show": primary["show_id"] or "other", "tab": tab, "tabs": tabs,
             "places": [{"show": p.split(":", 1)[0], "tab": p.split(":", 1)[1]} for p in (primary.get("places") or [])],
             "kind": kind, "episode": primary["episode"],
-            "season": (primary.get("season") or 1) if "episodes" in tabs and primary["episode"] else None,
+            "season": ((primary.get("season") or 1) if "episodes" in tabs and primary["episode"]
+                       else primary.get("season") if "aftershow" in tabs else None),
             "pinned": bool(primary["pinned"]), "thumbnail": files_url(thumb),
             "duration": max(durations) if durations else None, "video": video, "audio": audio,
             "sync": self.sync_of(primary, video, audio),
@@ -274,7 +275,7 @@ class Serializer:
                "item_count": stats["n"], "latest": iso(stats["latest"])}
         if with_tabs:
             counts: dict[str, int] = {}
-            per_season: dict[int, int] = {}
+            per_season: dict[str, dict[int, int]] = {"episodes": {}, "aftershow": {}}
             sid = row["id"]
             for r in self.db.q(f"SELECT show_id, tab, tabs, places, season FROM posts WHERE (show_id=? OR places LIKE ?) "
                                f"{grouped}AND status NOT IN ('locked', 'gone')", (sid, f'%"{sid}:%')):
@@ -283,12 +284,17 @@ class Serializer:
                     here |= set(r["tabs"] or [r["tab"]])
                 for t in here:
                     counts[t] = counts.get(t, 0) + 1
-                if "episodes" in here and r["show_id"] == sid:
-                    per_season[r["season"] or 1] = per_season.get(r["season"] or 1, 0) + 1
-            out["tabs"] = [{"id": t, "name": name, "count": counts[t]} for t, name in TABS if counts.get(t)]
-            # v0.13: the seasons of the show's Episodes, with the name all their episodes share when they share one
+                for t in ("episodes", "aftershow"):
+                    if t in here and r["show_id"] == sid and (r["season"] or t == "episodes"):
+                        per_season[t][r["season"] or 1] = per_season[t].get(r["season"] or 1, 0) + 1
+            # v0.13: the seasons of the show's Episodes, with the name all their episodes share when they share one;
+            # v0.14: and of its Just Rolled With It
             names = {s["season"]: s.get("name") for s in (row.get("seasons") or [])}
-            out["seasons"] = [{"season": n, "name": names.get(n), "count": c} for n, c in sorted(per_season.items())]
+            seasons_of = {t: [{"season": n, "name": names.get(n), "count": c} for n, c in sorted(per_season[t].items())]
+                          for t in per_season}
+            out["tabs"] = [{"id": t, "name": name, "count": counts[t], **({"seasons": seasons_of[t]} if t in seasons_of else {})}
+                           for t, name in TABS if counts.get(t)]
+            out["seasons"] = seasons_of["episodes"]
         return out
 
 
