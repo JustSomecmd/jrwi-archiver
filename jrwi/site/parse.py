@@ -22,7 +22,7 @@ SameSite = Callable[[str], bool]
 
 # Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
 # it has saved, so fixes reach posts and comments that were archived before the update.
-PARSER_VERSION = 5
+PARSER_VERSION = 6
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
@@ -44,6 +44,9 @@ DATE_RE = re.compile(
 RELATIVE_RE = re.compile(r"\b(\d+)\s*(second|minute|hour|day|week|month|year)s?\s+ago\b", re.I)
 YT_EMBED_RE = re.compile(r"(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?v=)|youtu\.be/)([\w-]{11})")
 GDOC_RE = re.compile(r"https?://docs\.google\.com/(document|spreadsheets|presentation)/d/([\w-]{20,})")
+# A file kept on Google Drive: /file/d/<id>/view, open?id=<id>, uc?id=<id>
+DRIVE_RE = re.compile(r"https?://(?:drive|docs)\.google\.com/(?:file/d/|open\?(?:[^\s\"'#]*&)?id=|uc\?(?:[^\s\"'#]*&)?id=)([\w-]{20,})")
+DRIVE_FOLDER_RE = re.compile(r"https?://drive\.google\.com/drive/(?:u/\d+/)?folders/([\w-]{10,})")
 NOT_FILE_PATHS = (
     "/pricing", "/payments/", "/api/v1/media_catalog", "/load_more", "/sign_in", "/sign_up",
     "/sign_out", "/cart", "/products/", "/pages/", "/tags", "/comments", "/likes", "/reactions",
@@ -626,7 +629,12 @@ def extract_media(card, page_url: str, same_site: SameSite, post_id: int | None 
         if not FILENAME_TEXT_RE.match(text):
             continue
         found = find_url_near(t, card, page_url, same_site)
-        if found:
+        if found and (m := DRIVE_RE.search(found["url"])):
+            # A file name linking to Google Drive: saved from Drive below, under this name if Drive gives none
+            add("gdrive", "gdrive:" + m.group(1), file_id=m.group(1), label=text, url=found["url"])
+        elif found and GDOC_RE.search(found["url"]):
+            pass   # a Google doc, exported below
+        elif found:
             add("attachment", url_key(found["url"]) + "|" + text, filename=text, **found)
         else:
             unresolved.append(text)
@@ -650,6 +658,14 @@ def extract_media(card, page_url: str, same_site: SameSite, post_id: int | None 
                 if label.startswith("http") or not label:
                     label = ""
                 add("gdoc", "gdoc:" + m.group(2), doc_type=m.group(1), doc_id=m.group(2), label=label, url=t["href"])
+            m = DRIVE_RE.search(t["href"])
+            if m:
+                label = norm_space(t.get_text(" ", strip=True))
+                add("gdrive", "gdrive:" + m.group(1), file_id=m.group(1),
+                    label="" if label.startswith("http") else label, url=t["href"])
+            m = DRIVE_FOLDER_RE.search(t["href"])
+            if m:
+                add("gdrive_folder", "gdrive_folder:" + m.group(1), folder_id=m.group(1), url=t["href"])
     return items, unresolved
 
 

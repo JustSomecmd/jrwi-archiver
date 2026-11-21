@@ -242,7 +242,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             args.append(youtube_id)
         direction = "ASC" if order == "asc" else "DESC"
         if tab == "episodes":
-            order_by = f"episode {direction}, published {direction}, id {direction}"
+            order_by = f"COALESCE(season, 1) {direction}, episode {direction}, published {direction}, id {direction}"
         else:
             order_by = f"published {direction}, id {direction}"
         return f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY {order_by}", args
@@ -362,7 +362,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         p = db.post(post_id)
         if not p:
             raise HTTPException(404, "no such post")
-        return progress.set(p, body)
+        try:
+            return progress.set(p, body)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     @app.get("/api/events", dependencies=[Depends(api_auth)])
     def api_events(since: str | None = None):
@@ -697,6 +700,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         fields = {"show_override": form.get("show_override") or None, "tab_override": form.get("tab_override") or None}
         ep = (form.get("episode_override") or "").strip()
         fields["episode_override"] = int(ep) if ep.isdigit() else None
+        season = (form.get("season_override") or "").strip()
+        fields["season_override"] = int(season) if season.isdigit() else None
         db.update("posts", "id", post_id, fields)
         classify_all(db)
         reorganize(db, paths)

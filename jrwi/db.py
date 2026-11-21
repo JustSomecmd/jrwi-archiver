@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS posts (
     documents TEXT DEFAULT '[]', embeds TEXT DEFAULT '[]', media TEXT DEFAULT '{}',
     thumbnail TEXT, files TEXT DEFAULT '{}',
     show_id TEXT, tab TEXT, episode INTEGER, special INTEGER, pair_id INTEGER,
-    show_override TEXT, tab_override TEXT, episode_override INTEGER,
+    show_override TEXT, tab_override TEXT, episode_override INTEGER, season INTEGER, season_override INTEGER,
     status TEXT DEFAULT 'new', problems TEXT DEFAULT '[]', skipped TEXT DEFAULT '[]',
     first_seen TEXT, last_fetched TEXT, comments_fetched TEXT, refetch TEXT, sync TEXT
 );
@@ -87,7 +87,7 @@ class Db:
 
     def _migrate(self) -> None:
         """Add columns that newer versions use to databases made by older ones."""
-        wanted = {"posts": {"refetch": "TEXT", "sync": "TEXT"},
+        wanted = {"posts": {"refetch": "TEXT", "sync": "TEXT", "season": "INTEGER", "season_override": "INTEGER"},
                   "progress": {"timeline": "TEXT"},
                   "comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'", "author_color": "TEXT"}}
         for table, cols in wanted.items():

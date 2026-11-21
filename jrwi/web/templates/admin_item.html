@@ -8,7 +8,7 @@
 <form class="panel" method="post" action="/admin/items/{{ p.id }}">
   <h3>Placement</h3>
   <p class="muted small">Sorted automatically as <b>{{ p.show_id }}</b> / <b>{{ tab_name(p.tab or 'posts') }}</b>
-    {% if p.episode %}/ episode {{ p.episode }}{% endif %}. Choose something here to override it. Videos move in Jellyfin to match.</p>
+    {% if p.episode %}/ {% if p.season %}season {{ p.season }}, {% endif %}episode {{ p.episode }}{% endif %}. Choose something here to override it. Videos move in Jellyfin to match.</p>
   <label for="show">Show</label>
   <select id="show" name="show_override"><option value="">Automatic</option>
     {% for s in shows %}<option value="{{ s.id }}" {% if p.show_override == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select>
@@ -17,6 +17,8 @@
     {% for t, name in tabs %}<option value="{{ t }}" {% if p.tab_override == t %}selected{% endif %}>{{ name }}</option>{% endfor %}</select>
   <label for="ep">Episode number</label>
   <input id="ep" type="number" name="episode_override" value="{{ p.episode_override if p.episode_override is not none else '' }}" placeholder="Automatic">
+  <label for="season">Season</label>
+  <input id="season" type="number" name="season_override" value="{{ p.season_override if p.season_override is not none else '' }}" placeholder="Automatic">
   <p><button type="submit">Save</button></p>
 </form>
 <div class="panel">

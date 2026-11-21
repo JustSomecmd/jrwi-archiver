@@ -29,6 +29,8 @@ class Paths:
 SITE_BASE = os.environ.get("JRWI_SITE", "https://jrwishow.com").rstrip("/")
 MUX_BASE = os.environ.get("JRWI_MUX_BASE", "https://stream.mux.com").rstrip("/")
 YT_THUMBS = os.environ.get("JRWI_YT_THUMBS", "https://i.ytimg.com").rstrip("/")
+GDOCS_BASE = os.environ.get("JRWI_GDOCS_BASE", "https://docs.google.com").rstrip("/")
+DRIVE_DOWNLOAD = os.environ.get("JRWI_DRIVE_DOWNLOAD", "https://drive.usercontent.google.com/download")
 
 # Defaults for everything the admin page can change. Stored in the settings table.
 DEFAULTS: dict = {

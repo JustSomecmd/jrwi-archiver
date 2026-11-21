@@ -8,6 +8,8 @@ are converted with the item's sync offset (audio position = video position + off
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from ..db import Db, now
 from .serialize import Serializer
 
@@ -74,15 +76,37 @@ class Progress:
         return {"post_id": post_id, "position": round(max(0.0, position), 2), "duration": duration,
                 "finished": bool(row["finished"]), "updated_at": row["updated_at"]}
 
+    @staticmethod
+    def when(value) -> str | None:
+        """A time an app says progress was made, in UTC, no later than now. None when it didn't say."""
+        if not value:
+            return None
+        try:
+            t = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("updated_at isn't an ISO 8601 time") from None
+        if t.tzinfo is None:
+            raise ValueError("updated_at needs a UTC offset")
+        return min(t.astimezone(timezone.utc).isoformat(timespec="seconds"), now())
+
     def set(self, post: dict, body: dict) -> dict:
+        """Save progress. An app sending progress made offline gives updated_at, the time it was made; the archiver
+        then keeps whichever is newer, so a late save can't undo listening done since (contract v0.11)."""
         primary, members, video, audio = self._item(post)
         timeline = self._timeline(post["id"], video, audio)
+        made = self.when(body.get("updated_at"))
         ids = [m["id"] for m in members if m["id"] != primary["id"]]
         with self.db.lock:
+            if made:
+                marks = ",".join("?" * len(members))
+                newest = self.db.one(f"SELECT MAX(updated_at) AS t FROM progress WHERE post_id IN ({marks})",
+                                     [m["id"] for m in members])
+                if newest and newest["t"] and newest["t"] > made:
+                    return self.get(post)
             if ids:
                 self.db.x(f"DELETE FROM progress WHERE post_id IN ({','.join('?' * len(ids))})", ids)
             self.db.upsert("progress", "post_id", {
                 "post_id": primary["id"], "position": max(0.0, float(body.get("position") or 0)),
                 "duration": body.get("duration"), "finished": bool(body.get("finished")),
-                "timeline": timeline, "updated_at": now()})
+                "timeline": timeline, "updated_at": made or now()})
         return self.get(post)

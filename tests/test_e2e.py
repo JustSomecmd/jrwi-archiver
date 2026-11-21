@@ -30,7 +30,8 @@ TMP = Path(tempfile.mkdtemp(prefix="jrwi-test-"))
 os.environ.update(
     JRWI_DATA=str(TMP / "data"), JRWI_ARCHIVE=str(TMP / "archive"), JRWI_MEDIA=str(TMP / "media"),
     JRWI_SITE=f"http://127.0.0.1:{PORT}", JRWI_MUX_BASE=f"http://127.0.0.1:{PORT}/mux",
-    JRWI_YT_THUMBS=f"http://127.0.0.1:{PORT}/imgproxy/yt",
+    JRWI_YT_THUMBS=f"http://127.0.0.1:{PORT}/imgproxy/yt", JRWI_GDOCS_BASE=f"http://127.0.0.1:{PORT}/gdocs",
+    JRWI_DRIVE_DOWNLOAD=f"http://127.0.0.1:{PORT}/drive/download",
     JRWI_EMAIL="fan@example.com", JRWI_PASSWORD="hunter2",
 )
 
@@ -330,6 +331,24 @@ def test_reparse_fixes_old_archives(app, client):
     assert "attachments" not in (post["skipped"] or [])
 
 
+def test_google_drive_files(app, client):
+    db, archiver = app.state.db, app.state.archiver
+    assert "gdocs" in (db.post(290)["skipped"] or [])   # Google files are off in these tests until now
+    db.set_setting("google_docs", True)
+    try:
+        assert archiver.run_check()["result"] == "ok"
+    finally:
+        db.set_setting("google_docs", False)
+    post = db.post(290)
+    docs = {d["name"]: d for d in post["documents"]}
+    assert {"Map.pdf", "Big Map.pdf"} <= set(docs), docs
+    assert (archiver.paths.archive / docs["Big Map.pdf"]["url"]).read_bytes().startswith(b"%PDF")
+    assert docs["Map.pdf"]["source"].startswith("https://drive.google.com/file/d/")
+    assert not post["problems"] and "gdocs" not in (post["skipped"] or [])
+    shown = client.get("/api/posts/290").json()["documents"]
+    assert {d["name"] for d in shown} >= {"Map.pdf", "Big Map.pdf"}
+
+
 def test_download_a_post_again(app, client):
     archiver, db = app.state.archiver, app.state.db
     post = db.post(299)
@@ -343,3 +362,46 @@ def test_download_a_post_again(app, client):
     assert (archiver.paths.archive / rel).stat().st_mtime_ns != before   # deleted and downloaded again
     assert len(client.get("/api/items/299/comments").json()["items"]) == 3
     assert db.one("SELECT COUNT(*) AS n FROM events WHERE type='new_item'")["n"] == events_before
+
+
+def test_seasons_and_other_episode_formats(app):
+    """Titles carried over from Patreon number episodes differently and label versions "(Video)" and "(Audio)"."""
+    from jrwi import organize
+    db = app.state.db
+    rows = [
+        (9001, "videos", "Dropouts | Riptide Season 2 Episode 1 (Video)"),
+        (9002, "audio", "Dropouts | Riptide Season 2 Episode 1 (Audio)"),
+        (9003, "videos", "Fish and Chips | Riptide Episode 16"),
+        (9004, "videos", "Riptide Season 2 Trailer"),
+    ]
+    try:
+        for pid, kind, title in rows:
+            db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "path_kind": kind,
+                                      "title": title, "published": "2021-10-06T00:00:00+00:00", "status": "complete"})
+        organize.classify_all(db)
+        got = {p["id"]: p for p in db.q("SELECT * FROM posts WHERE id >= 9001")}
+        assert (got[9001]["tab"], got[9001]["season"], got[9001]["episode"]) == ("episodes", 2, 1)
+        assert got[9002]["pair_id"] == 9001                    # "(Video)" and "(Audio)" are versions of one episode
+        assert (got[9003]["tab"], got[9003]["season"], got[9003]["episode"]) == ("episodes", None, 16)
+        assert got[9004]["tab"] == "extras"                     # no episode number
+        rel, season, number = organize.jellyfin_target(db, got[9001])
+        assert (season, number) == (2, 1) and rel.startswith("Riptide/Season 02/Riptide - S02E01 - Dropouts [jrwi-9001]")
+        assert organize.jellyfin_target(db, got[9003])[1:] == (1, 16)
+    finally:
+        db.x("DELETE FROM posts WHERE id >= 9001")
+        organize.classify_all(db)
+
+
+def test_progress_made_offline_arrives_later(client):
+    """An app sends progress made offline with the time it was made; newer progress on the server wins."""
+    from datetime import datetime, timedelta, timezone
+    current = client.put("/api/progress/300", json={"position": 12}).json()
+    late = client.put("/api/progress/300", json={"position": 4, "updated_at": "2026-01-01T10:00:00Z"}).json()
+    assert late["position"] == 12 and late["updated_at"] == current["updated_at"]   # older: not kept
+    fresh = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+    kept = client.put("/api/progress/300", json={"position": 5, "updated_at": fresh}).json()
+    assert kept["position"] == 5
+    future = client.put("/api/progress/300", json={"position": 6, "updated_at": "2099-01-01T00:00:00+00:00"}).json()
+    assert future["position"] == 6 and future["updated_at"] < "2099"              # a clock that's ahead isn't trusted
+    assert client.put("/api/progress/300", json={"position": 1, "updated_at": "yesterday"}).status_code == 400
+    assert client.put("/api/progress/300", json={"position": 1, "updated_at": "2026-01-01T10:00:00"}).status_code == 400

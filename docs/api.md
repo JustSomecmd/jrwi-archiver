@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.10)
+# JRWI archiver API (contract v0.11)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.4.1.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.5.0.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -11,7 +11,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.8:** comment authors gain `color`. In the service since 0.3.4.
 - **v0.9:** progress for every post with a video or audio, with `position` in that post's own timeline (see Progress). Progress responses gain `post_id`. In the service since 0.4.0.
 - **v0.10:** `youtube_id` on `GET /api/items` finds the items that embed a YouTube video, and items gain `progress` (see Item). In the service since 0.4.1.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
+- **v0.11:** items gain `season`, and the `episodes` tab is ordered by season, then episode. `PUT /api/progress` takes `updated_at`, for progress sent later (see Progress). A section on downloading audio for offline listening. In the service since 0.5.0.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -24,12 +25,12 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.4.1"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.5.0"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, `other` last. `?include_empty=true` lists all of them. |
 | `GET /api/shows/{showId}` | One show, with `tabs` |
-| `GET /api/shows/{showId}/items?tab=episodes&order=desc` | Paged items in one tab. In `episodes`, items are ordered by episode number. |
+| `GET /api/shows/{showId}/items?tab=episodes&order=desc` | Paged items in one tab. In `episodes`, items are ordered by season, then episode number. |
 | `GET /api/items?q=&show=&tab=&kind=&youtube_id=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. `youtube_id` (v0.10) gives the items that embed that YouTube video (below). |
 | `GET /api/latest?limit=20` | Newest items, for a home screen |
 | `GET /api/items/{postId}` | Full item. Either post ID of a video/audio pair works. |
@@ -40,7 +41,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/audio/{postId}` | The audio file, with HTTP range support |
 | `GET /api/video/{postId}` | The video file, with HTTP range support. This is a fallback; Jellyfin is the main way to play video. |
 | `GET /api/progress/{postId}` | `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`, in the timeline of the post in the address (see Progress) |
-| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`. Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`. |
+| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`, plus `updated_at` for progress sent later (v0.11). Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`: what the archive holds after the save. |
 | `GET /api/events?since=<time>` | New items and failures since a time (default: the last 24 hours) |
 | `GET /api/problems` | Posts that couldn't be fully saved |
 | `GET /api/feed.xml?token=<key>` | Private podcast RSS of all audio |
@@ -58,6 +59,14 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **`finished`** is shared by both versions. `finished: true` is also how the apps record that the episode was watched through the video, so the podcast feed and the web app show it as played.
 - **Older saves:** progress saved before 0.4.0 (audio only, under the audio post) is read in the audio's timeline and moved to the item's record on the next save.
 - **Responses** include `post_id`, the post whose timeline `position` is in.
+- **Progress sent later (v0.11):** progress made offline, or held back for any reason, is sent with `updated_at`: when it was made, with a UTC offset. The archiver keeps whichever of the two is newer, so a late save can't undo listening or watching done since on another device or in the web app; when the archive's is newer, nothing changes and the response shows what it holds. A time later than the server's clock counts as now. Without `updated_at`, a save counts as made when it arrives, as before. A malformed time, or one without an offset, gets `400`.
+
+**Downloading for offline listening (v0.11):** what an app needs to keep an episode's audio on the device (decision 11).
+- **The file:** `GET /api/audio/{audio.post_id}` (the item's `audio.url`), with `?token=` or the header. Downloads can resume: the server takes `Range` requests and answers `206`.
+- **Checking it:** a whole download's `Content-Length` matches `audio.size`, and the response has `ETag`, `Last-Modified` and `Content-Type` (`audio.mime`). A different `audio.size` or `ETag` later means the archive downloaded the episode again, and the copy on the device can be replaced.
+- **Its name:** `Content-Disposition` gives the archived file's name, made from the post's title; apps can just as well name the file by post ID.
+- **Picture and text:** the item's `thumbnail`, `images`, `attachments` and `documents` are plain files under `/files/` that take the token the same way, and the item and comments JSON can be kept as they are.
+- **Progress:** saved on the device while offline, then sent with `updated_at` (above) once the archiver can be reached.
 
 ## Objects
 
@@ -95,7 +104,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 
 ```json
 {"id": 300, "title": "Through the Fire | Riptide #136", "date": "2026-11-07T00:00:00+00:00",
- "show": "riptide", "tab": "episodes", "kind": "episode", "episode": 136, "pinned": true,
+ "show": "riptide", "tab": "episodes", "kind": "episode", "season": 1, "episode": 136, "pinned": true,
  "thumbnail": "/files/posts/300/thumbnail.webp", "duration": 11695,
  "video": {"post_id": 300, "jellyfin_path": "/media/jrwi/Riptide/Season 01/Riptide - S01E136 - Through the Fire [jrwi-300].mp4",
            "url": "/api/video/300", "height": 1080, "size": 4123456789, "duration": 11712},
@@ -109,6 +118,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Fields**
 - **`id`:** the main post of the item. That's the video post when there is one, otherwise the audio post.
 - **`kind`:** one of `episode`, `video`, `audio`, `youtube`, `art` or `post`.
+- **`season` (v0.11):** the season of a numbered episode in the `episodes` tab: from the title or a tag, 1 when neither gives one. `null` outside the `episodes` tab. Seasons can each start again at episode 1, so apps show both, as the web app does with "S2 #1" for seasons after the first.
 - **`date`:** the site only shows a date, so the time is midnight UTC.
 
 **`video` takes one of two shapes, or is `null`:**
@@ -148,6 +158,7 @@ The list fields, plus:
 
 - **`body_html`:** cleaned of scripts, with images pointing at the archived copies.
 - **`attachments`, `documents` and `images`:** collected from every version of the item.
+- **`documents`:** linked Google Docs, saved as PDFs, and since 0.5.0 files shared from Google Drive, under the name Drive gives them.
 - **`versions` (fields beyond `post_id`, `title` and `url` since v0.7):** every post of the item, main post first, each with its own counts. `version` is `video` (members-only video), `audio`, `youtube`, or `null` for a post without either.
 
 ### Post (v0.7)

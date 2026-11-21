@@ -13,12 +13,12 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 
 from . import organize
-from .config import MUX_BASE, SITE_BASE, Paths
+from .config import DRIVE_DOWNLOAD, GDOCS_BASE, MUX_BASE, SITE_BASE, Paths
 from .db import Db, now
 from .site import parse as P
 from .site.client import (HTML_ACCEPT, TURBO_ACCEPT, Blocked, Client, LoginFailed, NotFound, SessionExpired,
@@ -604,7 +604,7 @@ class Archiver:
                         continue
                     fmt = {"document": ("export?format=pdf", ".pdf"), "spreadsheets": ("export?format=xlsx", ".xlsx"),
                            "presentation": ("export/pdf", ".pdf")}[it["doc_type"]]
-                    export = f"https://docs.google.com/{it['doc_type']}/d/{it['doc_id']}/{fmt[0]}"
+                    export = f"{GDOCS_BASE}/{it['doc_type']}/d/{it['doc_id']}/{fmt[0]}"
                     label = it.get("label") or f"Google doc {it['doc_id'][:10]}"
                     name = P.safe_filename(f"{label} [{it['doc_id'][:8]}]", 110, keep_ext=False) + fmt[1]
                     try:
@@ -617,6 +617,21 @@ class Archiver:
                             notes.append(f"linked Google Doc not saved ({e}): {it['url']}")
                         else:
                             raise
+                elif it["kind"] == "gdrive":
+                    if have(key):
+                        continue
+                    try:
+                        p = self.drive_file(downloader, it, final)
+                        files[key] = self.rel(p)
+                        documents.append({"name": p.name, "url": self.rel(p), "source": it["url"]})
+                    except DownloadError as e:
+                        if "HTTP 4" in str(e) or "web page instead" in str(e):
+                            notes.append(f"linked Google Drive file not saved ({e}): {it['url']}")
+                        else:
+                            raise
+                elif it["kind"] == "gdrive_folder":
+                    notes.append(f"linked Google Drive folder not saved (folders can't be downloaded as a whole; "
+                                 f"links to the files in it are saved): {it['url']}")
             except DownloadError as e:
                 if self.stop_event.is_set():
                     raise
@@ -650,7 +665,7 @@ class Archiver:
         k = it["kind"]
         if k in ("image", "thumbnail"):
             return "images"
-        if k == "gdoc":
+        if k in ("gdoc", "gdrive", "gdrive_folder"):
             return "gdocs"
         if k in ("youtube", "embed"):
             return "embeds"
@@ -1008,6 +1023,33 @@ class Archiver:
             (self.paths.archive / old).unlink(missing_ok=True)
         return self.rel(dest)
 
+    def drive_file(self, downloader: Downloader, it: dict, referer: str) -> Path:
+        """A file someone shared from Google Drive. Large files get a page asking to confirm the download, as Drive
+        can't scan them for viruses; its form has what's needed to go ahead."""
+        dest = self.paths.archive / "google-docs" / "drive" / it["file_id"]
+        url = f"{DRIVE_DOWNLOAD}?{urlencode({'id': it['file_id'], 'export': 'download'})}"
+        try:
+            p = downloader.file(url, dest, None, referer=referer, reject_html=True, tries=2)
+        except DownloadError as e:
+            if "web page instead" not in str(e):
+                raise
+            try:
+                r = self.client.request("GET", url, headers={"Referer": referer}, pace=False, tries=2)
+            except Exception:
+                raise e from None
+            form = P.soup_of(r.text).find("form", action=True)
+            fields = [(i["name"], i.get("value", "")) for i in form.find_all("input", attrs={"name": True})] if form else []
+            if not form or not any(k == "confirm" for k, _ in fields):
+                raise
+            p = downloader.file(f"{urljoin(r.url, form['action'])}?{urlencode(fields)}", dest, None, referer=url,
+                                reject_html=True, tries=2)
+        # Drive names the file; when it doesn't, use the name the post showed for it
+        label = P.safe_filename(it.get("label") or "", 110)
+        if p.name == "download" or not p.suffix:
+            better = p.with_name(label if P.ext_of(label) else f"{label or 'Drive file ' + it['file_id'][:8]}.bin")
+            p = p.rename(better)
+        return p
+
     def missing_classes(self, post: dict, items: list[dict], wanted: dict) -> set[str]:
         """Kinds of file that a saved page lists but that were never downloaded. Follows the same rules as
         archive_post for what counts as already saved."""
@@ -1033,7 +1075,7 @@ class Archiver:
             if cls and not wanted.get(cls, True):
                 continue
             kind = it["kind"]
-            if kind in ("image", "thumbnail", "attachment", "gdoc"):
+            if kind in ("image", "thumbnail", "attachment", "gdoc", "gdrive"):
                 gone = not have(it["key"])
             elif kind == "download":
                 gone = not have_video() if cls == "video" else not have(it["key"])

@@ -130,7 +130,11 @@ P1 = [
 P2 = [
     add(290, "/supporters/posts/riptide-135-art-scene", "Riptide #135 | Art Scene", "Oct 18, 2026",
         f'<div class="gallery"><a href="{B}/imgproxy/art1/a.webp"><img src="{B}/imgproxy/s2/b.webp"></a>'
-        f'<a href="{B}/imgproxy/art2/b.webp"><img src="{B}/imgproxy/s3/c.webp"></a></div>', "", tags="tag_103 tag_101"),
+        f'<a href="{B}/imgproxy/art2/b.webp"><img src="{B}/imgproxy/s3/c.webp"></a></div>',
+        # Files shared from Google Drive: a small one, and one large enough that Drive asks to confirm
+        '<p>Maps: <a href="https://drive.google.com/file/d/1SmallMapSmallMapSmallMap0001/view?usp=sharing">Map.pdf</a> '
+        'and <a href="https://drive.google.com/open?id=1BigMapBigMapBigMapBigMap00002">the big one</a>.</p>',
+        tags="tag_103 tag_101"),
     add(289, "/supporters/video_embeds/blue-jay-riptide-135", "Blue Jay | Riptide #135", "Oct 17, 2026",
         '<div class="embed-player" data-controller="youtube-player" data-youtube-player-video-id-value="CzZ13VPQOcw"></div>',
         "<p>On YouTube.</p>", access="public", tags="tag_101"),
@@ -324,6 +328,21 @@ class H(BaseHTTPRequestHandler):
             if not li:
                 return self.send(401, '{"error": "sign in"}', "application/json")
             return self.send(200, '{"url": "' + B + '/signed/Zombie%20Character%20Sheets.pdf?sig=abc"}', "application/json")
+        if p.startswith("/gdocs/") and p.endswith("/export"):
+            return self.send(200, (MEDIA / "sheet.pdf").read_bytes(), "application/pdf")
+        if p == "/drive/download":
+            fid = q.get("id", [""])[0]
+            if fid.startswith("1Big") and q.get("confirm", [""])[0] != "t":
+                return self.send(200, f'<html><body><p>Google Drive can\'t scan this file for viruses.</p>'
+                                      f'<form id="download-form" action="{B}/drive/download" method="get">'
+                                      f'<input type="submit" value="Download anyway"><input type="hidden" name="id" value="{fid}">'
+                                      f'<input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t">'
+                                      f'<input type="hidden" name="uuid" value="u-123"></form></body></html>')
+            name = {"1Small": "Map.pdf", "1BigMa": "Big Map.pdf"}.get(fid[:6])
+            if not name:
+                return self.send(404, "<html>Not found</html>")
+            return self.send(200, (MEDIA / "sheet.pdf").read_bytes(), "application/pdf",
+                             {"Content-Disposition": f'attachment; filename="{name}"'})
         if p.startswith("/signed/"):
             return self.send(200, (MEDIA / "sheet.pdf").read_bytes(), "application/pdf")
         if p.startswith("/imgproxy/"):

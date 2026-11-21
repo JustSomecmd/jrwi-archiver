@@ -134,6 +134,7 @@ class Serializer:
         return {
             "id": primary["id"], "title": primary["title"], "date": iso(primary["published"]),
             "show": primary["show_id"] or "other", "tab": tab, "kind": kind, "episode": primary["episode"],
+            "season": (primary.get("season") or 1) if tab == "episodes" and primary["episode"] else None,
             "pinned": bool(primary["pinned"]), "thumbnail": files_url(thumb),
             "duration": max(durations) if durations else None, "video": video, "audio": audio,
             "sync": self.sync_of(primary, video, audio),

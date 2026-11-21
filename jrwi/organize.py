@@ -43,8 +43,17 @@ TABS = [
 ]
 TAB_NAMES = dict(TABS)
 MEDIA_KINDS = {"videos", "audio", "video_embeds"}
-AUDIO_ONLY_RE = re.compile(r"[\(\[]\s*audio\s*only\s*[\)\]]|\baudio\s*only\b", re.I)
-EPISODE_RE = re.compile(r"#\s*(\d{1,4})\b")
+# "(AUDIO ONLY)", "(Audio Only)", "(Audio)", "[Audio]"
+AUDIO_ONLY_RE = re.compile(r"[\(\[]\s*audio(?:\s*only)?\s*[\)\]]|\baudio\s*only\b", re.I)
+# Labels that say which version a post is, left out when matching versions: the above plus "(Video)"
+VERSION_LABEL_RE = re.compile(r"[\(\[]\s*(?:audio(?:\s*only)?|video)\s*[\)\]]|\baudio\s*only\b", re.I)
+# How titles number episodes: "Riptide #136", "Season 2 Episode 1", "S2E1", "S2 #3", "Episode 12", "Ep. 12"
+SEASON_EPISODE_RES = [
+    re.compile(r"\bS(?:eason)?\s*(\d{1,2})\s*[,:|-]?\s*E(?:p(?:isode)?)?\.?\s*(\d{1,4})\b", re.I),
+    re.compile(r"\bS(?:eason)?\s*(\d{1,2})\s*[,:|-]?\s*#\s*(\d{1,4})\b", re.I),
+]
+EPISODE_RES = [re.compile(r"#\s*(\d{1,4})\b"), re.compile(r"\b(?:Episode|Ep)\.?\s*(\d{1,4})\b", re.I)]
+SEASON_RE = re.compile(r"\bSeason\s*(\d{1,2})\b|\bS(\d{1,2})\b", re.I)
 
 
 def norm(s: str) -> str:
@@ -134,6 +143,30 @@ def match_show(title: str, tag_names: list[str], matchers: list[tuple[str, str]]
     return OTHER[0]
 
 
+def episode_parts(title: str, tag_names: list[str] = ()) -> tuple[int | None, int | None]:
+    """(season, episode) from a title. The season can also come from a tag such as "Prime Defenders Season 2"."""
+    title = title or ""
+    for rx in SEASON_EPISODE_RES:
+        m = rx.search(title)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    episode = next((int(m.group(1)) for rx in EPISODE_RES if (m := rx.search(title))), None)
+    if episode is None:
+        return None, None
+    m = SEASON_RE.search(title)
+    if m:
+        return int(m.group(1) or m.group(2)), episode
+    for tag in tag_names:
+        m = re.search(r"\bseason\s*(\d{1,2})\b", tag or "", re.I)
+        if m:
+            return int(m.group(1)), episode
+    return None, episode
+
+
+def has_episode_marker(text: str) -> bool:
+    return episode_parts(text)[1] is not None
+
+
 def pick_tab(post: dict, show_id: str, tag_names: list[str]) -> str:
     t = norm(post["title"])
     tags = [norm(x) for x in tag_names]
@@ -142,7 +175,7 @@ def pick_tab(post: dict, show_id: str, tag_names: list[str]) -> str:
     if "art scene" in t or "art" in tags or re.search(r"\bart\b", t) and post["path_kind"] not in MEDIA_KINDS:
         return "art"
     if post["path_kind"] in MEDIA_KINDS:
-        if show_id != OTHER[0] and EPISODE_RE.search(post["title"]) and not any("extra" in x for x in tags):
+        if show_id != OTHER[0] and has_episode_marker(post["title"]) and not any("extra" in x for x in tags):
             return "episodes"
         return "extras"
     if post["path_kind"] == "posts" and not (post.get("body_text") or "").strip() and post.get("images"):
@@ -151,12 +184,12 @@ def pick_tab(post: dict, show_id: str, tag_names: list[str]) -> str:
 
 
 def episode_number(title: str) -> int | None:
-    m = EPISODE_RE.search(title or "")
-    return int(m.group(1)) if m else None
+    return episode_parts(title)[1]
 
 
 def base_title(title: str) -> str:
-    return norm(AUDIO_ONLY_RE.sub(" ", title or ""))
+    """The title without its version label, for matching versions: "JRWI" in front of a show name is left out too."""
+    return " ".join(w for w in norm(VERSION_LABEL_RE.sub(" ", title or "")).split() if w != "jrwi")
 
 
 def is_audio_post(p: dict) -> bool:
@@ -168,14 +201,18 @@ def classify_all(db: Db) -> None:
     matchers = show_matchers(db)
     tag_names = {t["id"]: t["name"] for t in db.q("SELECT id, name FROM tags")}
     posts = db.q("SELECT id, title, path_kind, tag_ids, body_text, images, published, show_override, "
-                 "tab_override, episode_override, pair_id, show_id, tab, episode FROM posts")
+                 "tab_override, episode_override, season_override, pair_id, show_id, tab, episode, season FROM posts")
     for p in posts:
         names = [tag_names.get(str(i), "") for i in (p["tag_ids"] or [])]
         show = p["show_override"] or match_show(p["title"], names, matchers)
         tab = p["tab_override"] or pick_tab(p, show, names)
-        ep = p["episode_override"] if p["episode_override"] is not None else episode_number(p["title"])
-        if (show, tab, ep) != (p["show_id"], p["tab"], p["episode"]):
-            db.update("posts", "id", p["id"], {"show_id": show, "tab": tab, "episode": ep})
+        season, ep = episode_parts(p["title"], names)
+        if p["episode_override"] is not None:
+            ep = p["episode_override"]
+        if p["season_override"] is not None:
+            season = p["season_override"]
+        if (show, tab, ep, season) != (p["show_id"], p["tab"], p["episode"], p["season"]):
+            db.update("posts", "id", p["id"], {"show_id": show, "tab": tab, "episode": ep, "season": season})
 
     # Group the versions of one episode: members-only video, YouTube embed, audio only
     groups: dict[str, list[dict]] = {}
@@ -210,12 +247,12 @@ def _close_in_time(a: str | None, b: str | None, days: int = 21) -> bool:
 
 def episode_title(title: str, show_name: str, aliases: list[str], tab: str = "episodes") -> str:
     """'Through the Fire | Riptide #136' -> 'Through the Fire'. Specials keep their whole title."""
-    clean = AUDIO_ONLY_RE.sub(" ", title or "")
+    clean = VERSION_LABEL_RE.sub(" ", title or "")
     if tab != "episodes":
         return re.sub(r"\s+", " ", clean).strip() or title
     parts = [x.strip() for x in clean.split("|")]
     names = [norm(show_name), *[norm(a) for a in aliases]]
-    keep = [x for x in parts if not (EPISODE_RE.search(x) and any(n and n in norm(x) for n in names))]
+    keep = [x for x in parts if not (has_episode_marker(x) and any(n and n in norm(x) for n in names))]
     out = " | ".join(keep) if keep else clean
     out = out.strip().strip('"“”\'').strip()
     return re.sub(r"\s+", " ", out) or title
@@ -226,7 +263,7 @@ def jellyfin_target(db: Db, post: dict) -> tuple[str, int, int]:
     show = db.one("SELECT * FROM shows WHERE id=?", (post["show_id"] or "other",)) or {"name": "Other", "aliases": []}
     show_name = safe_filename(show["name"] if show["id"] != "other" else "Just Roll With It - Other", 80, keep_ext=False)
     if post["tab"] == "episodes" and post["episode"]:
-        season, number = 1, int(post["episode"])
+        season, number = int(post.get("season") or 1), int(post["episode"])
     else:
         season = 0
         number = post.get("special")
