@@ -244,6 +244,24 @@ def to_jpeg(src: Path, dest: Path) -> bool:
         return False
 
 
+def to_poster(src: Path, dest: Path, width: int = 1000, height: int = 1500) -> bool:
+    """A 2:3 JPEG poster from a picture of any shape: the whole picture, centred on its own average colour."""
+    exe = ffmpeg_exe()
+    if not exe or not src.exists():
+        return False
+    try:
+        avg = subprocess.run([exe, "-loglevel", "error", "-i", str(src), "-frames:v", "1", "-vf", "scale=1:1:flags=area",
+                              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True, timeout=60).stdout
+        colour = "0x" + (avg[:3].hex() if len(avg) >= 3 else "111320")
+        fit = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+               f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={colour}")
+        subprocess.run([exe, "-loglevel", "error", "-y", "-i", str(src), "-frames:v", "1", "-vf", fit, "-q:v", "3",
+                        str(dest)], check=True, timeout=60)
+        return dest.exists()
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def human_bytes(n: float | None) -> str:
     n = float(n or 0)
     for unit in ("B", "KB", "MB", "GB"):

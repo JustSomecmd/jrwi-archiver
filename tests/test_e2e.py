@@ -3,6 +3,7 @@
 Needs ffmpeg for the test media:  sh tests/make_media.sh && python -m pytest tests
 """
 
+import json
 import os
 import socket
 import subprocess
@@ -144,6 +145,33 @@ def test_jellyfin_layout():
     assert any(media.glob("Riptide/Season 00/*[[]jrwi-297[]].mp4"))
 
 
+def test_site_picture_is_not_show_art(app, client):
+    """Show pages without art of their own carry the site-wide share picture. That isn't a show's art."""
+    shows = {s["id"]: s for s in client.get("/api/shows?include_empty=true").json()}
+    assert shows["riptide"]["poster"] and shows["riptide"]["banner"]
+    for sid in ("unwitness-protection-program", "miller-troop-family-vacation"):
+        assert shows[sid]["poster"] is None and shows[sid]["banner"] is None, sid
+    db, archiver = app.state.db, app.state.archiver
+    assert len(db.setting("shared_show_art")) >= 2   # remembered, so a page saved again can't bring it back
+    # Without art of its own, a show's Jellyfin poster is its newest thumbnail, shown whole on a 2:3 poster
+    from jrwi import organize
+    folder = Path(os.environ["JRWI_MEDIA"]) / "Riptide"
+    own = db.one("SELECT poster, banner FROM shows WHERE id='riptide'")
+    db.update("shows", "id", "riptide", {"poster": None, "banner": None})
+    try:
+        organize.refresh_jellyfin(db, archiver.paths)
+        made = json.loads((folder / ".jrwi-art.json").read_text())
+        assert made["poster.jpg"].startswith("fit:") and made["fanart.jpg"] == made["poster.jpg"].replace("fit:", "own:")
+        size = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                               str(folder / "poster.jpg")], capture_output=True, text=True).stdout.strip()
+        assert size == "1000,1500"
+    finally:
+        db.update("shows", "id", "riptide", own)
+    organize.refresh_jellyfin(db, archiver.paths)
+    made = json.loads((folder / ".jrwi-art.json").read_text())
+    assert made["poster.jpg"] == "own:" + own["poster"] and made["fanart.jpg"] == "own:" + own["banner"]
+
+
 def test_post_with_attachment_and_comments(client):
     item = client.get("/api/items/299").json()
     assert [a["name"] for a in item["attachments"]] == ["Zombie Character Sheets.pdf"]
@@ -225,6 +253,21 @@ def test_progress_is_shared_between_video_and_audio(app, client):
     web.post("/login", data={"password": "test-password"})
     page = web.get("/items/300").text
     assert 'data-progress="300"' in page and 'data-start="9.0"' in page
+
+
+def test_youtube_lookup_and_progress_in_lists(client):
+    """Contract v0.10: find an item by its YouTube ID, and see progress in lists without asking per item."""
+    found = client.get("/api/items?youtube_id=CzZ13VPQOcw").json()
+    assert [i["id"] for i in found["items"]] == [289] and found["items"][0]["video"]["youtube_id"] == "CzZ13VPQOcw"
+    assert client.get("/api/items?youtube_id=nothing123").json()["total"] == 0
+    assert [p["id"] for p in client.get("/api/posts?youtube_id=CzZ13VPQOcw").json()["items"]] == [289]
+    eps = {i["episode"]: i for i in client.get("/api/shows/riptide/items?tab=episodes").json()["items"]}
+    assert eps[136]["progress"]["post_id"] == 300 and eps[136]["progress"]["position"] == 9.0
+    assert eps[135]["progress"] is None   # never played
+    assert client.get("/api/items/298").json()["progress"]["position"] == 9.0   # the item's main post's timeline
+    latest = {i["id"]: i for i in client.get("/api/latest").json()}
+    assert latest[300]["progress"]["position"] == 9.0
+    assert "progress" not in client.get("/api/posts/300").json()   # single posts: ask /api/progress
 
 
 def test_locked_hidden_and_auth(app, client):

@@ -144,6 +144,7 @@ class Archiver:
             # those show up straight away instead of after a long archive
             if s["public_pages"]:
                 self.archive_pages(feed_soup)
+            organize.drop_shared_show_art(self.db)
             organize.classify_all(self.db)
             archived = self.archive_posts()
             if s["comments"]:
@@ -819,6 +820,12 @@ class Archiver:
             src = urljoin(self.client.abs("/supporters"), header.find("img", src=True)["src"])
             logo = self.rel(site_dir / "assets" / asset_name(src))
         self.db.set_setting("site_logo", logo)
+        # The site's own share picture and logo aren't any show's art, even when a show page carries them
+        site_pics = [u for u in (P.og_image(feed_soup, self.client.abs("/supporters")),
+                                 logo and src) if u]
+        if site_pics:
+            known = set(self.db.setting("shared_show_art") or [])
+            self.db.set_setting("shared_show_art", sorted(known | {asset_name(u) for u in site_pics}))
 
         links = P.nav_page_links(feed_soup, self.client.abs("/supporters"), self.same_site)
         shows = {s["page_url"].rstrip("/").rsplit("/", 1)[-1]: s for s in self.db.q("SELECT * FROM shows")
@@ -863,14 +870,15 @@ class Archiver:
             show = shows[key]
             desc = soup.find("meta", attrs={"property": "og:description"}) or soup.find("meta", attrs={"name": "description"})
             poster_url = P.og_image(soup, final)
+            shared = set(self.db.setting("shared_show_art") or [])
             fields = {}
             if desc and desc.get("content"):
                 fields["description"] = P.norm_space(desc["content"])
-            if poster_url:
+            if poster_url and asset_name(poster_url) not in shared:
                 local = self.save_asset(poster_url, self.paths.archive / "shows" / show["id"])
                 if local:
                     fields["poster"] = local
-            imgs = P.page_images(main, final)
+            imgs = [i for i in P.page_images(main, final) if asset_name(i) not in shared]
             if imgs:
                 local = mapping.get(imgs[0]) or self.save_asset(imgs[0], self.paths.archive / "shows" / show["id"])
                 if local:
@@ -971,6 +979,7 @@ class Archiver:
                     self.store_site_page(row["path"], self.client.abs(row["path"]), read_gz(f), shows,
                                          fetched=row["fetched"])
                     pages += 1
+            organize.drop_shared_show_art(self.db)
         organize.classify_all(self.db)
         organize.reorganize(self.db, self.paths)
         organize.refresh_jellyfin(self.db, self.paths)

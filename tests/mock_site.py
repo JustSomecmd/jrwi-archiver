@@ -309,10 +309,13 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/pages/"):
             slug = p.split("/")[2]
             name = dict(SHOWS).get(slug, slug.replace("-", " ").title())
-            head = (f'<meta property="og:title" content="{name}"><meta property="og:image" content="{B}/imgproxy/poster-{slug}/p.webp">'
+            # Only Riptide's page has its own art; the others carry the site-wide share picture and logo
+            own = slug == "riptide"
+            poster = f"{B}/imgproxy/poster-{slug}/p.webp" if own else f"{B}/imgproxy/share/site.webp"
+            banner = f"{B}/imgproxy/banner-{slug}/b.webp" if own else f"{B}/imgproxy/logo-big/logo.webp"
+            head = (f'<meta property="og:title" content="{name}"><meta property="og:image" content="{poster}">'
                     f'<meta property="og:description" content="All about {name}.">')
-            return self.send(200, page(f'<h1>{name}</h1><img src="{B}/imgproxy/banner-{slug}/b.webp"><p>Page text for {name}.</p>',
-                                       li, head))
+            return self.send(200, page(f'<h1>{name}</h1><img src="{banner}"><p>Page text for {name}.</p>', li, head))
         if p == "/supporters/perks":
             return self.send(200, page('<h1>Perks</h1><a href="https://jrwishow.com/supporters/podcast/abc/rss">Private RSS</a>', li))
         if p == "/supporters/pricing":

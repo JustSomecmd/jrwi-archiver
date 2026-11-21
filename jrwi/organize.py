@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ from xml.sax.saxutils import escape
 
 from .config import Paths
 from .db import Db
-from .site.download import glob_escape, to_jpeg
+from .site.download import glob_escape, to_jpeg, to_poster
 from .site.parse import safe_filename, slugify
 
 log = logging.getLogger("jrwi.organize")
@@ -74,6 +75,40 @@ def merge_show_menu(db: Db, menu: list[dict]) -> None:
             row["aliases"] = []
         db.upsert("shows", "id", row)
     db.upsert("shows", "id", {"id": OTHER[0], "name": OTHER[1], "sort": 999})
+
+
+def shared_show_art(db: Db) -> set[str]:
+    """File names of pictures that several shows' pages carry, such as the site-wide share picture. They aren't
+    any show's own art. Remembered, so a page saved again later can't bring one back."""
+    known = set(db.setting("shared_show_art") or [])
+    seen: dict[str, set[str]] = {}
+    for s in db.q("SELECT id, poster, banner FROM shows"):
+        for rel in (s["poster"], s["banner"]):
+            if rel:
+                seen.setdefault(Path(rel).name, set()).add(s["id"])
+    shared = known | {name for name, ids in seen.items() if len(ids) > 1}
+    if shared != known:
+        db.set_setting("shared_show_art", sorted(shared))
+    return shared
+
+
+def drop_shared_show_art(db: Db) -> int:
+    """Forget show posters and banners that are really the site's own picture. Returns how many were dropped."""
+    shared = shared_show_art(db)
+    dropped = 0
+    for s in db.q("SELECT id, poster, banner FROM shows"):
+        fields = {k: None for k in ("poster", "banner") if s[k] and Path(s[k]).name in shared}
+        if fields:
+            db.update("shows", "id", s["id"], fields)
+            dropped += len(fields)
+    return dropped
+
+
+def newest_thumbnail(db: Db, show_id: str) -> str | None:
+    """The newest archived thumbnail of a show: its picture until the site gives it art of its own."""
+    row = db.one("SELECT thumbnail FROM posts WHERE show_id=? AND thumbnail IS NOT NULL "
+                 "AND status IN ('complete', 'partial') ORDER BY published DESC, id DESC LIMIT 1", (show_id,))
+    return row["thumbnail"] if row else None
 
 
 def show_matchers(db: Db) -> list[tuple[str, str]]:
@@ -279,14 +314,29 @@ def write_show_nfo(db: Db, paths: Paths, show_id: str | None, folder: Path) -> N
     )
     if not nfo.exists() or nfo.read_text(encoding="utf-8") != xml:
         nfo.write_text(xml, encoding="utf-8")
-    for kind in ("poster", "banner"):
-        rel = show.get(kind)
-        if not rel:
+    # Show art: the show's own, or its newest thumbnail (fitted into a poster) until it has some. A small record
+    # of where each picture came from lets a better one replace it later.
+    record = folder / ".jrwi-art.json"
+    try:
+        made = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        made = {}
+    stand_in = newest_thumbnail(db, show["id"])
+    wanted = {"poster.jpg": ("own", show.get("poster")) if show.get("poster") else ("fit", stand_in),
+              "fanart.jpg": ("own", show.get("banner") or stand_in)}
+    changed = False
+    for name, (how, rel) in wanted.items():
+        dest = folder / name
+        key = f"{how}:{rel}" if rel else None
+        if not key or not (paths.archive / rel).exists():
             continue
-        src = paths.archive / rel
-        dest = folder / f"{kind if kind == 'poster' else 'fanart'}.jpg"
-        if src.exists() and not dest.exists():
-            to_jpeg(src, dest)
+        if made.get(name) == key and dest.exists():
+            continue
+        if (to_poster if how == "fit" else to_jpeg)(paths.archive / rel, dest):
+            made[name] = key
+            changed = True
+    if changed:
+        record.write_text(json.dumps(made), encoding="utf-8")
 
 
 def reorganize(db: Db, paths: Paths) -> int:

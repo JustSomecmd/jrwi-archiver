@@ -25,7 +25,7 @@ from .. import NAME, VERSION
 from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
 from ..db import Db
-from ..organize import TABS, classify_all, reorganize
+from ..organize import TABS, classify_all, drop_shared_show_art, newest_thumbnail, reorganize
 from ..scheduler import Scheduler
 from .progress import Progress
 from .serialize import Serializer, clean_html, files_url, iso, safe_join, tab_name
@@ -115,6 +115,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     if env_pw and not db.setting("web_password_hash"):
         db.set_setting("web_password_hash", hash_password(env_pw))
 
+    drop_shared_show_art(db)   # show art that was really the site's own picture, from before 0.4.1
     archiver = Archiver(db, paths)
     scheduler = Scheduler(archiver, db)
     ser = Serializer(db, paths)
@@ -200,6 +201,13 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             "disk": scheduler.disk(),
         }
 
+    def item_out(primary: dict, full: bool = False) -> dict:
+        """An item with its progress, in its main post's timeline (contract v0.10)."""
+        members = ser.members(primary)
+        out = (ser.full if full else ser.summary)(primary, members)
+        out["progress"] = progress.of_item(primary, members, out["video"], out["audio"])
+        return out
+
     def paged(rows_sql: str, args: list, page: int, page_size: int, one=None) -> dict:
         page, page_size = max(1, page), max(1, min(page_size, 200))
         total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
@@ -207,7 +215,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return {"items": [(one or ser.summary)(r) for r in rows], "page": page, "page_size": page_size, "total": total}
 
     def item_query(show=None, tab=None, kind=None, q=None, order="desc", include_locked=False,
-                   separate=False) -> tuple[str, list]:
+                   separate=False, youtube_id=None) -> tuple[str, list]:
         """Items group an episode's versions under its main post. separate=True lists every post on its own."""
         where, args = ([] if separate else ["pair_id IS NULL"]) + ["status != 'gone'"], []
         if not include_locked:
@@ -226,6 +234,12 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if q:
             where.append("(title LIKE ? OR body_text LIKE ?)")
             args += [f"%{q}%", f"%{q}%"]
+        if youtube_id:
+            # Items with a post (any version) that embeds this YouTube video
+            group = "e.id" if separate else "COALESCE(e.pair_id, e.id)"
+            where.append(f"id IN (SELECT {group} FROM posts e, json_each(e.embeds) j "
+                         "WHERE json_extract(j.value, '$.youtube_id') = ?)")
+            args.append(youtube_id)
         direction = "ASC" if order == "asc" else "DESC"
         if tab == "episodes":
             order_by = f"episode {direction}, published {direction}, id {direction}"
@@ -263,18 +277,20 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     def api_show_items(show_id: str, tab: str | None = None, order: str = "desc", page: int = 1, page_size: int = 50,
                        include_locked: bool = False):
         sql, args = item_query(show=show_id, tab=tab, order=order, include_locked=include_locked)
-        return paged(sql, args, page, page_size)
+        return paged(sql, args, page, page_size, one=item_out)
 
     @app.get("/api/items", dependencies=[Depends(api_auth)])
     def api_items(q: str | None = None, show: str | None = None, tab: str | None = None, kind: str | None = None,
-                  order: str = "desc", page: int = 1, page_size: int = 50, include_locked: bool = False):
-        sql, args = item_query(show=show, tab=tab, kind=kind, q=q, order=order, include_locked=include_locked)
-        return paged(sql, args, page, page_size)
+                  order: str = "desc", page: int = 1, page_size: int = 50, include_locked: bool = False,
+                  youtube_id: str | None = None):
+        sql, args = item_query(show=show, tab=tab, kind=kind, q=q, order=order, include_locked=include_locked,
+                               youtube_id=youtube_id)
+        return paged(sql, args, page, page_size, one=item_out)
 
     @app.get("/api/latest", dependencies=[Depends(api_auth)])
     def api_latest(limit: int = 20):
         sql, args = item_query()
-        return [ser.summary(r) for r in db.q(f"{sql} LIMIT ?", args + [max(1, min(limit, 100))])]
+        return [item_out(r) for r in db.q(f"{sql} LIMIT ?", args + [max(1, min(limit, 100))])]
 
     def get_primary(post_id: int) -> dict:
         p = ser.primary_of(post_id)
@@ -284,7 +300,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/api/items/{post_id}", dependencies=[Depends(api_auth)])
     def api_item(post_id: int):
-        return ser.full(get_primary(post_id))
+        return item_out(get_primary(post_id), full=True)
 
     @app.get("/api/items/{post_id}/comments", dependencies=[Depends(api_auth)])
     def api_comments(post_id: int, page: int = 1, page_size: int = 50):
@@ -299,8 +315,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/api/posts", dependencies=[Depends(api_auth)])
     def api_posts(q: str | None = None, show: str | None = None, tab: str | None = None, order: str = "desc",
-                  page: int = 1, page_size: int = 50, include_locked: bool = False):
-        sql, args = item_query(show=show, tab=tab, q=q, order=order, include_locked=include_locked, separate=True)
+                  page: int = 1, page_size: int = 50, include_locked: bool = False, youtube_id: str | None = None):
+        sql, args = item_query(show=show, tab=tab, q=q, order=order, include_locked=include_locked, separate=True,
+                               youtube_id=youtube_id)
         return paged(sql, args, page, page_size, ser.post_summary)
 
     @app.get("/api/posts/{post_id}", dependencies=[Depends(api_auth)])
@@ -483,11 +500,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         shows = [ser.show(s, separate=True) for s in db.q("SELECT * FROM shows ORDER BY sort, name")]
         for s in shows:
             # Until the show's own art is saved, its newest thumbnail stands in
-            s["tile"] = s["banner"] or s["poster"]
-            if not s["tile"]:
-                row = db.one("SELECT thumbnail FROM posts WHERE show_id=? AND thumbnail IS NOT NULL "
-                             "AND status IN ('complete', 'partial') ORDER BY published DESC LIMIT 1", (s["id"],))
-                s["tile"] = files_url(row["thumbnail"]) if row else None
+            s["tile"] = s["banner"] or s["poster"] or files_url(newest_thumbnail(db, s["id"]))
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
                       pages=math.ceil(total / 20) or 1, locked=locked, order=order,
                       tiles=[s for s in shows if s["item_count"]],

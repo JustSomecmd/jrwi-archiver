@@ -23,10 +23,10 @@ class Progress:
         return primary, members, self.ser._video(members), self.ser._audio(members)
 
     @staticmethod
-    def _timeline(post: dict, video: dict | None, audio: dict | None) -> str | None:
-        if audio and audio["post_id"] == post["id"]:
+    def _timeline(post_id: int, video: dict | None, audio: dict | None) -> str | None:
+        if audio and audio["post_id"] == post_id:
             return "audio"
-        if video and video["post_id"] == post["id"]:
+        if video and video["post_id"] == post_id:
             return "video"
         return None
 
@@ -40,7 +40,20 @@ class Progress:
 
     def get(self, post: dict) -> dict:
         primary, members, video, audio = self._item(post)
-        timeline = self._timeline(post, video, audio)
+        found = self.read(post["id"], primary, members, video, audio)
+        if found:
+            return found
+        part = {"video": video, "audio": audio}.get(self._timeline(post["id"], video, audio)) or {}
+        return {"post_id": post["id"], "position": 0.0, "duration": part.get("duration"), "finished": False,
+                "updated_at": None}
+
+    def of_item(self, primary: dict, members: list[dict], video: dict | None, audio: dict | None) -> dict | None:
+        """The item's progress in its main post's timeline (contract v0.10), or None when it was never played."""
+        return self.read(primary["id"], primary, members, video, audio)
+
+    def read(self, post_id: int, primary: dict, members: list[dict], video: dict | None,
+             audio: dict | None) -> dict | None:
+        timeline = self._timeline(post_id, video, audio)
         part = {"video": video, "audio": audio}.get(timeline) or {}
         duration = part.get("duration")
         ids = [m["id"] for m in members]
@@ -48,23 +61,22 @@ class Progress:
         # One row per item; older ones may still sit under one of its other posts
         row = self.db.one(f"SELECT * FROM progress WHERE post_id IN ({marks}) ORDER BY updated_at DESC LIMIT 1", ids)
         if not row:
-            return {"post_id": post["id"], "position": 0.0, "duration": duration, "finished": False, "updated_at": None}
+            return None
         saved_in = row["timeline"]
         if saved_in is None:  # saved before v0.9: in the timeline of the post it was saved under
-            saved_in = self._timeline({"id": row["post_id"]}, video, audio) or "audio"
+            saved_in = self._timeline(row["post_id"], video, audio) or "audio"
         sync = self.ser.sync_of(primary, video, audio)
         position = self._convert(row["position"] or 0.0, saved_in, timeline, sync["offset"] if sync else 0.0)
         if duration:
             position = min(position, duration)
         if saved_in == timeline and duration is None:
             duration = row["duration"]
-        return {"post_id": post["id"], "position": round(max(0.0, position), 2),
-                "duration": duration,
+        return {"post_id": post_id, "position": round(max(0.0, position), 2), "duration": duration,
                 "finished": bool(row["finished"]), "updated_at": row["updated_at"]}
 
     def set(self, post: dict, body: dict) -> dict:
         primary, members, video, audio = self._item(post)
-        timeline = self._timeline(post, video, audio)
+        timeline = self._timeline(post["id"], video, audio)
         ids = [m["id"] for m in members if m["id"] != primary["id"]]
         with self.db.lock:
             if ids:

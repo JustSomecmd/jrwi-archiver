@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.9)
+# JRWI archiver API (contract v0.10)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.4.0.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.4.1.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -10,6 +10,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.7:** `/api/posts`, `/api/posts/{postId}` and `/api/posts/{postId}/comments` for single posts. Item `versions` gain `version`, `main`, `date`, `like_count` and `comment_count`. Comments gain `post_id`. In the service since 0.2.6.
 - **v0.8:** comment authors gain `color`. In the service since 0.3.4.
 - **v0.9:** progress for every post with a video or audio, with `position` in that post's own timeline (see Progress). Progress responses gain `post_id`. In the service since 0.4.0.
+- **v0.10:** `youtube_id` on `GET /api/items` finds the items that embed a YouTube video, and items gain `progress` (see Item). In the service since 0.4.1.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp.
 
 **General rules**
@@ -23,13 +24,13 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.4.0"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.4.1"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, `other` last. `?include_empty=true` lists all of them. |
 | `GET /api/shows/{showId}` | One show, with `tabs` |
 | `GET /api/shows/{showId}/items?tab=episodes&order=desc` | Paged items in one tab. In `episodes`, items are ordered by episode number. |
-| `GET /api/items?q=&show=&tab=&kind=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. |
+| `GET /api/items?q=&show=&tab=&kind=&youtube_id=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. `youtube_id` (v0.10) gives the items that embed that YouTube video (below). |
 | `GET /api/latest?limit=20` | Newest items, for a home screen |
 | `GET /api/items/{postId}` | Full item. Either post ID of a video/audio pair works. |
 | `GET /api/items/{postId}/comments?page=` | Threaded comments from every version of the item, paged by top-level comment. Each says which post it's on (`post_id`). |
@@ -46,6 +47,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /files/<path>` | Images, thumbnails, attachments, documents |
 
 Item lists leave out posts above the user's tier. Add `include_locked=true` to include them; they'll have `"locked": true` and no media.
+
+**Finding an item by YouTube ID (v0.10):** `GET /api/items?youtube_id=CzZ13VPQOcw` lists the items with a post, of any version, that embeds that YouTube video: usually one item, or none. For a YouTube-only episode, that item's `video.youtube_id` is the ID asked for. An item whose members-only video is archived and that also embeds the YouTube version is listed too, with `video` being the archived file; apps that only want YouTube-only items can check `video.youtube_id`. `/api/posts` takes `youtube_id` the same way, listing the posts themselves.
 
 **Progress (v0.3 and v0.9):** the archive keeps one position and one watched state per item (decisions 8 and 9).
 - **Any video or audio post:** `/api/progress/{postId}` works for every post with a video (archived or YouTube-only) or audio, including items with only a video.
@@ -84,6 +87,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
           {"id": "aftershow", "name": "Just Rolled With It", "count": 130}]}
 ```
 
+- **`poster` and `banner`:** the show's own art from its page on the site, or `null` when the page has none of its own, only the site-wide share picture or the logo, which since 0.4.1 isn't taken as show art. Apps can show the newest item's `thumbnail` instead, as the web app does.
 - **`tabs`:** only included in `GET /api/shows/{showId}`.
 - **Tab ids**, in this order: `episodes`, `aftershow`, `extras`, `art`, `posts`. Tabs with nothing in them are left out.
 
@@ -97,6 +101,8 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
            "url": "/api/video/300", "height": 1080, "size": 4123456789, "duration": 11712},
  "audio": {"post_id": 298, "url": "/api/audio/298", "mime": "audio/mp4", "size": 187654321, "duration": 11695},
  "sync": {"offset": -17.2, "checked": true},
+ "progress": {"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false,
+              "updated_at": "2026-11-21T00:12:00+00:00"},
  "comment_count": 12, "like_count": 469, "locked": false, "archived": true}
 ```
 
@@ -118,6 +124,8 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **`checked`:** `true` when the archiver compared the two versions and found the offset. `false` when it couldn't or wasn't sure, in which case the offset is 0.
 - **`null`** only when the item has just one version, and on single posts (`/api/posts`).
 - **Apps** keep a carried-over position between 0 and the other version's `duration`.
+
+**`progress` (v0.10):** the same object `GET /api/progress/{id}` returns for the item's `id`, so `position` is in the main post's timeline (the video's when there is one), or `null` when the item was never played. On items in `/api/shows/{showId}/items`, `/api/items` and `/api/latest`, and on the full item. Single posts (`/api/posts`) don't have it; use `/api/progress/{postId}` for those.
 
 ### Item (full)
 
