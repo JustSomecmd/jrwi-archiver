@@ -217,18 +217,26 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return {"items": [(one or ser.summary)(r) for r in rows], "page": page, "page_size": page_size, "total": total}
 
     def item_query(show=None, tab=None, kind=None, q=None, order="desc", include_locked=False,
-                   separate=False, youtube_id=None) -> tuple[str, list]:
+                   separate=False, youtube_id=None, season=None) -> tuple[str, list]:
         """Items group an episode's versions under its main post. separate=True lists every post on its own."""
         where, args = ([] if separate else ["pair_id IS NULL"]) + ["status != 'gone'"], []
         if not include_locked:
             where.append("status != 'locked'")
-        if show:
-            where.append("show_id = ?")
-            args.append(show)
-        if tab:
-            # A post is in every tab its tags put it in (contract v0.12); old rows only have their main tab
+        if show and tab:
+            # A post is in every show and tab its tags put it in (contract v0.12 and v0.13)
+            where.append("((show_id = ? AND tab = ?) OR EXISTS (SELECT 1 FROM json_each(posts.places) pl "
+                         "WHERE pl.value = ?))")
+            args += [show, tab, f"{show}:{tab}"]
+        elif show:
+            where.append("(show_id = ? OR EXISTS (SELECT 1 FROM json_each(posts.places) pl WHERE pl.value LIKE ?))")
+            args += [show, f"{show}:%"]
+        elif tab:
             where.append("(tab = ? OR EXISTS (SELECT 1 FROM json_each(posts.tabs) t WHERE t.value = ?))")
             args += [tab, tab]
+        if season is not None:
+            # Seasons are the show's own: a post filed under another show has none of this one's
+            where.append("COALESCE(season, 1) = ?" + (" AND show_id = ?" if show else ""))
+            args += [season] + ([show] if show else [])
         if kind:
             where.append({"video": "(json_extract(media,'$.video.path') IS NOT NULL OR path_kind IN ('videos','video_embeds'))",
                           "audio": "(path_kind = 'audio' OR json_extract(media,'$.audio.path') IS NOT NULL "
@@ -277,9 +285,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return ser.show(row, with_tabs=True)
 
     @app.get("/api/shows/{show_id}/items", dependencies=[Depends(api_auth)])
-    def api_show_items(show_id: str, tab: str | None = None, order: str = "desc", page: int = 1, page_size: int = 50,
+    def api_show_items(show_id: str, tab: str | None = None, season: int | None = None, order: str = "desc",
+                       page: int = 1, page_size: int = 50,
                        include_locked: bool = False):
-        sql, args = item_query(show=show_id, tab=tab, order=order, include_locked=include_locked)
+        sql, args = item_query(show=show_id, tab=tab, order=order, include_locked=include_locked, season=season)
         return paged(sql, args, page, page_size, one=item_out)
 
     @app.get("/api/items", dependencies=[Depends(api_auth)])
@@ -469,15 +478,22 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return feed(request, q, page, locked, order)
 
     @app.get("/shows/{show_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def show_page(request: Request, show_id: str, tab: str | None = None, page: int = 1, order: str = "desc"):
+    def show_page(request: Request, show_id: str, tab: str | None = None, season: int | None = None, page: int = 1,
+                  order: str = "desc"):
         row = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
         if not row:
             raise HTTPException(404, "No such show")
         show = ser.show(row, with_tabs=True, separate=True)
         tab = tab or (show["tabs"][0]["id"] if show["tabs"] else None)
-        sql, args = item_query(show=show_id, tab=tab, order=order, separate=True)
+        # A show with more than one season gets a page per season in place of its Episodes
+        seasons = show.get("seasons") or []
+        if tab == "episodes" and len(seasons) > 1:
+            season = season if season in [s["season"] for s in seasons] else seasons[0]["season"]
+        else:
+            season = None
+        sql, args = item_query(show=show_id, tab=tab, order=order, separate=True, season=season)
         data = paged(sql, args, page, 48, ser.post_summary)
-        return render(request, "show.html", show=show, tab=tab, data=data, order=order,
+        return render(request, "show.html", show=show, tab=tab, season=season, data=data, order=order,
                       pages=math.ceil(data["total"] / data["page_size"]) or 1)
 
     @app.get("/feed", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
@@ -541,12 +557,17 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         csort = "new" if csort == "new" else "top"
         comments = {"items": sorted_comments(post, csort)}
         show = db.one("SELECT id, name FROM shows WHERE id=?", (item["show"],))
+        # Every show and tab the post is in, as the site lists it: its own show first
+        show_names = {r["id"]: r["name"] for r in db.q("SELECT id, name FROM shows")}
+        places = [{"show": pl["show"], "name": show_names.get(pl["show"], pl["show"]), "tab": pl["tab"]}
+                  for pl in item.get("places") or [{"show": item["show"], "tab": t} for t in item.get("tabs") or [item["tab"]]]]
         audio_at = api_progress(item["audio"]["post_id"]) if item["audio"] else None
         video_at = api_progress(item["video"]["post_id"]) if item["video"] and item["video"].get("url") else None
         # The side list, like the site's "Recently uploaded": newest posts from the same show
         sql, args = item_query(show=item["show"], separate=True)
         more = [ser.post_summary(r) for r in db.q(f"SELECT * FROM ({sql}) WHERE id != ? LIMIT 8", args + [post["id"]])]
-        return render(request, "item.html", item=item, comments=comments["items"], show=show, progress=audio_at,
+        return render(request, "item.html", item=item, comments=comments["items"], show=show, places=places,
+                      progress=audio_at,
                       video_progress=video_at,
                       more=more, csort=csort)
 
@@ -687,6 +708,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.post("/admin/shows/add", dependencies=[Depends(web_auth)])
     def admin_shows_add(name: str = Form(...), aliases: str = Form("")):
+        db.set_setting("not_shows", [x for x in (db.setting("not_shows") or []) if norm(x) != norm(name)])
         try:
             add_show(db, name, aliases=[a.strip() for a in aliases.split(",") if a.strip()])
         except ValueError as e:
@@ -697,10 +719,15 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.post("/admin/shows/{show_id}/remove", dependencies=[Depends(web_auth)])
     def admin_shows_remove(show_id: str):
-        """Only shows added here can go; the menu's and the tags' come back on their own."""
-        db.x("DELETE FROM shows WHERE id=? AND source='manual'", (show_id,))
-        classify_all(db)
-        reorganize(db, paths)
+        """Shows added here, or made from a tag, can go; a tag's show stays gone until it's made a show again. The
+        Shows menu's come back on their own."""
+        row = db.one("SELECT * FROM shows WHERE id=? AND source IN ('manual', 'tags')", (show_id,))
+        if row:
+            if row["source"] == "tags":
+                db.set_setting("not_shows", sorted(set(db.setting("not_shows") or []) | {row["name"]}))
+            db.x("DELETE FROM shows WHERE id=?", (show_id,))
+            classify_all(db)
+            reorganize(db, paths)
         return RedirectResponse("/admin/shows", 303)
 
     @app.get("/admin/shows/{show_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])

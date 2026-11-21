@@ -31,16 +31,16 @@
   <label for="newalias">Other names (optional, comma separated)</label><input id="newalias" type="text" name="aliases">
   <p><button type="submit">Add show</button></p>
 </form>
-{% for r in rows if r.source == 'manual' %}
-{% if loop.first %}<p class="muted small">Shows added here can be removed again:{% endif %}
-  <form method="post" action="/admin/shows/{{ r.id }}/remove" style="display:inline"><button class="btn ghost small" type="submit">Remove {{ r.name }}</button></form>
+{% for r in rows if r.source in ('manual', 'tags') %}
+{% if loop.first %}<p class="muted small">Shows made from the site's tags, or added here, can be removed if they aren't shows. Their posts go back to Other:{% endif %}
+  <form method="post" action="/admin/shows/{{ r.id }}/remove" style="display:inline"><button class="btn ghost small" type="submit">{{ r.name }} isn't a show</button></form>
 {% if loop.last %}</p>{% endif %}
 {% endfor %}
 
 {% if loose %}
 <h2>Tags no show matches</h2>
-<p class="muted">Some of these are shows the site doesn't list in its Shows menu, others are topics. Make the shows into shows here;
-  shows with "Extras" or "Rolled" tags of their own, such as Mythborne, are made automatically.</p>
+<p class="muted">Topics such as Art and Campaign Notes, and tags you said aren't shows. Every other tag the site uses is
+  made into a show automatically, such as Mythborne and The Council, which the site's Shows menu leaves out.</p>
 <div class="panel"><table>
   <tr><th>Tag</th><th>Posts on the site</th><th></th></tr>
   {% for t in loose %}

@@ -382,20 +382,20 @@ def test_seasons_and_other_episode_formats(app):
     from jrwi import organize
     db = app.state.db
     rows = [
-        (9001, "videos", "Dropouts | Riptide Season 2 Episode 1 (Video)"),
-        (9002, "audio", "Dropouts | Riptide Season 2 Episode 1 (Audio)"),
-        (9003, "videos", "Fish and Chips | Riptide Episode 16"),
-        (9004, "videos", "Riptide Season 2 Trailer"),
+        (9001, "videos", "Dropouts | Riptide Season 2 Episode 1 (Video)", "2021-10-06"),
+        (9002, "audio", "Dropouts | Riptide Season 2 Episode 1 (Audio)", "2021-10-06"),
+        (9003, "videos", "Fish and Chips | Riptide Episode 16", "2021-05-01"),
+        (9004, "videos", "Riptide Season 2 Trailer", "2021-10-06"),
     ]
     try:
-        for pid, kind, title in rows:
+        for pid, kind, title, day in rows:
             db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "path_kind": kind,
-                                      "title": title, "published": "2021-10-06T00:00:00+00:00", "status": "complete"})
+                                      "title": title, "published": day + "T00:00:00+00:00", "status": "complete"})
         organize.classify_all(db)
         got = {p["id"]: p for p in db.q("SELECT * FROM posts WHERE id >= 9001")}
         assert (got[9001]["tab"], got[9001]["season"], got[9001]["episode"]) == ("episodes", 2, 1)
         assert got[9002]["pair_id"] == 9001                    # "(Video)" and "(Audio)" are versions of one episode
-        assert (got[9003]["tab"], got[9003]["season"], got[9003]["episode"]) == ("episodes", None, 16)
+        assert (got[9003]["tab"], got[9003]["season"], got[9003]["episode"]) == ("episodes", 1, 16)
         assert got[9004]["tab"] == "extras"                     # no episode number
         rel, season, number = organize.jellyfin_target(db, got[9001])
         assert (season, number) == (2, 1) and rel.startswith("Riptide/Season 02/Riptide - S02E01 - Dropouts [jrwi-9001]")
@@ -455,8 +455,14 @@ def test_tabs_follow_the_sites_tags(app, client):
         # Adding a show by hand, for one the site has no tag for; and tags no show matches are listed to pick from
         web = TestClient(app)
         web.post("/login", data={"password": "test-password"})
+        # Tags that aren't one of a show's own become shows (the site's menu leaves some out); "isn't a show" undoes it
+        assert db.one("SELECT source FROM shows WHERE id='monster-control-service'")["source"] == "tags"
+        web.post("/admin/shows/monster-control-service/remove")
+        assert not db.one("SELECT id FROM shows WHERE id='monster-control-service'")
         loose = web.get("/admin/shows").text.split("Tags no show matches")[1].split("<table>")[1]
         assert "Monster Control Service" in loose and "Mythborne" not in loose
+        web.post("/admin/shows/add", data={"name": "Monster Control Service", "aliases": ""})
+        assert db.one("SELECT source FROM shows WHERE id='monster-control-service'")["source"] == "manual"
         web.post("/admin/shows/add", data={"name": "Tales from the Midnight Rose", "aliases": ""})
         assert db.one("SELECT source FROM shows WHERE id='tales-from-the-midnight-rose'")["source"] == "manual"
         web.post("/admin/shows/tales-from-the-midnight-rose/remove")
@@ -464,5 +470,66 @@ def test_tabs_follow_the_sites_tags(app, client):
     finally:
         db.x("DELETE FROM posts WHERE id >= 9101")
         db.x("DELETE FROM tags WHERE id >= '9201' AND id <= '9206'")
-        db.x("DELETE FROM shows WHERE id = 'mythborne'")
+        db.x("DELETE FROM shows WHERE id IN ('mythborne', 'monster-control-service')")
+        db.set_setting("not_shows", [])
+        organize.classify_all(db)
+
+
+def test_seasons_from_restarting_numbers(app, client):
+    """Unwitness Protection Program numbers its episodes "Case File 1, 2, 3", then starts again at 1 for its second
+    season. A later re-post of an old episode (same number and name) doesn't start a season. Posts tagged with
+    another show's Extras are listed there too, as on the site."""
+    from jrwi import organize
+    db = app.state.db
+    upp = "unwitness-protection-program"
+    db.upsert("tags", "id", {"id": "9301", "name": "Unwitness Protection Program", "count": 1})
+    db.upsert("tags", "id", {"id": "9302", "name": "Prime Defenders Extras", "count": 1})
+    db.upsert("tags", "id", {"id": "9303", "name": "UPP Rolled", "count": 1})
+    rows = []
+    for i, (day, title) in enumerate([
+            ("2025-09-13", "Unwitness Protection Program - Diseased Residents [Case File 1]"),
+            ("2025-09-15", "Unwitness Protection Program - Diseased Residents [Case File 1] AUDIO ONLY"),
+            ("2025-10-04", "Unwitness Protection Program - Diseased Residents [Case File 2]"),
+            ("2025-11-08", "Unwitness Protection Program - Diseased Residents [Case File 3]"),
+            ("2026-01-02", "Diseased Residents | Just Roll With It: Unwitness Protection Program #1"),   # a re-post
+            ("2026-04-05", "Unwitness Protection Program - Empty Graves [Case File 1]"),
+            ("2026-05-02", "Unwitness Protection Program - Empty Graves [Case File 2]"),
+            ("2026-08-02", "Just Rolled With It | Empty Graves [CASE FILE 1 & 2]")]):
+        pid = 9401 + i
+        audio = "AUDIO" in title
+        db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "title": title,
+                                  "path_kind": "audio" if audio else "videos", "status": "complete",
+                                  "tag_ids": {9401: ["9301", "9302"], 9408: ["9303"]}.get(pid, ["9301"]),
+                                  "published": day + "T00:00:00+00:00"})
+        rows.append(pid)
+    try:
+        organize.classify_all(db)
+        got = {p["id"]: p for p in db.q("SELECT * FROM posts WHERE id >= 9401 AND id < 9500")}
+        assert [(got[i]["season"], got[i]["episode"]) for i in (9401, 9403, 9404, 9406, 9407)] == \
+            [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2)]
+        assert (got[9405]["season"], got[9405]["pair_id"]) == (1, 9401)   # the re-post is a version of case file 1
+        assert got[9402]["pair_id"] == 9401
+        assert got[9408]["tab"] == "aftershow" and got[9408]["episode"] is None
+        assert got[9401]["places"] == [f"{upp}:episodes", "prime-defenders:extras"]
+        show = client.get(f"/api/shows/{upp}").json()
+        assert [(s["season"], s["name"], s["count"]) for s in show["seasons"]] == \
+            [(1, "Diseased Residents", 3), (2, "Empty Graves", 2)]
+        s2 = client.get(f"/api/shows/{upp}/items?tab=episodes&season=2").json()["items"]
+        assert [i["id"] for i in s2] == [9407, 9406] and s2[0]["season"] == 2
+        pd = {i["id"] for i in client.get("/api/shows/prime-defenders/items?tab=extras&page_size=200").json()["items"]}
+        assert 9401 in pd   # listed under the other show's Extras too
+        assert {"show": "prime-defenders", "tab": "extras"} in client.get("/api/items/9401").json()["places"]
+        web = TestClient(app)
+        web.post("/login", data={"password": "test-password"})
+        page = web.get(f"/shows/{upp}").text
+        assert "Season 1: Diseased Residents" in page and "Season 2: Empty Graves" in page
+        assert f"/shows/{upp}?tab=episodes&amp;season=2" in page or f"/shows/{upp}?tab=episodes&season=2" in page
+        assert "Empty Graves [Case File 2]" in web.get(f"/shows/{upp}?tab=episodes&season=2").text
+        assert "Empty Graves [Case File 2]" not in web.get(f"/shows/{upp}?tab=episodes&season=1").text
+        # Jellyfin: the second season's own folder, named
+        target = organize.jellyfin_target(db, got[9406])
+        assert target[1:] == (2, 1) and "/Season 02/" in target[0]
+    finally:
+        db.x("DELETE FROM posts WHERE id >= 9401 AND id < 9500")
+        db.x("DELETE FROM tags WHERE id IN ('9301', '9302', '9303')")
         organize.classify_all(db)

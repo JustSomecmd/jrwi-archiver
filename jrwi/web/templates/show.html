@@ -15,15 +15,22 @@
   <div class="section-head">
     <div class="tabs">
       {% for t in show.tabs %}
+        {% if t.id == 'episodes' and show.seasons|length > 1 %}
+          {# A page per season, in place of one Episodes page #}
+          {% for s in show.seasons %}
+          <a class="pill {% if tab == 'episodes' and season == s.season %}on{% endif %}" href="/shows/{{ show.id }}?tab=episodes&season={{ s.season }}">Season {{ s.season }}{% if s.name %}: {{ s.name }}{% endif %} · {{ s.count }}</a>
+          {% endfor %}
+        {% else %}
         <a class="pill {% if t.id == tab %}on{% endif %}" href="/shows/{{ show.id }}?tab={{ t.id }}">{{ t.name }} · {{ t.count }}</a>
+        {% endif %}
       {% endfor %}
     </div>
-    <a class="pill" href="/shows/{{ show.id }}?tab={{ tab }}&order={{ 'asc' if order == 'desc' else 'desc' }}">
+    <a class="pill" href="/shows/{{ show.id }}?tab={{ tab }}{% if season %}&season={{ season }}{% endif %}&order={{ 'asc' if order == 'desc' else 'desc' }}">
       {{ icon('sort' if order == 'desc' else 'sortup') }} {{ 'Newest first' if order == 'desc' else 'Oldest first' }}</a>
   </div>
   {% if data['items'] %}
   <div class="grid">{% for it in data['items'] %}{{ item_card(it) }}{% endfor %}</div>
   {% else %}<p class="empty">Nothing here yet.</p>{% endif %}
-  {{ pager(data.page, pages, '/shows/' ~ show.id ~ '?tab=' ~ tab ~ '&order=' ~ order ~ '&') }}
+  {{ pager(data.page, pages, '/shows/' ~ show.id ~ '?tab=' ~ tab ~ ('&season=' ~ season if season else '') ~ '&order=' ~ order ~ '&') }}
 </section>
 {% endblock %}

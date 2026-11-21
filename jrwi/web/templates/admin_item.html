@@ -8,6 +8,7 @@
 <form class="panel" method="post" action="/admin/items/{{ p.id }}">
   <h3>Placement</h3>
   <p class="muted small">Sorted automatically as <b>{{ p.show_id }}</b> / <b>{% for t in (p.tabs or [p.tab or 'posts']) %}{{ tab_name(t) }}{% if not loop.last %}, {% endif %}{% endfor %}</b>
+    {% for pl in (p.places or []) if not pl.startswith(p.show_id ~ ':') %}{% if loop.first %}(also in {% endif %}{{ pl.replace(':', ' / ') }}{% if not loop.last %}, {% endif %}{% if loop.last %}){% endif %}{% endfor %}
     {% if p.episode %}/ {% if p.season %}season {{ p.season }}, {% endif %}episode {{ p.episode }}{% endif %}. Posts are sorted by their tags on the site, or by their title when the tags don't say. Choose something here to override it. Videos move in Jellyfin to match.</p>
   <label for="show">Show</label>
   <select id="show" name="show_override"><option value="">Automatic</option>

@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.12)
+# JRWI archiver API (contract v0.13)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.6.0.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.7.0.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -13,7 +13,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.10:** `youtube_id` on `GET /api/items` finds the items that embed a YouTube video, and items gain `progress` (see Item). In the service since 0.4.1.
 - **v0.11:** items gain `season`, and the `episodes` tab is ordered by season, then episode. `PUT /api/progress` takes `updated_at`, for progress sent later (see Progress). A section on downloading audio for offline listening. In the service since 0.5.0.
 - **v0.12:** items and posts gain `tabs`, every tab they're in, and `?tab=` lists everything in that tab, so one item can be in two tabs' lists; tab counts count it in each. Shows gain `image`, never empty; `poster` and `banner` are now the same picture, the show's own, or `null`. Shows can come from the site's tags, not only its menu. In the service since 0.6.0.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`.
+- **v0.13:** items and posts gain `places`, every show and tab they're in, and a show's lists and counts include the posts its tags place there from other shows. Shows gain `seasons` (with `GET /api/shows/{showId}`), and `GET /api/shows/{showId}/items` takes `?season=`. `season` is now also worked out when titles don't name it. In the service since 0.7.0.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -26,13 +27,13 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.6.0"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.7.0"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, then shows from the site's tags or added on the admin page, `other` last. `?include_empty=true` lists all of them. |
-| `GET /api/shows/{showId}` | One show, with `tabs` |
-| `GET /api/shows/{showId}/items?tab=episodes&order=desc` | Paged items in one tab: every item whose `tabs` include it (v0.12). In `episodes`, items are ordered by season, then episode number. |
-| `GET /api/items?q=&show=&tab=&kind=&youtube_id=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. `youtube_id` (v0.10) gives the items that embed that YouTube video (below). |
+| `GET /api/shows/{showId}` | One show, with `tabs` and `seasons` |
+| `GET /api/shows/{showId}/items?tab=episodes&season=2&order=desc` | Paged items in one tab: every item the show's tags place in it (v0.12, v0.13). `season` (v0.13) keeps one season of the show's own episodes. In `episodes`, items are ordered by season, then episode number. |
+| `GET /api/items?q=&show=&tab=&kind=&youtube_id=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. `youtube_id` (v0.10) gives the items that embed that YouTube video (below). `show` includes items placed in that show from another. |
 | `GET /api/latest?limit=20` | Newest items, for a home screen |
 | `GET /api/items/{postId}` | Full item. Either post ID of a video/audio pair works. |
 | `GET /api/items/{postId}/comments?page=` | Threaded comments from every version of the item, paged by top-level comment. Each says which post it's on (`post_id`). |
@@ -90,24 +91,27 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 ### Show
 
 ```json
-{"id": "riptide", "name": "Riptide", "description": "...",
- "poster": "/files/shows/riptide/f9f40bf840928626.webp", "banner": "/files/shows/riptide/f9f40bf840928626.webp",
- "image": "/files/shows/riptide/f9f40bf840928626.webp",
- "item_count": 412, "latest": "2026-11-07T00:00:00+00:00",
- "tabs": [{"id": "episodes", "name": "Episodes", "count": 136},
-          {"id": "aftershow", "name": "Just Rolled With It", "count": 130}]}
+{"id": "unwitness-protection-program", "name": "Unwitness Protection Program", "description": "...",
+ "poster": null, "banner": null, "image": "/files/site/assets/0d4c1b2a3e4f5a6b.webp",
+ "item_count": 17, "latest": "2026-11-12T00:00:00+00:00",
+ "tabs": [{"id": "episodes", "name": "Episodes", "count": 7},
+          {"id": "aftershow", "name": "Just Rolled With It", "count": 2}],
+ "seasons": [{"season": 1, "name": "Diseased Residents", "count": 3},
+             {"season": 2, "name": "Empty Graves", "count": 4}]}
 ```
 
 - **`image` (v0.12):** the picture to show for the show: its own picture, or the JRWI logo when it has none. Never `null` once the site's logo has been saved.
 - **`poster` and `banner`:** since v0.12 both are the show's own picture (see Show pictures), or `null` when it has none. Before v0.12 they could differ, and a show without either showed its newest thumbnail.
-- **`tabs`:** only included in `GET /api/shows/{showId}`. A post in two tabs counts in both (v0.12).
+- **`tabs`:** only included in `GET /api/shows/{showId}`. A post in two tabs counts in both (v0.12), and posts from other shows that the site's tags place here count too (v0.13).
+- **`seasons` (v0.13):** only included in `GET /api/shows/{showId}`: the seasons of the show's own Episodes, with how many items each has, and the season's `name`, or `null` when its episodes don't share one. One entry for a show with one season, none for a show without Episodes. With more than one, apps can show a page per season (`?tab=episodes&season=2`), as the web app does in place of one Episodes page.
 - **Tab ids**, in this order: `episodes`, `aftershow`, `extras`, `art`, `posts`. Tabs with nothing in them are left out.
 
 ### Item (in lists)
 
 ```json
 {"id": 300, "title": "Through the Fire | Riptide #136", "date": "2026-11-07T00:00:00+00:00",
- "show": "riptide", "tab": "episodes", "tabs": ["episodes"], "kind": "episode", "season": 1, "episode": 136, "pinned": true,
+ "show": "riptide", "tab": "episodes", "tabs": ["episodes"], "places": [{"show": "riptide", "tab": "episodes"}],
+ "kind": "episode", "season": 1, "episode": 136, "pinned": true,
  "thumbnail": "/files/posts/300/thumbnail.webp", "duration": 11695,
  "video": {"post_id": 300, "jellyfin_path": "/media/jrwi/Riptide/Season 01/Riptide - S01E136 - Through the Fire [jrwi-300].mp4",
            "url": "/api/video/300", "height": 1080, "size": 4123456789, "duration": 11712},
@@ -120,9 +124,11 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 
 **Fields**
 - **`id`:** the main post of the item. That's the video post when there is one, otherwise the audio post.
-- **`tabs` (v0.12):** every tab the item is in, in the tab order, from the main post's tags (see Tabs). `tab` is the main one of them, the one Jellyfin files it under.
+- **`show`:** the item's own show (see "In several shows").
+- **`tabs` (v0.12):** every tab the item is in within its own show, in the tab order, from the main post's tags (see Tabs). `tab` is the main one of them, the one Jellyfin files it under.
+- **`places` (v0.13):** every show and tab the item is in: its own show's `tabs` first, then other shows its tags name, such as `{"show": "prime-defenders", "tab": "extras"}` for UPP's first season.
 - **`kind`:** one of `episode`, `video`, `audio`, `youtube`, `art` or `post`. `episode` is a video or audio whose main tab is `episodes`.
-- **`season` (v0.11):** the season of a numbered episode in the `episodes` tab: from the title or a tag, 1 when neither gives one. `null` for posts that aren't in the `episodes` tab or have no number. Seasons can each start again at episode 1, so apps show both, as the web app does with "S2 #1" for seasons after the first.
+- **`season` (v0.11):** the season of an episode in its own show's `episodes` tab: named in the title or a tag, or since v0.13 worked out (see "Episode numbers and seasons"). `null` for posts that aren't in the `episodes` tab or have no number. Seasons can each start again at episode 1, so apps show both, as the web app does with "S2 #1" for seasons after the first.
 - **`date`:** the site only shows a date, so the time is midnight UTC.
 
 **`video` takes one of two shapes, or is `null`:**
@@ -167,7 +173,7 @@ The list fields, plus:
 
 ### Post (v0.7)
 
-A single post, never merged with its other versions. It has the same fields as an item, list or full, but only from this one post: its own `body_html`, `like_count`, `comment_count`, `tags`, `tabs`, files, and `video` or `audio` only if this post has them. Plus:
+A single post, never merged with its other versions. It has the same fields as an item, list or full, but only from this one post: its own `body_html`, `like_count`, `comment_count`, `tags`, `tabs`, `places`, files, and `video` or `audio` only if this post has them. Plus:
 
 ```json
 {"id": 298, "version": "audio", "item_id": 300, "paired": true}

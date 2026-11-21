@@ -134,7 +134,9 @@ class Serializer:
             p["duration"] for p in (video, audio) if p and p.get("duration")]
         return {
             "id": primary["id"], "title": primary["title"], "date": iso(primary["published"]),
-            "show": primary["show_id"] or "other", "tab": tab, "tabs": tabs, "kind": kind, "episode": primary["episode"],
+            "show": primary["show_id"] or "other", "tab": tab, "tabs": tabs,
+            "places": [{"show": p.split(":", 1)[0], "tab": p.split(":", 1)[1]} for p in (primary.get("places") or [])],
+            "kind": kind, "episode": primary["episode"],
             "season": (primary.get("season") or 1) if "episodes" in tabs and primary["episode"] else None,
             "pinned": bool(primary["pinned"]), "thumbnail": files_url(thumb),
             "duration": max(durations) if durations else None, "video": video, "audio": audio,
@@ -263,8 +265,8 @@ class Serializer:
     def show(self, row: dict, with_tabs: bool = False, separate: bool = False) -> dict:
         """A show. Counts are of items (versions grouped), or of single posts with separate=True."""
         grouped = "" if separate else "AND pair_id IS NULL "
-        stats = self.db.one("SELECT COUNT(*) AS n, MAX(published) AS latest FROM posts WHERE show_id=? "
-                            f"{grouped}AND status NOT IN ('locked', 'gone')", (row["id"],))
+        stats = self.db.one("SELECT COUNT(*) AS n, MAX(published) AS latest FROM posts WHERE (show_id=? OR places LIKE ?) "
+                            f"{grouped}AND status NOT IN ('locked', 'gone')", (row["id"], f'%"{row["id"]}:%'))
         art = files_url(row.get("art"))
         out = {"id": row["id"], "name": row["name"], "description": row["description"] or "",
                # v0.12: the show's picture (poster and banner are the same one), and image never empty
@@ -272,11 +274,21 @@ class Serializer:
                "item_count": stats["n"], "latest": iso(stats["latest"])}
         if with_tabs:
             counts: dict[str, int] = {}
-            for r in self.db.q(f"SELECT tab, tabs FROM posts WHERE show_id=? {grouped}"
-                               "AND status NOT IN ('locked', 'gone')", (row["id"],)):
-                for t in set(r["tabs"] or [r["tab"]]):
+            per_season: dict[int, int] = {}
+            sid = row["id"]
+            for r in self.db.q(f"SELECT show_id, tab, tabs, places, season FROM posts WHERE (show_id=? OR places LIKE ?) "
+                               f"{grouped}AND status NOT IN ('locked', 'gone')", (sid, f'%"{sid}:%')):
+                here = {p.split(":", 1)[1] for p in (r["places"] or []) if p.split(":", 1)[0] == sid}
+                if r["show_id"] == sid:
+                    here |= set(r["tabs"] or [r["tab"]])
+                for t in here:
                     counts[t] = counts.get(t, 0) + 1
+                if "episodes" in here and r["show_id"] == sid:
+                    per_season[r["season"] or 1] = per_season.get(r["season"] or 1, 0) + 1
             out["tabs"] = [{"id": t, "name": name, "count": counts[t]} for t, name in TABS if counts.get(t)]
+            # v0.13: the seasons of the show's Episodes, with the name all their episodes share when they share one
+            names = {s["season"]: s.get("name") for s in (row.get("seasons") or [])}
+            out["seasons"] = [{"season": n, "name": names.get(n), "count": c} for n, c in sorted(per_season.items())]
         return out
 
 

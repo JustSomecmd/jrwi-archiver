@@ -49,6 +49,10 @@ TAG_SUFFIX_TABS = {"": "episodes", "early access": "episodes", "extras": "extras
 SEASON_TAG_RE = re.compile(r"season \d{1,2}")
 # Tags that aren't about one show but still say what a post is
 GENERIC_TAG_TABS = {"just rolled with it": "aftershow", "art": "art", "thumbnails": "art"}
+# The site's tags that are topics rather than shows. Every other tag that isn't one of a show's own is a show the
+# Shows menu leaves out (Mythborne, The Council, Black Rose Pirates, ...).
+TOPIC_TAGS = {"youtube", "art", "announcement", "campaign notes", "one shot", "thumbnails", "music",
+              "just rolled with it"}
 # Which of a post's tabs is its main one (for Jellyfin and the API's tab): videos and audio by what they are,
 # other posts by what they hold
 MAIN_TAB_ORDER = {True: ["aftershow", "extras", "episodes", "art", "posts"],
@@ -63,7 +67,10 @@ SEASON_EPISODE_RES = [
     re.compile(r"\bS(?:eason)?\s*(\d{1,2})\s*[,:|-]?\s*E(?:p(?:isode)?)?\.?\s*(\d{1,4})\b", re.I),
     re.compile(r"\bS(?:eason)?\s*(\d{1,2})\s*[,:|-]?\s*#\s*(\d{1,4})\b", re.I),
 ]
-EPISODE_RES = [re.compile(r"#\s*(\d{1,4})\b"), re.compile(r"\b(?:Episode|Ep)\.?\s*(\d{1,4})\b", re.I)]
+EPISODE_RES = [re.compile(r"#\s*(\d{1,4})(?![.\d])(?!\s*(?:&|and)\s*\d)"),
+               re.compile(r"\b(?:Episode|Ep)\.?\s*#?\s*(\d{1,4})(?![.\d])(?!\s*(?:&|and)\s*\d)", re.I),
+               re.compile(r"\bCase\s*File\s*#?\s*(\d{1,4})\b(?!\s*&)", re.I),   # UPP: "[Case File 3]", not "1 & 2"
+               re.compile(r"\[\s*E(\d{1,3})\s*\]", re.I)]                     # "[E1]"
 SEASON_RE = re.compile(r"\bSeason\s*(\d{1,2})\b|\bS(\d{1,2})\b", re.I)
 
 
@@ -215,19 +222,21 @@ def tag_role(tag: str, names: list[tuple[str, str]]) -> tuple[str, str] | None:
     return None
 
 
-def tabs_from_tags(tag_names: list[str], names: list[tuple[str, str]]) -> tuple[str | None, list[str]]:
-    """The show a post's tags put it in, and the tabs they put it in (empty when its tags don't say)."""
-    show, tabs = None, []
+def places_from_tags(tag_names: list[str], names: list[tuple[str, str]]) -> tuple[str | None, list[tuple[str, str]], list[str]]:
+    """Where a post's tags put it, as on the site: every (show, tab) its show tags name, the show it belongs to (the
+    one whose plain tag it has, else the first named), and the tabs topic tags add for that show."""
+    places: list[tuple[str, str]] = []
     for tag in tag_names:
         role = tag_role(tag, names)
-        if role:
-            show = show or role[0]
-            if role[0] == show and role[1] not in tabs:
-                tabs.append(role[1])
-        generic = GENERIC_TAG_TABS.get(norm(tag))
-        if generic and generic not in tabs:
-            tabs.append(generic)
-    return show, tabs
+        if role and role not in places:
+            places.append(role)
+    main = next((s for s, t in places if t == "episodes"), places[0][0] if places else None)
+    generic = []
+    for tag in tag_names:
+        t = GENERIC_TAG_TABS.get(norm(tag))
+        if t and t not in generic:
+            generic.append(t)
+    return main, places, generic
 
 
 def main_tab(tabs: list[str], media: bool) -> str:
@@ -235,21 +244,30 @@ def main_tab(tabs: list[str], media: bool) -> str:
     return min(tabs, key=lambda t: order.index(t) if t in order else len(order))
 
 
+def not_shows(db: Db) -> set[str]:
+    return TOPIC_TAGS | {norm(x) for x in (db.setting("not_shows") or [])}
+
+
 def shows_from_tags(db: Db) -> list[str]:
-    """Shows the site tags but doesn't list in its Shows menu, such as Mythborne: a tag "<X> Extras" or "<X> Rolled"
-    for an X that isn't a known show makes X a show. Returns the ids it added."""
-    known = {n for n, _ in show_tag_names(db)}
+    """Shows the site tags but doesn't list in its Shows menu, such as Mythborne or The Council: every tag that isn't
+    one of a known show's own, and isn't a topic, is a show; "<X> Extras" or "<X> Rolled" make X one too. Tags the
+    user marked as not a show are left alone. Returns the ids it added."""
+    names = show_tag_names(db)
+    skip = not_shows(db)
     tags = {norm(t["name"]): t["name"] for t in db.q("SELECT name FROM tags") if t["name"]}
     added = []
-    for t in sorted(tags):
+    for t in sorted(tags, key=len):
+        if tag_role(tags[t], names):
+            continue
+        base, name = t, tags[t]
         for suffix in ("extras", "extra", "rolled"):
             if t.endswith(" " + suffix):
                 base = t[: -len(suffix) - 1].strip()
-                if base and base not in known and base not in GENERIC_TAG_TABS:
-                    name = tags.get(base) or tags[t][: len(tags[t]) - len(suffix) - 1].strip()
-                    add_show(db, name, source="tags")
-                    known.add(base)
-                    added.append(slugify(name))
+                name = tags.get(base) or tags[t][: len(tags[t]) - len(suffix) - 1].strip()
+        if base and base not in skip and not tag_role(name, names):
+            sid = add_show(db, name, source="tags")
+            names = show_tag_names(db)
+            added.append(sid)
     return added
 
 
@@ -298,6 +316,103 @@ def episode_parts(title: str, tag_names: list[str] = ()) -> tuple[int | None, in
     return None, episode
 
 
+STOPWORDS = {"the", "a", "an", "of", "and", "ft", "feat", "part", "pt"}
+NOISE_RE = re.compile(r"\b(just roll with it|just rolled with it|jrwi|patreon|early access|audio only|audio|video|"
+                      r"finale|season \d+|s\d+e\d+|s\d+|episode \d+|ep \d+|case file \d+|e\d+|\d+)\b")
+
+
+def name_key(title: str, show_names: list[str]) -> str:
+    """An episode's own name, for telling a re-post of an episode from a new one: "Island of the Amalgam |
+    Prime Defenders Season 1 Episode 2 (Video)" and "Island of Amalgam | Just Roll With It: Prime Defenders #2"
+    both give "island amalgam"."""
+    t = f" {norm(VERSION_LABEL_RE.sub(' ', title or ''))} "
+    for n in sorted(show_names, key=len, reverse=True):
+        if n:
+            t = t.replace(f" {n} ", " ")
+    t = NOISE_RE.sub(" ", t)
+    return " ".join(w for w in t.split() if w not in STOPWORDS)
+
+
+def names_match(a: str, b: str) -> bool:
+    """Same episode name, allowing small differences. An empty name (an early-access post, say) matches any."""
+    if not a or not b:
+        return True
+    if a == b or a in b or b in a:
+        return True
+    wa, wb = set(a.split()), set(b.split())
+    return len(wa & wb) / max(1, len(wa | wb)) >= 0.6
+
+
+def show_number(title: str, show_names: list[str]) -> int | None:
+    """"Riptide 102 - Audio Early Access", "Sister Screwup | Riptide 121": a number straight after the show's name."""
+    for n in sorted(show_names, key=len, reverse=True):
+        if not n:
+            continue
+        name = r"\W+".join(map(re.escape, n.split()))
+        m = re.search(rf"\b{name}\W{{0,3}}(\d{{1,4}})\b(?![.\d])(?!\s*(?:&|and|-)\s*\d)", title or "", re.I)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def season_name_of(title: str, show_names: list[str]) -> str:
+    """What's left of a title without the show's name, the episode marker and the version label, in its own
+    capitals: "Unwitness Protection Program - Diseased Residents [Case File 1]" gives "Diseased Residents"."""
+    t = VERSION_LABEL_RE.sub(" ", title or "")
+    for rx in [*SEASON_EPISODE_RES, *EPISODE_RES]:
+        t = rx.sub(" ", t)
+    t = re.sub(r"\b(?:Just Roll With It|JRWI)\b:?", " ", t, flags=re.I)
+    for n in sorted(show_names, key=len, reverse=True):
+        if n:
+            t = re.sub(r"\b" + r"\W+".join(map(re.escape, n.split())) + r"\b", " ", t, flags=re.I)
+    t = re.sub(r"[\[\]()|:#]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip(" -–—.,") or ""
+
+
+def infer_seasons(posts: list[dict], show_names: list[str]) -> dict[int, int]:
+    """Seasons for one show's episodes, in upload order. A season named in the title, a tag or by the user is used
+    as it is. Otherwise a post that's another version of an earlier episode (same number and name) gets that
+    episode's season, and an episode 1 after the current season already has episodes starts a new season."""
+    out: dict[int, int] = {}
+    current, history = 1, []   # (season, number, name key, date) of videos and audio
+    # Same-day posts in episode order, so a #1 and #2 uploaded together don't look like a restart
+    for p in sorted(posts, key=lambda p: ((p["published"] or "")[:10], p["episode"] or 0, p["id"])):
+        num, key, day = p["episode"], name_key(p["title"], show_names), (p["published"] or "")[:10]
+        media = p["path_kind"] in MEDIA_KINDS
+        if p["explicit_season"] is not None:
+            season = p["explicit_season"]
+            current = max(current, season)
+        elif not media or num is None:
+            season = current
+        elif same := next((h for h in reversed(history) if h[1] == num and names_match(h[2], key)), None):
+            season = same[0]
+        elif num == 1 and any(h[0] == current and (h[1] or 0) >= 2 and h[3] < day for h in history):
+            current += 1
+            season = current
+        else:
+            season = current
+        if media:
+            history.append((season, num, key, day))
+        out[p["id"]] = season
+    return out
+
+
+def season_names(posts: list[dict], seasons: dict[int, int], show_names: list[str]) -> dict[int, str]:
+    """A season's name, when all its numbered episodes share one besides their own number, as UPP's do."""
+    found: dict[int, list[tuple[str, str]]] = {}
+    for p in posts:
+        if p["episode"] is not None and p["id"] in seasons:
+            raw = season_name_of(p["title"], show_names)
+            found.setdefault(seasons[p["id"]], []).append((norm(raw), raw))
+    out = {}
+    for season, names in found.items():
+        keys = {k for k, _ in names}
+        numbers = {p["episode"] for p in posts if seasons.get(p["id"]) == season and p["episode"] is not None}
+        if len(keys) == 1 and "" not in keys and len(numbers) >= 2:
+            out[season] = names[0][1]
+    return out
+
+
 def has_episode_marker(text: str) -> bool:
     return episode_parts(text)[1] is not None
 
@@ -332,50 +447,107 @@ def is_audio_post(p: dict) -> bool:
 
 
 def classify_all(db: Db) -> None:
-    """Assign show, tabs and episode number to every post, and group video/audio versions.
+    """Assign show, tabs, episode and season to every post, and group the versions of each episode.
 
-    As on the site, a post's tags decide: a show's plain tag puts it in Episodes, "<show> Extras" in Extras and
-    "<show> Rolled" in Just Rolled With It, and a post with several is in each. Posts whose tags don't say are
-    sorted by their title instead."""
+    As on the site, a post's tags decide: a show's plain tag puts it in that show's Episodes, "<show> Extras" in its
+    Extras and "<show> Rolled" in its Just Rolled With It, and a post with several, of one show or of several shows,
+    is in each. Posts whose tags don't say are sorted by their title instead."""
     shows_from_tags(db)
     matchers = show_matchers(db)
     names_for_tags = show_tag_names(db)
+    by_show: dict[str, list[str]] = {}
+    for n, sid in names_for_tags:
+        by_show.setdefault(sid, []).append(n)
     tag_names = {t["id"]: t["name"] for t in db.q("SELECT id, name FROM tags")}
     posts = db.q("SELECT id, title, path_kind, tag_ids, body_text, images, published, show_override, "
-                 "tab_override, episode_override, season_override, pair_id, show_id, tab, tabs, episode, season "
-                 "FROM posts")
+                 "tab_override, episode_override, season_override, pair_id, show_id, tab, tabs, places, episode, "
+                 "season FROM posts")
+    order = [x for x, _ in TABS]
+    new: dict[int, dict] = {}
     for p in posts:
         names = [tag_names.get(str(i), "") for i in (p["tag_ids"] or [])]
-        tag_show, tag_tabs = tabs_from_tags(names, names_for_tags)
+        tag_show, places, generic = places_from_tags(names, names_for_tags)
         show = p["show_override"] or tag_show or match_show(p["title"], names, matchers)
         if p["tab_override"]:
             tabs = [p["tab_override"]]
-        elif tag_tabs:
-            tabs = tag_tabs
         else:
-            tabs = [pick_tab(p, show, names)]
+            tabs = [t for s, t in places if s == show]
+            if "just rolled with it" in norm(p["title"]) and "aftershow" not in generic:
+                generic.append("aftershow")   # an aftershow tagged only with its show's plain tag
+            tabs += [t for t in generic if t not in tabs]
+            if not tabs:
+                tabs = [pick_tab(p, show, names)]
         tab = main_tab(tabs, p["path_kind"] in MEDIA_KINDS)
-        tabs = sorted(tabs, key=lambda t: [x for x, _ in TABS].index(t) if t in TAB_NAMES else 99)
+        tabs = sorted(tabs, key=lambda t: order.index(t) if t in order else 99)
+        flat = [f"{show}:{t}" for t in tabs] + [f"{s}:{t}" for s, t in places if s != show and f"{s}:{t}"]
         season, ep = episode_parts(p["title"], names)
+        if ep is None:
+            ep = show_number(p["title"], by_show.get(show, []))
         if p["episode_override"] is not None:
             ep = p["episode_override"]
         if p["season_override"] is not None:
             season = p["season_override"]
-        if (show, tab, tabs, ep, season) != (p["show_id"], p["tab"], p["tabs"], p["episode"], p["season"]):
-            db.update("posts", "id", p["id"], {"show_id": show, "tab": tab, "tabs": tabs, "episode": ep,
-                                               "season": season})
+        new[p["id"]] = {"show_id": show, "tab": tab, "tabs": tabs, "places": list(dict.fromkeys(flat)),
+                        "episode": ep, "explicit_season": season}
 
-    # Group the versions of one episode: members-only video, YouTube embed, audio only
-    groups: dict[str, list[dict]] = {}
+    # Seasons, per show, from its Episodes in upload order
+    show_rows = {s["id"]: s for s in db.q("SELECT id, name, seasons FROM shows")}
+    for sid in {n["show_id"] for n in new.values()}:
+        eps = [{**p, **new[p["id"]]} for p in posts
+               if new[p["id"]]["show_id"] == sid and "episodes" in new[p["id"]]["tabs"]]
+        seasons = infer_seasons(eps, by_show.get(sid, []) + ["just roll with it", "jrwi"])
+        for pid, season in seasons.items():
+            new[pid]["season"] = season
+        if sid in show_rows:
+            named = season_names([e for e in eps if e["path_kind"] in MEDIA_KINDS], seasons, by_show.get(sid, []))
+            listed = [{"season": n, "name": named.get(n)} for n in sorted(set(seasons.values()))]
+            if listed != (show_rows[sid]["seasons"] or []):
+                db.update("shows", "id", sid, {"seasons": listed})
     for p in posts:
-        if p["path_kind"] in MEDIA_KINDS:
-            groups.setdefault(base_title(p["title"]), []).append(p)
-    rank = {"videos": 0, "video_embeds": 1, "audio": 2}
+        n = new[p["id"]]
+        n.setdefault("season", None)
+        fields = {k: n[k] for k in ("show_id", "tab", "tabs", "places", "episode", "season")}
+        if any(fields[k] != p[k] for k in fields):
+            db.update("posts", "id", p["id"], fields)
+        p.update(fields)
+
+    # Group the versions of one episode: members-only video, YouTube embed, audio only. Episodes are grouped by show,
+    # season and number when their names agree, however differently the versions are titled; other posts by title.
+    def rank(p: dict) -> tuple:
+        kind = "audio" if is_audio_post(p) else p["path_kind"]
+        early = "early access" in norm(p["title"])
+        return ({"videos": 0, "video_embeds": 1, "audio": 2}.get(kind, 3) + (3 if early else 0), p["published"] or "")
+
     new_pairs: dict[int, int | None] = {p["id"]: None for p in posts}
-    for members in groups.values():
+    grouped: set[int] = set()
+    episodes: dict[tuple, list[dict]] = {}
+    for p in posts:
+        if p["path_kind"] in MEDIA_KINDS and p["tab"] == "episodes" and p["episode"] is not None:
+            episodes.setdefault((p["show_id"], p["season"] or 1, p["episode"]), []).append(p)
+    for (sid, _, _), members in episodes.items():
+        clusters: list[tuple[str, list[dict]]] = []
+        for p in sorted(members, key=lambda p: (p["published"] or "", p["id"])):
+            key = name_key(p["title"], by_show.get(sid, []))
+            for i, (ckey, group) in enumerate(clusters):
+                if names_match(ckey, key):
+                    group.append(p)
+                    clusters[i] = (ckey or key, group)
+                    break
+            else:
+                clusters.append((key, [p]))
+        for _, group in clusters:
+            group.sort(key=rank)
+            for m in group[1:]:
+                new_pairs[m["id"]] = group[0]["id"]
+            grouped.update(m["id"] for m in group)
+    by_title: dict[str, list[dict]] = {}
+    for p in posts:
+        if p["path_kind"] in MEDIA_KINDS and p["id"] not in grouped:
+            by_title.setdefault(base_title(p["title"]), []).append(p)
+    for members in by_title.values():
         if len(members) < 2:
             continue
-        members.sort(key=lambda p: (rank.get("audio" if is_audio_post(p) else p["path_kind"], 3), p["published"] or ""))
+        members.sort(key=rank)
         primary = members[0]
         for m in members[1:]:
             if _close_in_time(primary["published"], m["published"]):
@@ -502,6 +674,16 @@ def write_show_nfo(db: Db, paths: Paths, show_id: str | None, folder: Path) -> N
     )
     if not nfo.exists() or nfo.read_text(encoding="utf-8") != xml:
         nfo.write_text(xml, encoding="utf-8")
+    # Season names, such as UPP's "Diseased Residents", for the season folders Jellyfin shows
+    for s in show.get("seasons") or []:
+        season_dir = folder / f"Season {int(s['season']):02d}"
+        if s.get("name") and season_dir.is_dir():
+            sxml = ('<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n<season>\n'
+                    f"  <title>Season {int(s['season'])}: {escape(s['name'])}</title>\n"
+                    f"  <seasonnumber>{int(s['season'])}</seasonnumber>\n  <lockdata>true</lockdata>\n</season>\n")
+            snfo = season_dir / "season.nfo"
+            if not snfo.exists() or snfo.read_text(encoding="utf-8") != sxml:
+                snfo.write_text(sxml, encoding="utf-8")
     # Show art: the show's picture, or the JRWI logo when it has none, fitted whole into a 2:3 poster; the backdrop
     # is the show's picture or its newest thumbnail. A small record of where each picture came from lets another
     # one replace it later.
