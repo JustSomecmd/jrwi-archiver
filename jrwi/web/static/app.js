@@ -330,3 +330,6 @@ document.addEventListener("click", (e) => {
     viewer.open(pics.map((x) => x.currentSrc || x.src), pics.indexOf(pic));
   }
 });
+
+// A select that applies itself as soon as it's changed, such as Home's tag picker
+document.querySelectorAll("select[data-autosubmit]").forEach((s) => s.addEventListener("change", () => s.form.submit()));

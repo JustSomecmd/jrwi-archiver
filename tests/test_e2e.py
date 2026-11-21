@@ -4,6 +4,7 @@ Needs ffmpeg for the test media:  sh tests/make_media.sh && python -m pytest tes
 """
 
 import json
+import re
 import os
 import socket
 import subprocess
@@ -754,6 +755,28 @@ def test_check_status_says_what_it_does(app, client):
     web.post("/login", data={"password": "test-password"})
     page = web.get("/admin").text
     assert "What do Check now and Full check do?" in page and "back to the very first post" in page
+
+
+def test_feed_by_tag(app):
+    """Home can show one tag's posts, a search keeps to the tag picked, and searching finds tag names too."""
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    art = web.get("/?tag=Art").text
+    assert 'href="/items/290"' in art and 'href="/items/300"' not in art
+    assert "1 post tagged <b>Art</b>" in art and '<option value="Art" selected>' in art
+    assert "Continue watching" not in art
+    assert 'href="/items/290"' in web.get("/?tag=art").text            # any capitals
+    both = web.get("/?tag=RIPTIDE&q=Blue").text                          # a search keeps to the tag picked
+    assert 'href="/items/289"' in both and 'href="/items/290"' not in both and 'href="/items/297"' not in both
+    none = web.get("/?tag=Art&q=Blue").text
+    assert "0 posts tagged <b>Art</b> and with \"Blue\"" in none.replace("&#34;", '"') and 'href="/items/289"' not in none
+    assert 'href="/?q=Blue&amp;tag=RIPTIDE' in both                      # sort and page links keep both
+    named = web.get("/?q=Riptide Rolled").text                           # the name of a tag a post carries
+    assert 'href="/items/297"' in named
+    assert "0 posts tagged <b>Nonsense</b>" in web.get("/?tag=Nonsense").text
+    home = web.get("/").text
+    assert 'href="/?tag=Art"' in home and '<option value="Riptide Rolled">Riptide Rolled (' in home
+    assert 'href="/?tag=RIPTIDE"' in web.get("/items/300").text           # the post page's tags too
 
 
 def test_feed_is_read_back_far_enough():

@@ -517,9 +517,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     # ------------------------------------------------------------------ archive website
 
     @app.get("/", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def home(request: Request, q: str | None = None, page: int = 1, locked: bool = False, order: str = "desc"):
+    def home(request: Request, q: str | None = None, page: int = 1, locked: bool = False, order: str = "desc",
+             tag: str | None = None):
         # Like the site's members page: the feed, with the shows as tiles above it
-        return feed(request, q, page, locked, order)
+        return feed(request, q, page, locked, order, tag)
 
     @app.get("/shows/{show_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def show_page(request: Request, show_id: str, tab: str | None = None, season: int | None = None, page: int = 1,
@@ -541,14 +542,27 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                       pages=math.ceil(data["total"] / data["page_size"]) or 1)
 
     @app.get("/feed", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def feed(request: Request, q: str | None = None, page: int = 1, locked: bool = False, order: str = "desc"):
+    def feed(request: Request, q: str | None = None, page: int = 1, locked: bool = False, order: str = "desc",
+             tag: str | None = None):
         order = "asc" if order == "asc" else "desc"
+        q, tag = (q or "").strip(), (tag or "").strip()
         where, args = ["status != 'gone'"], []
         if not locked:
             where.append("status != 'locked'")
         if q:
-            where.append("(title LIKE ? OR body_text LIKE ?)")
-            args += [f"%{q}%", f"%{q}%"]
+            # The title, the text, or the name of one of its tags
+            where.append("(title LIKE ? OR body_text LIKE ? OR EXISTS (SELECT 1 FROM json_each(posts.tag_ids) j "
+                         "JOIN tags t ON t.id = CAST(j.value AS TEXT) WHERE t.name LIKE ?))")
+            args += [f"%{q}%", f"%{q}%", f"%{q}%"]
+        if tag:
+            # One tag, by its name as the site shows it
+            ids = [r["id"] for r in db.q("SELECT id FROM tags WHERE name = ? COLLATE NOCASE", (tag,))]
+            if ids:
+                where.append("EXISTS (SELECT 1 FROM json_each(posts.tag_ids) WHERE CAST(value AS TEXT) IN (%s))"
+                             % ",".join("?" * len(ids)))
+                args += ids
+            else:
+                where.append("0")
         direction = order.upper()
         rows_sql = f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY published {direction}, id {direction}"
         total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
@@ -567,11 +581,17 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         for s in shows:
             # Until the show's own art is saved, its newest thumbnail stands in
             s["tile"] = s["image"]
-        return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
-                      pages=math.ceil(total / 20) or 1, locked=locked, order=order,
+        return render(request, "feed.html", posts=posts, q=q, tag=tag, tags=feed_tags(), page=max(1, page),
+                      pages=math.ceil(total / 20) or 1, locked=locked, order=order, total=total,
                       tiles=[s for s in shows if s["item_count"]],
-                      resume=continue_watching() if page <= 1 and not q else [],
-                      empty=not total and not q and not db.one("SELECT 1 FROM posts LIMIT 1"))
+                      resume=continue_watching() if page <= 1 and not q and not tag else [],
+                      empty=not total and not q and not tag and not db.one("SELECT 1 FROM posts LIMIT 1"))
+
+    def feed_tags() -> list[dict]:
+        """The site's tags that archived posts carry, by name, with how many posts each (those in your tier)."""
+        return db.q("SELECT t.name AS name, COUNT(DISTINCT p.id) AS n FROM posts p, json_each(p.tag_ids) j "
+                    "JOIN tags t ON t.id = CAST(j.value AS TEXT) WHERE p.status NOT IN ('gone', 'locked') "
+                    "GROUP BY t.name ORDER BY t.name COLLATE NOCASE")
 
     CONTINUE_MIN = 10.0   # seconds in before an episode counts as started
 

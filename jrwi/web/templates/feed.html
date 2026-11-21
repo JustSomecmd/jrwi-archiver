@@ -38,18 +38,27 @@
       </div>
     </section>
     {% endif %}
+    {% set keep = 'q=' ~ (q | urlencode) ~ ('&tag=' ~ (tag | urlencode) if tag else '') %}
     <form class="toolbar" method="get" action="/">
-      <a class="pill" href="/?q={{ q | urlencode }}{{ '&locked=on' if locked else '' }}&order={{ 'asc' if order == 'desc' else 'desc' }}">
+      <a class="pill" href="/?{{ keep }}{{ '&locked=on' if locked else '' }}&order={{ 'asc' if order == 'desc' else 'desc' }}">
         {{ icon('sort' if order == 'desc' else 'sortup') }} {{ 'Newest to oldest' if order == 'desc' else 'Oldest to newest' }}</a>
-      <a class="pill {% if locked %}on{% endif %}" href="/?q={{ q | urlencode }}&order={{ order }}{{ '' if locked else '&locked=on' }}">
+      <a class="pill {% if locked %}on{% endif %}" href="/?{{ keep }}&order={{ order }}{{ '' if locked else '&locked=on' }}">
         {{ icon('lock') }} Show locked</a>
       <input type="hidden" name="order" value="{{ order }}">
       {% if locked %}<input type="hidden" name="locked" value="on">{% endif %}
-      <label class="search">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="Search" aria-label="Search titles and text"></label>
+      <select name="tag" class="tagpick" data-autosubmit aria-label="Only posts with this tag">
+        <option value="">All tags</option>
+        {% for t in tags %}<option value="{{ t.name }}"{% if t.name | lower == tag | lower %} selected{% endif %}>{{ t.name }} ({{ t.n }})</option>{% endfor %}
+      </select>
+      <label class="search">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="Search titles, text and tags" aria-label="Search titles, text and tags"></label>
+      <noscript><button type="submit">Search</button></noscript>
     </form>
-    {% if q %}<p class="muted small">Posts with "{{ q }}" in the title or text. <a class="linkish" href="/?order={{ order }}">Clear</a></p>{% endif %}
+    {% if q or tag %}<p class="muted small">{{ total }} post{{ '' if total == 1 else 's' }}
+      {%- if tag %} tagged <b>{{ tag }}</b>{% endif %}
+      {%- if q %}{{ ' and' if tag }} with "{{ q }}" in the title, text or tags{% endif %}.
+      <a class="linkish" href="/?order={{ order }}{{ '&locked=on' if locked else '' }}">Clear</a></p>{% endif %}
     {% for p in posts %}{{ post_card(p) }}{% else %}<p class="empty">Nothing found.</p>{% endfor %}
-    {{ pager(page, pages, '/?q=' ~ (q|urlencode) ~ ('&locked=on' if locked else '') ~ '&order=' ~ order ~ '&') }}
+    {{ pager(page, pages, '/?' ~ keep ~ ('&locked=on' if locked else '') ~ '&order=' ~ order ~ '&') }}
   </div>
   <aside class="aside">
     <div class="avatar-circle" {% if logo %}style="background-image:url('{{ logo }}')"{% endif %}></div>

@@ -130,7 +130,7 @@
         {% for f in p.documents %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }}<span>{{ f.name }}</span></a>{% endfor %}
       </div>
     {% endif %}
-    {% if p.tags %}<div class="chips">{% for t in p.tags %}<span class="chip">{{ t }}</span>{% endfor %}</div>{% endif %}
+    {% if p.tags %}<div class="chips">{% for t in p.tags %}<a class="chip" href="/?tag={{ t | urlencode }}" title="All posts tagged {{ t }}">{{ t }}</a>{% endfor %}</div>{% endif %}
     <div class="pfoot">
       {% if p.like_count is not none %}<span class="pill">{{ icon('heart') }} {{ p.like_count }}</span>{% endif %}
       <a class="pill" href="{{ url }}#comments">{{ icon('comment') }} {{ p.comment_count or 0 }}</a>

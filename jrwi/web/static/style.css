@@ -518,3 +518,8 @@ pre.insp-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85re
 .check-help summary { cursor: pointer; }
 .check-help ol { margin: .4rem 0 .6rem 1.2rem; padding: 0; } .check-help li { margin: .25rem 0; }
 .check-help p { margin: .5rem 0; }
+
+/* Tags: pick one on Home, or follow one from a post */
+.toolbar .tagpick { width: auto; max-width: 15rem; flex: none; margin: 0; }
+a.chip:hover, a.tag:hover { color: var(--accent); text-decoration: none; }
+@media (max-width: 600px) { .toolbar .tagpick { max-width: none; flex: 1 1 100%; } }

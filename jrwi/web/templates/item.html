@@ -62,7 +62,7 @@
         {% for f in item.documents %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }} {{ f.name }}</a>{% endfor %}
       </div>
     {% endif %}
-    {% if item.tags %}<div class="tags">{% for t in item.tags %}<span class="tag">{{ t }}</span>{% endfor %}</div>{% endif %}
+    {% if item.tags %}<div class="tags">{% for t in item.tags %}<a class="tag" href="/?tag={{ t | urlencode }}" title="All posts tagged {{ t }}">{{ t }}</a>{% endfor %}</div>{% endif %}
     <div class="pfoot">
       {{ counts(item) }}
       <a class="pill" href="{{ item.original_url }}" target="_blank" rel="noopener">{{ icon('external') }} Original post</a>
