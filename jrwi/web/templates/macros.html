@@ -100,7 +100,7 @@
 {% endmacro %}
 
 {# A post in the feed, laid out like the site's feed: media, date, title, a short preview of the text that opens in
-   place, attachments, tags, likes, comments and share, and the top comments #}
+   place, attachments, tags, likes, comments, the original post and its files, and the top comments #}
 {% macro post_card(p) %}
 {% set url = '/items/' ~ p.id %}
 <article class="pcard {% if p.locked %}locked{% endif %}">
@@ -126,15 +126,17 @@
     {% endif %}
     {% if p.attachments or p.documents %}
       <div class="filelist">
-        {% for f in p.attachments %}<a href="{{ f.url }}" download>{{ icon('link') }}<span>{{ f.name }}</span></a>{% endfor %}
-        {% for f in p.documents %}<a href="{{ f.url }}" target="_blank">{{ icon('doc') }}<span>{{ f.name }}</span></a>{% endfor %}
+        {% for f in p.attachments %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('link') }}<span>{{ f.name }}</span></a>{% endfor %}
+        {% for f in p.documents %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }}<span>{{ f.name }}</span></a>{% endfor %}
       </div>
     {% endif %}
     {% if p.tags %}<div class="chips">{% for t in p.tags %}<span class="chip">{{ t }}</span>{% endfor %}</div>{% endif %}
     <div class="pfoot">
       {% if p.like_count is not none %}<span class="pill">{{ icon('heart') }} {{ p.like_count }}</span>{% endif %}
       <a class="pill" href="{{ url }}#comments">{{ icon('comment') }} {{ p.comment_count or 0 }}</a>
-      {% if p.original_url %}<button type="button" class="pill" data-share="{{ p.original_url }}" data-title="{{ p.title }}">{{ icon('share') }} <span>Share</span></button>{% endif %}
+      {% if p.original_url %}<a class="pill" href="{{ p.original_url }}" target="_blank" rel="noopener">{{ icon('external') }} Original post</a>{% endif %}
+      {% if not p.locked and (p.images or p.attachments or p.documents or p.audio or (p.video and p.video.url) or p.handed_over or p.thumbnail) %}
+      <a class="pill" href="{{ url }}/files">{{ icon('file') }} Files</a>{% endif %}
     </div>
     {% if p.top_comments %}
     <div class="fcomments" data-comments="{{ p.id }}" data-offset="{{ p.top_comments | length }}" data-sort="top">

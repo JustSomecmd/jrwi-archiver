@@ -682,6 +682,9 @@ def test_file_inspector(app, client):
     page = web.get("/items/299/files").text
     assert "Zombie Character Sheets.pdf" in page and "inspector.js" in page and "Linked Google file" in page
     assert '/items/299/files?f=' in web.get("/items/299").text
+    home = web.get("/").text   # the feed: Original post in place of Share, and a Files button
+    assert "Original post" in home and 'href="/items/299/files"' in home and "data-share" not in home
+    assert 'href="/items/296/files"' not in home   # a post above the tier has no files
     summary = web.get("/admin/files").text
     assert "PDF" in summary and ".pdf" in summary and "what's inside" in summary
 

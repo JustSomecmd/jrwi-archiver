@@ -147,23 +147,6 @@ const initClamps = (root) => root.querySelectorAll("[data-clamp]").forEach((el) 
 });
 initClamps(document);
 
-// Share: the original post on jrwishow.com
-document.querySelectorAll("[data-share]").forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    const url = btn.dataset.share;
-    try {
-      if (navigator.share) { await navigator.share({ title: btn.dataset.title || "", url }); return; }
-      await navigator.clipboard.writeText(url);
-      const label = btn.querySelector("span");
-      const was = label.textContent;
-      label.textContent = "Link copied";
-      setTimeout(() => { label.textContent = was; }, 1800);
-    } catch (e) {
-      window.open(url, "_blank", "noopener");
-    }
-  });
-});
-
 // The audio player, laid out like the site's: speed, back and forward 15 seconds, play, times and a slider
 const clock = (s) => {
   if (!isFinite(s) || s < 0) s = 0;
