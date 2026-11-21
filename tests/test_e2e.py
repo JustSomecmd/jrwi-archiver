@@ -710,6 +710,40 @@ def test_continue_watching_on_home(app, client):
     assert "Continue watching" not in web.get("/?page=2").text and "Continue watching" not in web.get("/?q=Riptide").text
 
 
+def test_check_status_says_what_it_does(app, client):
+    """Each step of a check has a stable name and plain wording, and says what it's counting."""
+    from jrwi.crawler import STEPS
+    archiver = app.state.archiver
+    seen = []
+    original = archiver.status.set
+
+    def recording(**kw):
+        original(**kw)
+        seen.append(archiver.status.snapshot())
+
+    archiver.status.set = recording
+    try:
+        assert archiver.run_check(full=True)["result"] == "ok"
+    finally:
+        archiver.status.set = original
+    steps = [x["step"] for x in seen]
+    for step in ("starting", "feed", "pages", "posts", "finishing"):
+        assert step in steps, step
+    assert steps.index("feed") < steps.index("posts") < steps.index("finishing")
+    phases = {x["step"]: x["phase"] for x in seen}
+    assert phases["starting"] == "Starting a full check" and phases["feed"] == "Reading the whole members feed"
+    assert phases["finishing"] == STEPS["finishing"][0]
+    assert any(x["step"] == "feed" and x["detail"].startswith("Page 1: ") and " posts read, " in x["detail"] for x in seen)
+    assert any(x["step"] == "pages" and x["unit"] == "page" for x in seen)
+    assert seen[-1]["step"] == "idle" and not seen[-1]["running"]
+    st = client.get("/api/status").json()
+    assert st["step"] == "idle" and "unit" in st["progress"]
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    page = web.get("/admin").text
+    assert "What do Check now and Full check do?" in page and "back to the very first post" in page
+
+
 def test_feed_is_read_back_far_enough():
     """An incremental check reads on past its known posts until it's back past the days it always rereads."""
     from jrwi.crawler import STOP_AFTER_KNOWN, feed_read_far_enough

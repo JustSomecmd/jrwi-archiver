@@ -37,8 +37,10 @@ TA_LINE_UP_PER_CHECK = 40   # YouTube-only episodes lined up through TubeArchivi
 @dataclass
 class Status:
     running: bool = False
-    phase: str = "idle"
-    detail: str = ""
+    step: str = "idle"             # stable name of the step, for code: see STEPS
+    phase: str = "idle"            # what the check is doing, for people; the wording can change
+    detail: str = ""               # which post or file, and what part of it
+    unit: str | None = None        # what done and total count: post, episode, page
     done: int = 0
     total: int = 0
     current: float | None = None   # how much of the file downloading now is done, 0 to 1
@@ -52,8 +54,29 @@ class Status:
 
     def snapshot(self) -> dict:
         with self.lock:
-            return {"running": self.running, "phase": self.phase, "detail": self.detail,
-                    "done": self.done, "total": self.total, "current": self.current, "started": self.started}
+            return {"running": self.running, "step": self.step, "phase": self.phase, "detail": self.detail,
+                    "done": self.done, "total": self.total, "current": self.current, "unit": self.unit,
+                    "started": self.started}
+
+    def begin(self, step: str, total: int = 0, **kw) -> None:
+        """Start a step of a check: its wording from STEPS, with nothing counted yet."""
+        phase, unit = STEPS[step]
+        self.set(step=step, phase=kw.pop("phase", phase), unit=unit, detail="", done=0, total=total, current=None, **kw)
+
+
+# Each step of a check: (what it's doing, in words, and what its count counts)
+STEPS = {
+    "starting": ("Starting the check", None),
+    "login": ("Logging in to jrwishow.com", None),
+    "feed": ("Looking for new posts in the members feed", None),
+    "pages": ("Saving the site's own pages", "page"),
+    "posts": ("Saving new and changed posts", "post"),
+    "comments": ("Looking for new comments on recent posts", "post"),
+    "tubearchivist": ("Asking TubeArchivist about episodes now on YouTube", "episode"),
+    "line_up": ("Lining up the video and audio of episodes", "episode"),
+    "finishing": ("Sorting posts and updating the Jellyfin folder", None),
+    "reparse": ("Re-reading saved pages", "post"),
+}
 
 
 def write_gz(path: Path, text: str) -> None:
@@ -110,9 +133,9 @@ class Archiver:
         email = os.environ.get("JRWI_EMAIL") or s["site_email"]
         password = os.environ.get("JRWI_PASSWORD") or s["site_password"]
         before = self.status.snapshot()
-        self.status.set(phase="logging in", detail="")
+        self.status.set(step="login", phase=STEPS["login"][0], detail="")
         self.client.login(email, password, debug_file=self.paths.data / "login-debug.txt")
-        self.status.set(phase=before["phase"], detail=before["detail"])
+        self.status.set(step=before["step"], phase=before["phase"], detail=before["detail"])
 
     def has_login(self) -> bool:
         """True when there's an email and password, or a saved login session, to check with."""
@@ -137,7 +160,8 @@ class Archiver:
         self.new_titles = []
         self.stop_event.clear()
         run_id = self.db.x("INSERT INTO runs (started, result) VALUES (?, 'running')", (now(),))
-        self.status.set(running=True, phase="starting", detail="", done=0, total=0, started=now())
+        self.status.begin("starting", running=True, started=now(),
+                          phase="Starting a full check" if full else STEPS["starting"][0])
         result, message, archived = "ok", None, 0
         try:
             organize.ensure_default_shows(self.db)
@@ -153,6 +177,7 @@ class Archiver:
                 self.refresh_comments()
             handover.run(self.db, self.paths, self.s, self.status, self.stop_event)
             self.line_up()
+            self.status.begin("finishing")
             organize.classify_all(self.db)
             organize.reorganize(self.db, self.paths)
             organize.refresh_jellyfin(self.db, self.paths)
@@ -166,7 +191,7 @@ class Archiver:
             log.exception("check failed")
             result, message = "error", f"{type(e).__name__}: {e}"
         finally:
-            self.status.set(running=False, phase="idle", detail="", done=0, total=0, current=None)
+            self.status.set(running=False, step="idle", phase="idle", detail="", done=0, total=0, current=None, unit=None)
         try:
             self.db.set_setting("archive_bytes", folder_size(self.paths.archive) + folder_size(self.paths.media))
         except OSError:
@@ -204,7 +229,8 @@ class Archiver:
 
     def crawl_feed(self, full: bool = False):
         incremental = bool(self.s.get("crawl_complete")) and not full
-        self.status.set(phase="reading the feed", detail="")
+        self.status.begin("feed", phase="Reading the whole members feed" if not incremental else STEPS["feed"][0])
+        new_posts = 0
         url: str | None = self.client.abs("/supporters")
         visited, seen_ids = set(), set()
         known_streak = page_no = 0
@@ -248,11 +274,14 @@ class Archiver:
                     write_gz(self.post_dir(card["id"]) / "card.html.gz", P.clean_card(frame))
                 if self.merge_card(card):
                     known_streak = 0
+                    new_posts += 1
                 elif not card["pinned"]:
                     known_streak += 1
                 if card.get("published") and not card["pinned"]:
                     oldest = min(oldest or card["published"], card["published"])
-            self.status.set(detail=f"page {page_no}, {len(seen_ids)} posts")
+            going_back = incremental and window and known_streak >= STOP_AFTER_KNOWN
+            self.status.set(detail=f"Page {page_no}: {len(seen_ids)} posts read, {new_posts} new"
+                                   + (f"; reading back {days} days for posts added with an older date" if going_back else ""))
             if incremental and feed_read_far_enough(known_streak, oldest, window):
                 break
             nxt = P.find_load_more(soup, final)
@@ -315,12 +344,12 @@ class Archiver:
                            "ORDER BY published DESC, id DESC"):
             if p["status"] != "complete" or p.get("refetch") or any(wanted.get(k) for k in (p["skipped"] or [])):
                 todo.append(p)
-        self.status.set(phase="archiving posts", total=len(todo), done=0)
+        self.status.begin("posts", total=len(todo))
         archived = 0
         for n, post in enumerate(todo, 1):
             if self.stop_event.is_set():
                 raise SiteError("stopped")
-            self.status.set(done=n - 1, detail=post["title"], current=None)
+            self.status.set(done=n - 1, detail=f"{post['title']} · reading the post", current=None)
             first_time = post["status"] == "new"
             try:
                 if post.get("refetch") == "files":
@@ -422,11 +451,11 @@ class Archiver:
         if not pairs and not ta_pairs:
             return 0
         total = len(pairs) + len(ta_pairs)
-        self.status.set(phase="lining up video and audio", detail="", done=0, total=total, current=None)
+        self.status.begin("line_up", total=total)
         for n, (primary, video, audio, key) in enumerate(pairs):
             if self.stop_event.is_set():
                 break
-            self.status.set(done=n, detail=primary["title"] or "")
+            self.status.set(done=n, detail=f"{primary['title'] or ''} · comparing the two soundtracks")
             try:
                 result = find_offset(self.paths.media / video[1]["path"], self.paths.archive / audio[1]["path"],
                                      video[1].get("duration"), audio[1].get("duration"))
@@ -437,7 +466,7 @@ class Archiver:
         for n, (primary, youtube_id, audio, key) in enumerate(ta_pairs, len(pairs)):
             if self.stop_event.is_set():
                 break
-            self.status.set(done=n, detail=primary["title"] or "")
+            self.status.set(done=n, detail=f"{primary['title'] or ''} · comparing the audio with TubeArchivist's copy")
             try:
                 video = ta.video(youtube_id)
             except TaError as e:
@@ -550,7 +579,7 @@ class Archiver:
                   for i in items if i["kind"] in ("youtube", "embed")]
         failures, notes, skipped = [], [], set()
         downloader = Downloader(self.client, int(self.s["max_height"] or 0),
-                                progress=lambda m, f=None: self.status.set(detail=f"{post['title']}: {m}", current=f))
+                                progress=lambda m, f=None: self.status.set(detail=f"{post['title']} · {m}", current=f))
         title_base = P.safe_filename(update.get("title") or post["title"], 90, keep_ext=False)
         direct_ids = {i["playback_id"] for i in items if i["kind"] == "mux" and any(
             f"/{i['playback_id']}/" in urlparse(x["url"]).path for x in items if x["kind"] == "download")}
@@ -704,6 +733,7 @@ class Archiver:
             notes.append(f"attachment '{name}' is listed but no download link was found")
 
         if wanted.get("comments"):
+            self.status.set(detail=f"{post['title']} · saving its comments", current=None)
             try:
                 self.archive_comments(post["id"])
             except SiteError as e:
@@ -866,7 +896,8 @@ class Archiver:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(timespec="seconds")
         posts = self.db.q("SELECT * FROM posts WHERE status='complete' AND published >= ? AND "
                           "(comments_fetched IS NULL OR comments_fetched < ?)", (since, cutoff))
-        self.status.set(phase="refreshing comments", total=len(posts), done=0)
+        self.status.begin("comments", total=len(posts),
+                          phase=f"Looking for new comments on posts from the last {days} days")
         for n, post in enumerate(posts, 1):
             if self.stop_event.is_set():
                 raise SiteError("stopped")
@@ -885,7 +916,7 @@ class Archiver:
     def archive_pages(self, feed_soup) -> None:
         if feed_soup is None:
             return
-        self.status.set(phase="saving site pages", detail="", done=0, total=0)
+        self.status.begin("pages")
         site_dir = self.paths.archive / "site"
         for url in P.site_assets(feed_soup, self.client.abs("/supporters")):
             self.save_asset(url, site_dir / "assets")
@@ -907,7 +938,7 @@ class Archiver:
                  if s.get("page_url")}
         self.status.set(total=len(links))
         for n, url in enumerate(links, 1):
-            self.status.set(done=n - 1, detail=urlparse(url).path)
+            self.status.set(done=n - 1, detail=urlparse(url).path or "/")
             path = urlparse(url).path.rstrip("/") or "/"
             row = self.db.one("SELECT fetched FROM pages WHERE path=?", (path,))
             if row and row["fetched"] and datetime.fromisoformat(row["fetched"]) > datetime.now(timezone.utc) - PAGES_EVERY:
@@ -990,12 +1021,12 @@ class Archiver:
         """Re-read everything saved, as its own job with status and a Stop button. Run by the scheduler, so it
         never overlaps a check."""
         self.stop_event.clear()
-        self.status.set(running=True, phase="re-reading saved pages", detail="", done=0, total=0, current=None,
+        self.status.begin("reparse", running=True,
                         started=now())
         try:
             return self.reparse()
         finally:
-            self.status.set(running=False, phase="idle", detail="", done=0, total=0, current=None)
+            self.status.set(running=False, step="idle", phase="idle", detail="", done=0, total=0, current=None, unit=None)
 
     def reparse(self) -> dict:
         """Re-read everything saved with the current parsers: post pages and feed cards, comment pages, the feed
@@ -1006,7 +1037,7 @@ class Archiver:
         are marked so the next check fetches just those posts again."""
         posts = self.db.q("SELECT * FROM posts ORDER BY published DESC, id DESC")
         wanted = self.wanted()
-        self.status.set(phase="re-reading saved pages", total=len(posts), done=0)
+        self.status.begin("reparse", total=len(posts))
         n = to_fetch = 0
         stopped = False
         for i, post in enumerate(posts):
@@ -1050,7 +1081,7 @@ class Archiver:
             n += 1
         pages = 0
         if not stopped:
-            self.status.set(phase="re-reading saved pages", detail="feed and site pages", done=len(posts))
+            self.status.set(detail="the saved feed and the site's own pages", done=len(posts))
             feed = self.paths.archive / "site" / "feed.html.gz"
             if feed.exists():
                 soup = P.soup_of(read_gz(feed))

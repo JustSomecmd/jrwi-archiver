@@ -196,8 +196,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         counts = db.one("SELECT COUNT(*) AS items, SUM(status IN ('complete','partial')) AS archived, "
                         "SUM(status='locked') AS locked, SUM(json_array_length(problems) > 0) AS problems FROM posts")
         return {
-            "running": snap["running"], "phase": snap["phase"], "detail": snap["detail"],
-            "progress": {"done": snap["done"], "total": snap["total"], "current": snap["current"]},
+            "running": snap["running"], "step": snap["step"], "phase": snap["phase"], "detail": snap["detail"],
+            "progress": {"done": snap["done"], "total": snap["total"], "current": snap["current"], "unit": snap["unit"]},
             "last_check_started": last["started"] if last else None,
             "last_check_finished": last["finished"] if last else None,
             "next_check": scheduler.next_check.isoformat(timespec="seconds") if scheduler.next_check else None,
@@ -687,7 +687,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         handovers = {"rows": rows, "counts": counts,
                      "freed": sum((r["handover"].get("freed") or 0) for r in rows if r["handover"].get("status") == "done")}
         ta_set = TubeArchivist.from_settings(db.settings()).configured
+        settings = db.settings()
         return render(request, "admin.html", st=status_obj(), runs=runs, events=events, handovers=handovers, ta_set=ta_set,
+                      every=settings["check_interval_hours"], back_days=settings["recheck_days"],
+                      comment_days=settings["comment_refresh_days"],
                       last_reparse=db.setting("last_reparse"),
                       configured=bool(db.setting("site_email") or os.environ.get("JRWI_EMAIL")))
 

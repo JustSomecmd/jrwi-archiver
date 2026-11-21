@@ -24,13 +24,35 @@
       {% if st.running %}
         <form class="inline" method="post" action="/admin/stop"><button class="danger">Stop</button></form>
       {% else %}
-        <form class="inline" method="post" action="/admin/check"><button>Check now</button></form>
+        <form class="inline" method="post" action="/admin/check"><button title="Look for new posts now, as the scheduled checks do">Check now</button></form>
         <form class="inline" method="post" action="/admin/check"><input type="hidden" name="full" value="1">
-          <button class="ghost" title="Reads the whole feed instead of stopping at posts it already has">Full check</button></form>
+          <button class="ghost" title="Read the whole members feed, back to the first post">Full check</button></form>
       {% endif %}
     </div>
   </div>
-  <div class="bar{% if st.running and (not st.progress.total or (st.phase == 'archiving posts' and st.progress.current is none)) %} busy{% endif %}" {% if not st.running %}hidden{% endif %}><i data-bar style="width:0"></i></div>
+  <div class="bar{% if st.running and (not st.progress.total or (st.step == 'posts' and st.progress.current is none)) %} busy{% endif %}" {% if not st.running %}hidden{% endif %}><i data-bar style="width:0"></i></div>
+  <details class="check-help">
+    <summary class="muted small">What do Check now and Full check do?</summary>
+    <div class="small">
+      <p><b>Check now</b> runs the same check as the schedule{% if every %} (every {{ every | float | round(1) | string | replace('.0', '') }} hours){% endif %}:</p>
+      <ol>
+        <li><b>Looks for new posts:</b> reads the members feed from the newest post down. It stops after 15 posts in a row
+          that it already has{% if back_days %}, once it's back more than {{ back_days }} days (the YouTube version of an
+          episode is posted with the older date of its members-only post){% endif %}.</li>
+        <li><b>Saves the site's own pages</b> (logo, show pages, perks) when they're more than a day old.</li>
+        <li><b>Saves new and changed posts:</b> each post's page, text, comments and files (video, audio, pictures,
+          attachments, linked Google Docs and Drive files), and files an earlier check missed.</li>
+        {% if comment_days %}<li><b>Looks for new comments</b> on posts from the last {{ comment_days }} days.</li>{% endif %}
+        <li><b>Asks TubeArchivist</b> about episodes now on YouTube, when it's connected (see Videos now on YouTube below).</li>
+        <li><b>Lines up the video and audio</b> of episodes that are new or changed, so the apps carry your place between them.</li>
+        <li><b>Sorts posts</b> into shows, tabs and seasons, and updates the Jellyfin folder.</li>
+      </ol>
+      <p><b>Full check</b> does all of that, but reads the whole feed, back to the very first post. That updates what the
+        feed shows about older posts (titles, tags, likes, comment counts, whether you can see them), finds anything a
+        normal check skipped, and notes posts the site has taken down. Nothing already saved is downloaded again.
+        It takes longer, mostly for reading the feed, so it's only worth running now and then.</p>
+    </div>
+  </details>
 </div>
 
 <div class="stats">

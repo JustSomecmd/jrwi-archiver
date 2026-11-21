@@ -120,7 +120,7 @@ class Downloader:
                         done += len(chunk)
                         if total and time.monotonic() - shown > 2:
                             shown = time.monotonic()
-                            self.progress(f"{dest.name}: {done * 100 // total}% of {human_bytes(total)}", done / total)
+                            self.progress(f"downloading {dest.name}, {done * 100 // total}% of {human_bytes(total)}", done / total)
             except requests.RequestException as e:
                 raise Transient(f"connection dropped ({type(e).__name__})")
             if total and done < total:
@@ -153,7 +153,7 @@ class Downloader:
         class Logger:
             def debug(self, msg):
                 if msg.startswith("[download]") and "%" in msg:
-                    progress(msg.replace("[download]", "").strip())
+                    progress("downloading, " + msg.replace("[download]", "").strip())
 
             def info(self, msg):
                 pass
@@ -183,7 +183,7 @@ class Downloader:
                 frac = min(1.0, (d.get("downloaded_bytes") or 0) / total)
             kind = "audio" if audio_only or (d.get("info_dict") or {}).get("vcodec") == "none" else "video"
             size = f" of ~{human_bytes(total)}" if total else ""
-            progress(f"{kind} {round(frac * 100) if frac is not None else '?'}%{size}", frac)
+            progress(f"downloading the {kind}, {round(frac * 100) if frac is not None else '?'}%{size}", frac)
 
         opts = {
             "outtmpl": str(dest_dir / (base + ".%(ext)s")),

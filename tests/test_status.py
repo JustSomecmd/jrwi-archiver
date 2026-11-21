@@ -24,14 +24,16 @@ def archiver(monkeypatch):
 
 def test_phase_comes_back_after_logging_in(archiver, monkeypatch):
     seen = []
-    monkeypatch.setattr(archiver.client, "login", lambda *a, **k: seen.append(archiver.status.phase))
+    monkeypatch.setattr(archiver.client, "login",
+                        lambda *a, **k: seen.append((archiver.status.step, archiver.status.phase)))
     archiver.db.set_setting("site_email", "fan@example.com")
     archiver.db.set_setting("site_password", "hunter2")
-    archiver.status.set(phase="reading the feed", detail="page 3, 30 posts")
+    archiver.status.begin("feed")
+    archiver.status.set(detail="Page 3: 30 posts read, 0 new")
     archiver.ensure_login()
-    assert seen == ["logging in"]
-    assert archiver.status.phase == "reading the feed"
-    assert archiver.status.detail == "page 3, 30 posts"
+    assert seen == [("login", "Logging in to jrwishow.com")]
+    assert (archiver.status.step, archiver.status.phase) == ("feed", "Looking for new posts in the members feed")
+    assert archiver.status.detail == "Page 3: 30 posts read, 0 new"
 
 
 def test_login_message_without_and_with_an_old_session(archiver):

@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.15)
+# JRWI archiver API (contract v0.16)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.0.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.3.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -16,7 +16,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.13:** items and posts gain `places`, every show and tab they're in, and a show's lists and counts include the posts its tags place there from other shows. Shows gain `seasons` (with `GET /api/shows/{showId}`), and `GET /api/shows/{showId}/items` takes `?season=`. `season` is now also worked out when titles don't name it. In the service since 0.7.0.
 - **v0.14:** items in a show's own Just Rolled With It have a `season` too, and the show's `episodes` and `aftershow` tabs each list their `seasons`, so `?tab=aftershow&season=2` gives a season's Just Rolled With It. In the service since 0.7.1.
 - **v0.15:** `GET /api/items/{postId}/files`, `GET /api/posts/{postId}/files` and `GET /api/preview/<path>` (see Files and previews). A YouTube `video` gains `handed_over` when the item's archived video was deleted because TubeArchivist has it; posts gain `handed_over` and `removed_from_site`, and item `versions` gain `removed_from_site`. The event `video_handed_over`. `sync` on YouTube-only items can now be checked. A post whose video was handed over still takes video progress. Offline downloads keep the post's files. In the service since 0.9.0.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`.
+- **v0.16:** the status gains `step`, a stable name for what a check is doing, and `progress.unit`, what its count counts. `phase` and `detail` are now worded for people and can change between versions. In the service since 0.9.3.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -29,7 +30,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.0"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.3"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, then shows from the site's tags or added on the admin page, `other` last. `?include_empty=true` lists all of them. |
@@ -86,8 +87,9 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 ### Status
 
 ```json
-{"running": true, "phase": "archiving posts", "detail": "Through the Fire | Riptide #136: 42%",
- "progress": {"done": 12, "total": 30, "current": 0.42},
+{"running": true, "step": "posts", "phase": "Saving new and changed posts",
+ "detail": "Through the Fire | Riptide #136 · downloading the video, 42% of ~4.1 GB",
+ "progress": {"done": 2, "total": 12, "current": 0.42, "unit": "post"},
  "last_check_started": "2026-11-20T11:19:59+00:00", "last_check_finished": "2026-11-20T11:20:00+00:00",
  "next_check": "2026-11-20T15:29:00+00:00", "last_result": "ok", "message": null, "login_ok": true,
  "counts": {"items": 2104, "archived": 2001, "locked": 87, "problems": 3},
@@ -96,8 +98,10 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 
 - **`last_result`:** one of `ok`, `login_failed`, `blocked`, `error` or `stopped`.
 - **`next_check`:** `null` when checks only run by hand.
-- **`progress` (`current` since v0.6):** `done` of `total` steps in the current phase, for example posts. `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the phase has no known length yet, such as while reading the feed.
-- **`phase`** can also be `re-reading saved pages`. The service does that by itself after an update that reads pages differently, before its next check. At the end of a check it can be `checking TubeArchivist for videos now on YouTube` (since 0.9.0) and `lining up video and audio`, counting the items it looks at.
+- **`step` (v0.16):** what the check is doing, as a stable name for apps to act on: `starting`, `login`, `feed` (reading the members feed), `pages` (the site's own pages), `posts` (saving new and changed posts), `comments` (new comments on recent posts), `tubearchivist` (asking TubeArchivist about episodes now on YouTube), `line_up` (lining up video and audio), `finishing` (sorting posts and updating the Jellyfin folder), `reparse` (re-reading saved pages, its own job) or `idle`.
+- **`phase` and `detail`:** the same in words, for showing as they are; the wording can change between versions. `phase` says what the check is doing, such as "Saving new and changed posts" or "Reading the whole members feed" on a full check. `detail` says which post or page, and what part of it: "Page 3: 60 posts read, 2 new", "Through the Fire | Riptide #136 · reading the post", "· downloading the video, 42% of ~4.1 GB", "· saving its comments". Since v0.16; before, they were shorter, such as "archiving posts".
+- **`progress` (`current` since v0.6, `unit` since v0.16):** `done` of `total` in the current step. `unit` says what's counted: `post`, `episode` or `page`, or `null`. The one being worked on is number `done + 1`, so the web app shows "post 3 of 12". `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the step has no known length yet, such as while reading the feed.
+- **Re-reading saved pages** (`step` `reparse`) runs on its own, not as part of a check: by itself after an update that reads pages differently, before the next check, or from the admin page.
 
 ### Show
 

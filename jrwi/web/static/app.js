@@ -68,7 +68,7 @@ if (live) {
       // While archiving, the bar follows the post being archived (its file downloading now), and the count says
       // how many posts are done. Other phases, such as re-reading saved pages, show how far the whole job is.
       const p = s.progress || {};
-      const perPost = s.phase === "archiving posts";
+      const perPost = s.step ? s.step === "posts" : s.phase === "archiving posts";
       const hasCurrent = p.current !== null && p.current !== undefined;
       let pct = 0;
       let busy = s.running && !p.total;  // no length known: just show it's working
@@ -82,8 +82,9 @@ if (live) {
       bar.parentElement.hidden = !s.running;
       bar.parentElement.classList.toggle("busy", busy);
       bar.style.width = Math.min(100, pct).toFixed(1) + "%";
+      // "post 3 of 12": the one being worked on now
       live.querySelector("[data-count]").textContent =
-        s.running && p.total ? (perPost ? `post ${p.done + 1} of ${p.total}` : `${p.done} of ${p.total}`) : "";
+        s.running && p.total ? `${p.unit || "step"} ${Math.min(p.done + 1, p.total)} of ${p.total}` : "";
       // Counts and sizes change while a check runs
       const set = (key, text) => document.querySelectorAll(`[data-stat="${key}"]`).forEach((el) => { el.textContent = text; });
       for (const k of ["archived", "items", "locked", "problems"]) set(k, String(s.counts[k]));

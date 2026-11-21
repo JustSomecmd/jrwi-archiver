@@ -85,14 +85,13 @@ def run(db: Db, paths: Paths, settings: dict, status=None, stop_event=None) -> d
     counts: dict[str, int] = {}
     found = candidates(db, paths)
     if found and status:
-        status.set(phase="checking TubeArchivist for videos now on YouTube", detail="", done=0, total=len(found),
-                   current=None)
+        status.begin("tubearchivist", total=len(found))
     for n, c in enumerate(found):
         if stop_event is not None and stop_event.is_set():
             break
         post, h = c["post"], c["post"].get("handover") or {}
         if status:
-            status.set(done=n, detail=post["title"] or "")
+            status.set(done=n, detail=f"{post['title'] or ''} · does TubeArchivist have it yet?")
         if h.get("status") == "keep":
             counts["keep"] = counts.get("keep", 0) + 1
             continue
