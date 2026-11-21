@@ -113,7 +113,8 @@ class Serializer:
         members = members or self.members(primary)
         video, audio = self._video(members), self._audio(members)
         tab = primary["tab"] or "posts"
-        if tab == "episodes":
+        tabs = primary.get("tabs") or [tab]
+        if tab == "episodes" and (video or audio):
             kind = "episode"
         elif video and video.get("jellyfin_path"):
             kind = "video"
@@ -133,8 +134,8 @@ class Serializer:
             p["duration"] for p in (video, audio) if p and p.get("duration")]
         return {
             "id": primary["id"], "title": primary["title"], "date": iso(primary["published"]),
-            "show": primary["show_id"] or "other", "tab": tab, "kind": kind, "episode": primary["episode"],
-            "season": (primary.get("season") or 1) if tab == "episodes" and primary["episode"] else None,
+            "show": primary["show_id"] or "other", "tab": tab, "tabs": tabs, "kind": kind, "episode": primary["episode"],
+            "season": (primary.get("season") or 1) if "episodes" in tabs and primary["episode"] else None,
             "pinned": bool(primary["pinned"]), "thumbnail": files_url(thumb),
             "duration": max(durations) if durations else None, "video": video, "audio": audio,
             "sync": self.sync_of(primary, video, audio),
@@ -264,13 +265,17 @@ class Serializer:
         grouped = "" if separate else "AND pair_id IS NULL "
         stats = self.db.one("SELECT COUNT(*) AS n, MAX(published) AS latest FROM posts WHERE show_id=? "
                             f"{grouped}AND status NOT IN ('locked', 'gone')", (row["id"],))
+        art = files_url(row.get("art"))
         out = {"id": row["id"], "name": row["name"], "description": row["description"] or "",
-               "poster": files_url(row["poster"]), "banner": files_url(row["banner"]),
+               # v0.12: the show's picture (poster and banner are the same one), and image never empty
+               "poster": art, "banner": art, "image": art or files_url(self.db.setting("site_logo")),
                "item_count": stats["n"], "latest": iso(stats["latest"])}
         if with_tabs:
-            counts = {r["tab"]: r["n"] for r in self.db.q(
-                f"SELECT tab, COUNT(*) AS n FROM posts WHERE show_id=? {grouped}"
-                "AND status NOT IN ('locked', 'gone') GROUP BY tab", (row["id"],))}
+            counts: dict[str, int] = {}
+            for r in self.db.q(f"SELECT tab, tabs FROM posts WHERE show_id=? {grouped}"
+                               "AND status NOT IN ('locked', 'gone')", (row["id"],)):
+                for t in set(r["tabs"] or [r["tab"]]):
+                    counts[t] = counts.get(t, 0) + 1
             out["tabs"] = [{"id": t, "name": name, "count": counts[t]} for t, name in TABS if counts.get(t)]
         return out
 

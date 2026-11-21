@@ -42,6 +42,17 @@ TABS = [
     ("posts", "Posts"),
 ]
 TAB_NAMES = dict(TABS)
+# Which tab a show's tag puts a post in, as on the site: the plain tag ("RIPTIDE") is the episodes, "<show> Extras"
+# the extras, "<show> Rolled" the aftershow. A post with several of a show's tags is in each of those tabs.
+TAG_SUFFIX_TABS = {"": "episodes", "early access": "episodes", "extras": "extras", "extra": "extras",
+                   "rolled": "aftershow"}
+SEASON_TAG_RE = re.compile(r"season \d{1,2}")
+# Tags that aren't about one show but still say what a post is
+GENERIC_TAG_TABS = {"just rolled with it": "aftershow", "art": "art", "thumbnails": "art"}
+# Which of a post's tabs is its main one (for Jellyfin and the API's tab): videos and audio by what they are,
+# other posts by what they hold
+MAIN_TAB_ORDER = {True: ["aftershow", "extras", "episodes", "art", "posts"],
+                  False: ["art", "extras", "aftershow", "posts", "episodes"]}
 MEDIA_KINDS = {"videos", "audio", "video_embeds"}
 # "(AUDIO ONLY)", "(Audio Only)", "(Audio)", "[Audio]"
 AUDIO_ONLY_RE = re.compile(r"[\(\[]\s*audio(?:\s*only)?\s*[\)\]]|\baudio\s*only\b", re.I)
@@ -79,7 +90,7 @@ def merge_show_menu(db: Db, menu: list[dict]) -> None:
     for i, entry in enumerate(menu):
         path = entry["page_url"].rstrip("/").rsplit("/", 1)[-1]
         sid = slugify(path or entry["name"])
-        row = {"id": sid, "name": entry["name"], "page_url": entry["page_url"], "sort": i}
+        row = {"id": sid, "name": entry["name"], "page_url": entry["page_url"], "sort": i, "source": "menu"}
         if sid not in known:
             row["aliases"] = []
         db.upsert("shows", "id", row)
@@ -102,15 +113,59 @@ def shared_show_art(db: Db) -> set[str]:
 
 
 def drop_shared_show_art(db: Db) -> int:
-    """Forget show posters and banners that are really the site's own picture. Returns how many were dropped."""
+    """Forget show pictures that are really the site's own picture. Returns how many were dropped. A picture the
+    user picked stays."""
     shared = shared_show_art(db)
     dropped = 0
-    for s in db.q("SELECT id, poster, banner FROM shows"):
+    for s in db.q("SELECT id, poster, banner, art, art_source FROM shows"):
         fields = {k: None for k in ("poster", "banner") if s[k] and Path(s[k]).name in shared}
+        if s["art"] and s["art_source"] != "picked" and Path(s["art"]).name in shared:
+            fields.update(art=None, art_source=None)
         if fields:
             db.update("shows", "id", s["id"], fields)
             dropped += len(fields)
     return dropped
+
+
+ART_SOURCES = {"page": "the show's own picture on its page on the site", "picked": "picked by you",
+               "kept": "kept from before 0.6.0, when pictures further down a show's page were used too"}
+
+
+def show_art(db: Db, show: dict) -> str | None:
+    """A show's picture: its page's own share picture, or the one picked on the admin page. None when it has none,
+    and the JRWI logo is shown instead."""
+    return show.get("art") or None
+
+
+def site_logo(db: Db) -> str | None:
+    return db.setting("site_logo") or None
+
+
+def choose_show_art(db: Db, show_id: str, choice: str) -> None:
+    """The admin page's choice: "auto" (the page's own share picture, when it has one), "logo", or one of the
+    pictures on the show's page. A picked picture (or the logo) stays until another is picked."""
+    show = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
+    if not show:
+        raise ValueError("no such show")
+    if choice == "auto":
+        shared = shared_show_art(db)
+        own = show["poster"] if show["poster"] and Path(show["poster"]).name not in shared else None
+        db.update("shows", "id", show_id, {"art": own, "art_source": "page" if own else None})
+    elif choice == "logo":
+        db.update("shows", "id", show_id, {"art": None, "art_source": "picked"})
+    elif choice in art_choices(show):
+        db.update("shows", "id", show_id, {"art": choice, "art_source": "picked"})
+    else:
+        raise ValueError("that picture isn't one of the show's")
+
+
+def art_choices(show: dict) -> list[str]:
+    """Pictures found on a show's page, plus its current one."""
+    out = []
+    for rel in [show.get("art"), *(show.get("art_options") or [])]:
+        if rel and rel not in out:
+            out.append(rel)
+    return out
 
 
 def newest_thumbnail(db: Db, show_id: str) -> str | None:
@@ -128,6 +183,86 @@ def show_matchers(db: Db) -> list[tuple[str, str]]:
             if norm(alias):
                 pairs.append((norm(alias), s["id"]))
     return sorted(pairs, key=lambda p: -len(p[0]))
+
+
+def acronym(name: str) -> str | None:
+    """"Total Monster Kill" -> "tmk": the site tags some shows by their initials ("TMK Extras")."""
+    words = norm(name).split()
+    return "".join(w[0] for w in words) if len(words) >= 3 else None
+
+
+def show_tag_names(db: Db) -> list[tuple[str, str]]:
+    """(normalised name a show's tags start with, show id), longest first."""
+    pairs = []
+    for s in db.q("SELECT id, name, aliases FROM shows WHERE id != 'other'"):
+        for n in {norm(x) for x in [s["name"], *(s["aliases"] or []), acronym(s["name"]) or ""] if norm(x or "")}:
+            pairs.append((n, s["id"]))
+    return sorted(pairs, key=lambda p: -len(p[0]))
+
+
+def tag_role(tag: str, names: list[tuple[str, str]]) -> tuple[str, str] | None:
+    """(show id, tab) for a show's own tag, such as "Riptide Extras" -> ("riptide", "extras")."""
+    t = norm(tag)
+    for n, sid in names:
+        if t == n:
+            return sid, "episodes"
+        if t.startswith(n + " "):
+            rest = t[len(n) + 1:]
+            if rest in TAG_SUFFIX_TABS:
+                return sid, TAG_SUFFIX_TABS[rest]
+            if SEASON_TAG_RE.fullmatch(rest):
+                return sid, "episodes"
+    return None
+
+
+def tabs_from_tags(tag_names: list[str], names: list[tuple[str, str]]) -> tuple[str | None, list[str]]:
+    """The show a post's tags put it in, and the tabs they put it in (empty when its tags don't say)."""
+    show, tabs = None, []
+    for tag in tag_names:
+        role = tag_role(tag, names)
+        if role:
+            show = show or role[0]
+            if role[0] == show and role[1] not in tabs:
+                tabs.append(role[1])
+        generic = GENERIC_TAG_TABS.get(norm(tag))
+        if generic and generic not in tabs:
+            tabs.append(generic)
+    return show, tabs
+
+
+def main_tab(tabs: list[str], media: bool) -> str:
+    order = MAIN_TAB_ORDER[media]
+    return min(tabs, key=lambda t: order.index(t) if t in order else len(order))
+
+
+def shows_from_tags(db: Db) -> list[str]:
+    """Shows the site tags but doesn't list in its Shows menu, such as Mythborne: a tag "<X> Extras" or "<X> Rolled"
+    for an X that isn't a known show makes X a show. Returns the ids it added."""
+    known = {n for n, _ in show_tag_names(db)}
+    tags = {norm(t["name"]): t["name"] for t in db.q("SELECT name FROM tags") if t["name"]}
+    added = []
+    for t in sorted(tags):
+        for suffix in ("extras", "extra", "rolled"):
+            if t.endswith(" " + suffix):
+                base = t[: -len(suffix) - 1].strip()
+                if base and base not in known and base not in GENERIC_TAG_TABS:
+                    name = tags.get(base) or tags[t][: len(tags[t]) - len(suffix) - 1].strip()
+                    add_show(db, name, source="tags")
+                    known.add(base)
+                    added.append(slugify(name))
+    return added
+
+
+def add_show(db: Db, name: str, source: str = "manual", aliases: list[str] | None = None) -> str:
+    """A show that isn't in the site's Shows menu. Its posts are found by its tags and title, like any show's."""
+    sid = slugify(name)
+    if not sid or sid == OTHER[0]:
+        raise ValueError("a show needs a name")
+    if not db.one("SELECT id FROM shows WHERE id=?", (sid,)):
+        n = db.one("SELECT COUNT(*) AS n FROM shows WHERE sort >= 500 AND sort < 999")["n"]
+        db.upsert("shows", "id", {"id": sid, "name": name.strip(), "sort": 500 + n, "aliases": aliases or [],
+                                  "source": source})
+    return sid
 
 
 def match_show(title: str, tag_names: list[str], matchers: list[tuple[str, str]]) -> str:
@@ -197,22 +332,38 @@ def is_audio_post(p: dict) -> bool:
 
 
 def classify_all(db: Db) -> None:
-    """Assign show, tab and episode number to every post, and group video/audio versions."""
+    """Assign show, tabs and episode number to every post, and group video/audio versions.
+
+    As on the site, a post's tags decide: a show's plain tag puts it in Episodes, "<show> Extras" in Extras and
+    "<show> Rolled" in Just Rolled With It, and a post with several is in each. Posts whose tags don't say are
+    sorted by their title instead."""
+    shows_from_tags(db)
     matchers = show_matchers(db)
+    names_for_tags = show_tag_names(db)
     tag_names = {t["id"]: t["name"] for t in db.q("SELECT id, name FROM tags")}
     posts = db.q("SELECT id, title, path_kind, tag_ids, body_text, images, published, show_override, "
-                 "tab_override, episode_override, season_override, pair_id, show_id, tab, episode, season FROM posts")
+                 "tab_override, episode_override, season_override, pair_id, show_id, tab, tabs, episode, season "
+                 "FROM posts")
     for p in posts:
         names = [tag_names.get(str(i), "") for i in (p["tag_ids"] or [])]
-        show = p["show_override"] or match_show(p["title"], names, matchers)
-        tab = p["tab_override"] or pick_tab(p, show, names)
+        tag_show, tag_tabs = tabs_from_tags(names, names_for_tags)
+        show = p["show_override"] or tag_show or match_show(p["title"], names, matchers)
+        if p["tab_override"]:
+            tabs = [p["tab_override"]]
+        elif tag_tabs:
+            tabs = tag_tabs
+        else:
+            tabs = [pick_tab(p, show, names)]
+        tab = main_tab(tabs, p["path_kind"] in MEDIA_KINDS)
+        tabs = sorted(tabs, key=lambda t: [x for x, _ in TABS].index(t) if t in TAB_NAMES else 99)
         season, ep = episode_parts(p["title"], names)
         if p["episode_override"] is not None:
             ep = p["episode_override"]
         if p["season_override"] is not None:
             season = p["season_override"]
-        if (show, tab, ep, season) != (p["show_id"], p["tab"], p["episode"], p["season"]):
-            db.update("posts", "id", p["id"], {"show_id": show, "tab": tab, "episode": ep, "season": season})
+        if (show, tab, tabs, ep, season) != (p["show_id"], p["tab"], p["tabs"], p["episode"], p["season"]):
+            db.update("posts", "id", p["id"], {"show_id": show, "tab": tab, "tabs": tabs, "episode": ep,
+                                               "season": season})
 
     # Group the versions of one episode: members-only video, YouTube embed, audio only
     groups: dict[str, list[dict]] = {}
@@ -351,16 +502,17 @@ def write_show_nfo(db: Db, paths: Paths, show_id: str | None, folder: Path) -> N
     )
     if not nfo.exists() or nfo.read_text(encoding="utf-8") != xml:
         nfo.write_text(xml, encoding="utf-8")
-    # Show art: the show's own, or its newest thumbnail (fitted into a poster) until it has some. A small record
-    # of where each picture came from lets a better one replace it later.
+    # Show art: the show's picture, or the JRWI logo when it has none, fitted whole into a 2:3 poster; the backdrop
+    # is the show's picture or its newest thumbnail. A small record of where each picture came from lets another
+    # one replace it later.
     record = folder / ".jrwi-art.json"
     try:
         made = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         made = {}
-    stand_in = newest_thumbnail(db, show["id"])
-    wanted = {"poster.jpg": ("own", show.get("poster")) if show.get("poster") else ("fit", stand_in),
-              "fanart.jpg": ("own", show.get("banner") or stand_in)}
+    art = show_art(db, show)
+    wanted = {"poster.jpg": ("fit", art or site_logo(db)),
+              "fanart.jpg": ("own", art or newest_thumbnail(db, show["id"]))}
     changed = False
     for name, (how, rel) in wanted.items():
         dest = folder / name

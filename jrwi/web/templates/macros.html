@@ -49,7 +49,7 @@
   <div class="thumb">
     {{ fit_img(it.thumbnail) }}
     <div class="badges">
-      {% if it.episode and it.tab == 'episodes' %}<span class="badge acc">{% if it.season and it.season > 1 %}S{{ it.season }} {% endif %}#{{ it.episode }}</span>{% endif %}
+      {% if it.episode and 'episodes' in (it.tabs or [it.tab]) %}<span class="badge acc">{% if it.season and it.season > 1 %}S{{ it.season }} {% endif %}#{{ it.episode }}</span>{% endif %}
       {% if it.paired and it.version %}<span class="badge">{{ version_name[it.version] }}</span>{% endif %}
       {% if it.locked %}<span class="badge">Locked</span>{% endif %}
     </div>

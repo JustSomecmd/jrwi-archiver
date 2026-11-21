@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS posts (
     thumbnail TEXT, files TEXT DEFAULT '{}',
     show_id TEXT, tab TEXT, episode INTEGER, special INTEGER, pair_id INTEGER,
     show_override TEXT, tab_override TEXT, episode_override INTEGER, season INTEGER, season_override INTEGER,
+    tabs TEXT DEFAULT '[]',
     status TEXT DEFAULT 'new', problems TEXT DEFAULT '[]', skipped TEXT DEFAULT '[]',
     first_seen TEXT, last_fetched TEXT, comments_fetched TEXT, refetch TEXT, sync TEXT
 );
@@ -43,7 +44,8 @@ CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id, position);
 
 CREATE TABLE IF NOT EXISTS shows (
     id TEXT PRIMARY KEY, name TEXT, description TEXT, page_url TEXT,
-    poster TEXT, banner TEXT, sort INTEGER, aliases TEXT DEFAULT '[]'
+    poster TEXT, banner TEXT, sort INTEGER, aliases TEXT DEFAULT '[]',
+    source TEXT, art TEXT, art_source TEXT, art_options TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS tags (id TEXT PRIMARY KEY, name TEXT, count INTEGER);
@@ -67,7 +69,7 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 JSON_FIELDS = {"tag_ids", "links", "images", "attachments", "documents", "embeds", "media", "files",
-               "problems", "skipped", "aliases", "author_badges", "sync"}
+               "problems", "skipped", "aliases", "author_badges", "sync", "tabs", "art_options"}
 
 
 def now() -> str:
@@ -87,7 +89,9 @@ class Db:
 
     def _migrate(self) -> None:
         """Add columns that newer versions use to databases made by older ones."""
-        wanted = {"posts": {"refetch": "TEXT", "sync": "TEXT", "season": "INTEGER", "season_override": "INTEGER"},
+        wanted = {"posts": {"refetch": "TEXT", "sync": "TEXT", "season": "INTEGER", "season_override": "INTEGER",
+                            "tabs": "TEXT DEFAULT '[]'"},
+                  "shows": {"source": "TEXT", "art": "TEXT", "art_source": "TEXT", "art_options": "TEXT DEFAULT '[]'"},
                   "progress": {"timeline": "TEXT"},
                   "comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'", "author_color": "TEXT"}}
         for table, cols in wanted.items():
@@ -95,6 +99,10 @@ class Db:
             for col, decl in cols.items():
                 if col not in have:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                    if (table, col) == ("shows", "art"):
+                        # 0.6.0: a show's picture is kept as it is until another explicit one turns up
+                        self.conn.execute("UPDATE shows SET art = COALESCE(banner, poster), art_source = 'kept' "
+                                          "WHERE COALESCE(banner, poster) IS NOT NULL")
 
     # ------------------------------------------------------------------ basics
 

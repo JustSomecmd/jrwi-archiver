@@ -886,18 +886,28 @@ class Archiver:
             desc = soup.find("meta", attrs={"property": "og:description"}) or soup.find("meta", attrs={"name": "description"})
             poster_url = P.og_image(soup, final)
             shared = set(self.db.setting("shared_show_art") or [])
-            fields = {}
+            current = self.db.one("SELECT art_source FROM shows WHERE id=?", (show["id"],)) or {}
+            fields, options = {}, []
             if desc and desc.get("content"):
                 fields["description"] = P.norm_space(desc["content"])
+            # The page's own share picture is the show's picture: the creators set it for this page. Once a show has
+            # a picture it only changes for another such picture, and never when the user picked one.
             if poster_url and asset_name(poster_url) not in shared:
                 local = self.save_asset(poster_url, self.paths.archive / "shows" / show["id"])
                 if local:
                     fields["poster"] = local
+                    options.append(local)
+                    if current.get("art_source") != "picked":
+                        fields.update(art=local, art_source="page")
+            # Other pictures on the page are only offered on the admin page, to pick from
             imgs = [i for i in P.page_images(main, final) if asset_name(i) not in shared]
-            if imgs:
-                local = mapping.get(imgs[0]) or self.save_asset(imgs[0], self.paths.archive / "shows" / show["id"])
-                if local:
-                    fields["banner"] = local
+            for img in imgs:
+                local = mapping.get(img) or self.save_asset(img, self.paths.archive / "shows" / show["id"])
+                if local and local not in options:
+                    options.append(local)
+            if imgs and options:
+                fields["banner"] = mapping.get(imgs[0]) or options[-1]
+            fields["art_options"] = options
             self.db.update("shows", "id", show["id"], fields)
 
     def save_asset(self, url: str, folder: Path) -> str | None:

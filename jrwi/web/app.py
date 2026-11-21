@@ -25,7 +25,8 @@ from .. import NAME, VERSION
 from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
 from ..db import Db
-from ..organize import TABS, classify_all, drop_shared_show_art, newest_thumbnail, reorganize
+from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, TABS, add_show, art_choices, choose_show_art, classify_all,
+                        drop_shared_show_art, norm, refresh_jellyfin, reorganize, show_tag_names, tag_role)
 from ..scheduler import Scheduler
 from .progress import Progress
 from .serialize import Serializer, clean_html, files_url, iso, safe_join, tab_name
@@ -116,6 +117,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         db.set_setting("web_password_hash", hash_password(env_pw))
 
     drop_shared_show_art(db)   # show art that was really the site's own picture, from before 0.4.1
+    classify_all(db)           # sorting rules change between versions (0.6.0: by the site's tags)
     archiver = Archiver(db, paths)
     scheduler = Scheduler(archiver, db)
     ser = Serializer(db, paths)
@@ -224,8 +226,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             where.append("show_id = ?")
             args.append(show)
         if tab:
-            where.append("tab = ?")
-            args.append(tab)
+            # A post is in every tab its tags put it in (contract v0.12); old rows only have their main tab
+            where.append("(tab = ? OR EXISTS (SELECT 1 FROM json_each(posts.tabs) t WHERE t.value = ?))")
+            args += [tab, tab]
         if kind:
             where.append({"video": "(json_extract(media,'$.video.path') IS NOT NULL OR path_kind IN ('videos','video_embeds'))",
                           "audio": "(path_kind = 'audio' OR json_extract(media,'$.audio.path') IS NOT NULL "
@@ -503,7 +506,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         shows = [ser.show(s, separate=True) for s in db.q("SELECT * FROM shows ORDER BY sort, name")]
         for s in shows:
             # Until the show's own art is saved, its newest thumbnail stands in
-            s["tile"] = s["banner"] or s["poster"] or files_url(newest_thumbnail(db, s["id"]))
+            s["tile"] = s["image"]
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
                       pages=math.ceil(total / 20) or 1, locked=locked, order=order,
                       tiles=[s for s in shows if s["item_count"]],
@@ -670,10 +673,53 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             return Response("No failed login has been recorded.", media_type="text/plain")
         return Response(f.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
 
+    def loose_tags() -> list[dict]:
+        """The site's tags that no show's tags match: shows that aren't in the Shows menu, and other topics."""
+        names = show_tag_names(db)
+        return [t for t in db.q("SELECT * FROM tags ORDER BY count DESC, name")
+                if t["name"] and not tag_role(t["name"], names) and norm(t["name"]) not in GENERIC_TAG_TABS]
+
     @app.get("/admin/shows", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def admin_shows(request: Request):
-        return render(request, "admin_shows.html", rows=[{**r, **ser.show(r)} for r in
-                                                          db.q("SELECT * FROM shows ORDER BY sort, name")])
+    def admin_shows(request: Request, error: str = ""):
+        rows = [{**r, **ser.show(r), "art_source": r["art_source"], "source": r["source"]}
+                for r in db.q("SELECT * FROM shows ORDER BY sort, name")]
+        return render(request, "admin_shows.html", rows=rows, loose=loose_tags(), error=error)
+
+    @app.post("/admin/shows/add", dependencies=[Depends(web_auth)])
+    def admin_shows_add(name: str = Form(...), aliases: str = Form("")):
+        try:
+            add_show(db, name, aliases=[a.strip() for a in aliases.split(",") if a.strip()])
+        except ValueError as e:
+            return RedirectResponse(f"/admin/shows?error={quote(str(e))}", 303)
+        classify_all(db)
+        reorganize(db, paths)
+        return RedirectResponse("/admin/shows", 303)
+
+    @app.post("/admin/shows/{show_id}/remove", dependencies=[Depends(web_auth)])
+    def admin_shows_remove(show_id: str):
+        """Only shows added here can go; the menu's and the tags' come back on their own."""
+        db.x("DELETE FROM shows WHERE id=? AND source='manual'", (show_id,))
+        classify_all(db)
+        reorganize(db, paths)
+        return RedirectResponse("/admin/shows", 303)
+
+    @app.get("/admin/shows/{show_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin_show(request: Request, show_id: str):
+        row = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
+        if not row:
+            raise HTTPException(404, "No such show")
+        return render(request, "admin_show.html", show=row, choices=[(c, files_url(c)) for c in art_choices(row)],
+                      art=files_url(row["art"]), logo=files_url(db.setting("site_logo")),
+                      source=ART_SOURCES.get(row["art_source"] or "", ""))
+
+    @app.post("/admin/shows/{show_id}/art", dependencies=[Depends(web_auth)])
+    def admin_show_art(show_id: str, choice: str = Form(...)):
+        try:
+            choose_show_art(db, show_id, choice)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        refresh_jellyfin(db, paths)
+        return RedirectResponse(f"/admin/shows/{show_id}", 303)
 
     @app.post("/admin/shows", dependencies=[Depends(web_auth)])
     async def admin_shows_post(request: Request):

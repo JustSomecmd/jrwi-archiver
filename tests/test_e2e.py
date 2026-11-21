@@ -146,31 +146,44 @@ def test_jellyfin_layout():
     assert any(media.glob("Riptide/Season 00/*[[]jrwi-297[]].mp4"))
 
 
-def test_site_picture_is_not_show_art(app, client):
-    """Show pages without art of their own carry the site-wide share picture. That isn't a show's art."""
+def test_show_pictures(app, client):
+    """A show page's own share picture is the show's picture. Pages that only carry the site-wide one get none, and
+    the JRWI logo is shown instead. A picture picked on the admin page stays when pages are read again."""
     shows = {s["id"]: s for s in client.get("/api/shows?include_empty=true").json()}
-    assert shows["riptide"]["poster"] and shows["riptide"]["banner"]
-    for sid in ("unwitness-protection-program", "miller-troop-family-vacation"):
-        assert shows[sid]["poster"] is None and shows[sid]["banner"] is None, sid
+    rip = shows["riptide"]
+    assert rip["poster"] and rip["poster"] == rip["banner"] == rip["image"]
     db, archiver = app.state.db, app.state.archiver
+    logo = "/files/" + db.setting("site_logo")
+    for sid in ("unwitness-protection-program", "miller-troop-family-vacation"):
+        assert shows[sid]["poster"] is None and shows[sid]["banner"] is None and shows[sid]["image"] == logo, sid
     assert len(db.setting("shared_show_art")) >= 2   # remembered, so a page saved again can't bring it back
-    # Without art of its own, a show's Jellyfin poster is its newest thumbnail, shown whole on a 2:3 poster
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    assert 'src="' + logo + '"' in web.get("/").text   # Home's tile for a show without a picture
+    page = web.get("/admin/shows/riptide").text
+    assert "own picture on its page on the site" in page
+    row = db.one("SELECT * FROM shows WHERE id='riptide'")
+    other = next(o for o in row["art_options"] if o != row["art"])   # the picture further down its page
+    assert web.post("/admin/shows/riptide/art", data={"choice": other}).status_code == 200
+    archiver.reparse()                                                # pages read again: the pick stays
+    row = db.one("SELECT * FROM shows WHERE id='riptide'")
+    assert (row["art"], row["art_source"]) == (other, "picked")
+    assert web.post("/admin/shows/riptide/art", data={"choice": "shows/../../etc/passwd"}).status_code == 400
+    # Jellyfin: the picture fitted whole into a 2:3 poster; the JRWI logo when a show has none
     from jrwi import organize
     folder = Path(os.environ["JRWI_MEDIA"]) / "Riptide"
-    own = db.one("SELECT poster, banner FROM shows WHERE id='riptide'")
-    db.update("shows", "id", "riptide", {"poster": None, "banner": None})
-    try:
-        organize.refresh_jellyfin(db, archiver.paths)
-        made = json.loads((folder / ".jrwi-art.json").read_text())
-        assert made["poster.jpg"].startswith("fit:") and made["fanart.jpg"] == made["poster.jpg"].replace("fit:", "own:")
-        size = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0",
-                               str(folder / "poster.jpg")], capture_output=True, text=True).stdout.strip()
-        assert size == "1000,1500"
-    finally:
-        db.update("shows", "id", "riptide", own)
-    organize.refresh_jellyfin(db, archiver.paths)
     made = json.loads((folder / ".jrwi-art.json").read_text())
-    assert made["poster.jpg"] == "own:" + own["poster"] and made["fanart.jpg"] == "own:" + own["banner"]
+    assert made["poster.jpg"] == "fit:" + other and made["fanart.jpg"] == "own:" + other
+    web.post("/admin/shows/riptide/art", data={"choice": "logo"})
+    made = json.loads((folder / ".jrwi-art.json").read_text())
+    assert made["poster.jpg"] == "fit:" + db.setting("site_logo") and made["fanart.jpg"].startswith("own:posts/")
+    size = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                           str(folder / "poster.jpg")], capture_output=True, text=True).stdout.strip()
+    assert size == "1000,1500"
+    web.post("/admin/shows/riptide/art", data={"choice": "auto"})   # back to the page's own share picture
+    row = db.one("SELECT * FROM shows WHERE id='riptide'")
+    assert (row["art"], row["art_source"]) == (row["poster"], "page")
+    organize.refresh_jellyfin(db, archiver.paths)
 
 
 def test_post_with_attachment_and_comments(client):
@@ -405,3 +418,51 @@ def test_progress_made_offline_arrives_later(client):
     assert future["position"] == 6 and future["updated_at"] < "2099"              # a clock that's ahead isn't trusted
     assert client.put("/api/progress/300", json={"position": 1, "updated_at": "yesterday"}).status_code == 400
     assert client.put("/api/progress/300", json={"position": 1, "updated_at": "2026-01-01T10:00:00"}).status_code == 400
+
+
+def test_tabs_follow_the_sites_tags(app, client):
+    """As on the site: a show's plain tag is its Episodes, "<show> Extras" its Extras, and a post with both is in
+    both. Initials count ("UPP Extras"), and shows the site only tags (Mythborne) become shows."""
+    from jrwi import organize
+    db = app.state.db
+    tags = {"9201": "Riptide Extras", "9202": "UPP Extras", "9203": "Mythborne", "9204": "Mythborne Extras",
+            "9205": "Just Rolled With It", "9206": "Monster Control Service"}
+    rows = [(9101, "videos", "Riptide Q&A #50", ["101", "9201"]),
+            (9102, "videos", "Behind the scenes", ["9202"]),
+            (9103, "videos", "The Start | Mythborne #1", ["9203"]),
+            (9104, "posts", "Mythborne maps", ["9204"]),
+            (9105, "videos", "Riptide special", ["9205", "101"])]
+    try:
+        for tid, name in tags.items():
+            db.upsert("tags", "id", {"id": tid, "name": name, "count": 1})
+        for pid, kind, title, tag_ids in rows:
+            db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "path_kind": kind,
+                                      "title": title, "tag_ids": tag_ids, "body_text": "Text",
+                                      "published": "2021-05-01T00:00:00+00:00", "status": "complete"})
+        organize.classify_all(db)
+        got = {p["id"]: p for p in db.q("SELECT * FROM posts WHERE id >= 9101")}
+        assert (got[9101]["show_id"], got[9101]["tabs"], got[9101]["tab"]) == ("riptide", ["episodes", "extras"], "extras")
+        assert (got[9102]["show_id"], got[9102]["tabs"]) == ("unwitness-protection-program", ["extras"])
+        assert db.one("SELECT source FROM shows WHERE id='mythborne'")["source"] == "tags"
+        assert (got[9103]["show_id"], got[9103]["tabs"], got[9103]["episode"]) == ("mythborne", ["episodes"], 1)
+        assert (got[9104]["show_id"], got[9104]["tabs"]) == ("mythborne", ["extras"])
+        assert (got[9105]["tabs"], got[9105]["tab"]) == (["episodes", "aftershow"], "aftershow")
+        in_tab = lambda tab: {i["id"] for i in client.get(f"/api/shows/riptide/items?tab={tab}&page_size=200").json()["items"]}
+        assert 9101 in in_tab("episodes") and 9101 in in_tab("extras") and 9105 in in_tab("aftershow")
+        assert client.get("/api/items/9101").json()["tabs"] == ["episodes", "extras"]
+        counts = {t["id"]: t["count"] for t in client.get("/api/shows/mythborne").json()["tabs"]}
+        assert counts == {"episodes": 1, "extras": 1}
+        # Adding a show by hand, for one the site has no tag for; and tags no show matches are listed to pick from
+        web = TestClient(app)
+        web.post("/login", data={"password": "test-password"})
+        loose = web.get("/admin/shows").text.split("Tags no show matches")[1].split("<table>")[1]
+        assert "Monster Control Service" in loose and "Mythborne" not in loose
+        web.post("/admin/shows/add", data={"name": "Tales from the Midnight Rose", "aliases": ""})
+        assert db.one("SELECT source FROM shows WHERE id='tales-from-the-midnight-rose'")["source"] == "manual"
+        web.post("/admin/shows/tales-from-the-midnight-rose/remove")
+        assert not db.one("SELECT id FROM shows WHERE id='tales-from-the-midnight-rose'")
+    finally:
+        db.x("DELETE FROM posts WHERE id >= 9101")
+        db.x("DELETE FROM tags WHERE id >= '9201' AND id <= '9206'")
+        db.x("DELETE FROM shows WHERE id = 'mythborne'")
+        organize.classify_all(db)

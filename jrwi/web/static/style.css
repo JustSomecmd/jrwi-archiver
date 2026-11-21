@@ -442,3 +442,13 @@ html.lb-open, html.lb-open body { overflow: hidden; }
 .lb-prev { left: .8rem; } .lb-next { right: .8rem; }
 .lb.zoom .lb-nav { display: none; }
 @media (max-width: 600px) { .lb .lb-nav { padding: .5rem; } .lb-prev { left: .3rem; } .lb-next { right: .3rem; } }
+
+/* Admin: show pictures */
+.show-thumb { width: 72px; height: 48px; object-fit: contain; background: var(--header); border-radius: var(--radius); display: block; }
+.show-pick-now { max-width: 320px; max-height: 220px; object-fit: contain; background: var(--header); border-radius: var(--radius); }
+.show-picks { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.show-pick { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px; background: var(--header);
+  border: 2px solid var(--line); border-radius: var(--radius); cursor: pointer; color: inherit; }
+.show-pick img { width: 180px; height: 120px; object-fit: contain; }
+.show-pick.on { border-color: var(--accent); }
+.error { color: var(--bad); }

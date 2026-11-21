@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}{{ show.name }} · Shows · JRWI archive{% endblock %}
+{% block content %}
+<a class="back" href="/admin/shows">&lsaquo; Shows</a>
+<h1>{{ show.name }}</h1>
+<div class="panel">
+  <h3>Picture</h3>
+  {% if art %}
+  <p><img class="show-pick-now" src="{{ art }}" alt=""></p>
+  <p class="muted small">This is {{ source or "the show's picture" }}.
+    {% if show.art_source == 'picked' %}It stays until you pick another.{% else %}It only changes if the show's page on the site gets a share picture of its own.{% endif %}</p>
+  {% else %}
+  <p><img class="show-pick-now" src="{{ logo }}" alt=""></p>
+  <p class="muted small">{% if show.art_source == 'picked' %}You picked the JRWI logo. It stays until you pick another.{% else %}The show has no picture of its own, so the JRWI logo is shown. If its page on the site gets a share picture of its own, that's used.{% endif %}</p>
+  {% endif %}
+</div>
+<h2>Pick another</h2>
+<p class="muted">The pictures found on the show's page on the site. A picture you pick here is kept when pages are read again.
+  The picture is used for the tile on Home, the API and the show's poster in Jellyfin.</p>
+<div class="show-picks">
+  {% for rel, url in choices %}
+  <form method="post" action="/admin/shows/{{ show.id }}/art"><input type="hidden" name="choice" value="{{ rel }}">
+    <button type="submit" class="show-pick{% if rel == show.art %} on{% endif %}"><img src="{{ url }}" alt=""></button></form>
+  {% endfor %}
+  {% if logo %}
+  <form method="post" action="/admin/shows/{{ show.id }}/art"><input type="hidden" name="choice" value="logo">
+    <button type="submit" class="show-pick{% if not show.art %} on{% endif %}"><img src="{{ logo }}" alt=""><span>JRWI logo</span></button></form>
+  {% endif %}
+</div>
+{% if not choices %}<p class="muted small">No pictures were found on this show's page{% if not show.page_url %}: it doesn't have one on the site{% endif %}.</p>{% endif %}
+<form method="post" action="/admin/shows/{{ show.id }}/art"><input type="hidden" name="choice" value="auto">
+  <p><button class="btn ghost" type="submit">Go back to automatic</button>
+  <span class="muted small">The page's own share picture when it has one, otherwise the JRWI logo.</span></p></form>
+{% endblock %}

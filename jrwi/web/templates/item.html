@@ -40,7 +40,7 @@
       <span>{{ nice_date(item.date) }}</span>
       {% if item.pinned %}<span class="tag">{{ icon('pin') }} Pinned</span>{% endif %}
       {% if item.paired and item.version %}<span class="tag">{{ version_name[item.version] }}</span>{% endif %}
-      {% if show %}<a class="show" href="/shows/{{ show.id }}?tab={{ item.tab }}">{{ show.name }} · {{ tab_name(item.tab) }}</a>{% endif %}
+      {% if show %}{% for t in (item.tabs or [item.tab]) %}<a class="show" href="/shows/{{ show.id }}?tab={{ t }}">{{ show.name }} · {{ tab_name(t) }}</a>{% endfor %}{% endif %}
       {% if item.duration %}<span>{{ human_duration(item.duration) }}</span>{% endif %}
     </div>
     <h1>{{ item.title }}</h1>
