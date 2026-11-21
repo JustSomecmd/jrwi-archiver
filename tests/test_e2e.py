@@ -587,27 +587,32 @@ def test_seasons_from_restarting_numbers(app, client):
 
 def test_same_number_twice_keeps_upload_order(app, client):
     """Riptide has two episodes numbered 68 (on purpose, to skip 69): both stay, in upload order. A post without a
-    number (a Q&A) sits after the episode uploaded before it, in either order."""
+    number (a Q&A) goes by when it came out, after the episode that came out before it, in either order."""
     from jrwi import organize
     db = app.state.db
     try:
         for pid, day, title in [(9501, "2022-01-07", "The Greatest Form of Flattery | Riptide #68"),
                                 (9502, "2022-01-14", "A Stranger at Sea | Riptide #68"),
                                 (9503, "2022-01-21", "Next One | Riptide #70"),
-                                (9504, "2022-01-28", "Riptide Q&A")]:   # no number: sits after #70, not before #1
+                                # No number: goes by when it came out (its audio, 28 Jan), so after #70. Its video,
+                                # the main post, went up after #71's, which mustn't move it past #71.
+                                (9504, "2022-01-28", "Riptide Q&A"),
+                                (9507, "2022-02-15", "Riptide Q&A (VIDEO)"),
+                                (9505, "2022-02-01", "Next Next | Riptide #71"),
+                                (9506, "2022-02-10", "Next Next | Riptide #71 (VIDEO)")]:
             db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "title": title,
-                                      "path_kind": "videos", "status": "complete", "tag_ids": ["101"],
-                                      "published": day + "T00:00:00+00:00"})
+                                      "path_kind": "videos" if pid < 9504 or "VIDEO" in title else "audio",
+                                      "status": "complete", "tag_ids": ["101"], "published": day + "T00:00:00+00:00"})
         organize.classify_all(db)
+        assert db.post(9504)["pair_id"] == 9507 and db.post(9505)["pair_id"] == 9506
         ids = [i["id"] for i in client.get("/api/shows/riptide/items?tab=episodes&order=asc&page_size=200").json()["items"]]
         mine = [i for i in ids if i >= 9501]
-        assert mine == [9501, 9502, 9503, 9504]
-        assert ids.index(9504) == ids.index(9503) + 1 and ids.index(9504) < ids.index(300)   # before #136
-        assert {db.post(i)["pair_id"] for i in mine} == {None}   # two episodes, not two versions of one
-        assert db.post(9504)["episode"] is None and db.post(9504)["episode_sort"] == 70.5
+        assert mine == [9501, 9502, 9503, 9507, 9506]
+        assert ids.index(9507) == ids.index(9503) + 1 and ids.index(9507) < ids.index(300)   # before #136
+        assert db.post(9501)["pair_id"] is None and db.post(9502)["pair_id"] is None   # two #68s, not two versions
+        assert db.post(9507)["episode"] is None and db.post(9507)["episode_sort"] == db.post(9504)["episode_sort"] == 70.5
         newest = [i["id"] for i in client.get("/api/shows/riptide/items?tab=episodes&page_size=200").json()["items"]]
-        assert [i for i in newest if i >= 9501] == [9504, 9503, 9502, 9501]
-        assert newest.index(9504) == newest.index(9503) - 1
+        assert [i for i in newest if i >= 9501] == [9506, 9507, 9503, 9502, 9501]
     finally:
         db.x("DELETE FROM posts WHERE id >= 9501 AND id < 9600")
         organize.classify_all(db)

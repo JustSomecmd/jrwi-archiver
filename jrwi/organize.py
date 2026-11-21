@@ -464,19 +464,33 @@ def season_name_of(title: str, show_names: list[str]) -> str:
     return re.sub(r"\s+", " ", t).strip(" -–—.,") or ""
 
 
-def episode_places(posts: list[dict], seasons: dict[int, int]) -> dict[int, float]:
-    """Where each of a show's Episodes goes in the tab's order, within its season: a numbered episode at its number,
-    a post without a number (a Q&A, say) just after the highest-numbered episode of its season uploaded before it,
-    so it sits where it came out instead of before #1 or after the last one."""
+def episode_places(posts: list[dict], pairs: dict[int, int | None]) -> dict[int, float]:
+    """Where each post goes in its show's Episodes, within its season (posts.episode_sort). A numbered episode goes
+    at its number. A post without a number (a Q&A, say) goes by when it came out: just after the episode of its
+    season that came out most recently before it, so it doesn't land before #1 or after the last one.
+
+    An episode came out with its earliest version: The Suckening's videos went up weeks after the audio, so the
+    date of the main (video) post would put a Q&A in the wrong place. Every version of an item gets its place."""
+    items: dict[int, list[dict]] = {}
+    for p in posts:
+        if "episodes" in (p["tabs"] or []):
+            items.setdefault(pairs.get(p["id"]) or p["id"], []).append(p)
+    seasons: dict[tuple, list[tuple]] = {}
+    for main, members in items.items():
+        lead = next((m for m in members if m["id"] == main), members[0])
+        came_out = min(m["published"] or "" for m in members)
+        seasons.setdefault((lead["show_id"], lead["season"] or 1), []).append((came_out, lead["episode"], members))
     out: dict[int, float] = {}
-    best: dict[int, float] = {}   # season -> highest number so far, in upload order
-    for p in sorted(posts, key=lambda p: (p["published"] or "", p["id"])):
-        season = seasons.get(p["id"], 1)
-        if p["episode"] is not None:
-            out[p["id"]] = float(p["episode"])
-            best[season] = max(best.get(season, 0.0), float(p["episode"]))
-        else:
-            out[p["id"]] = best.get(season, 0.0) + 0.5
+    for group in seasons.values():
+        numbered = sorted((d, ep) for d, ep, _ in group if ep is not None)   # in the order they came out
+        for came_out, ep, members in group:
+            if ep is not None:
+                place = float(ep)
+            else:
+                before = [n for d, n in numbered if d <= came_out]
+                place = before[-1] + 0.5 if before else 0.5
+            for m in members:
+                out[m["id"]] = place
     return out
 
 
@@ -633,8 +647,6 @@ def classify_all(db: Db) -> None:
         seasons = infer_seasons(eps, by_show.get(sid, []) + ["just roll with it", "jrwi"])
         for pid, season in seasons.items():
             new[pid]["season"] = season
-        for pid, place in episode_places(eps, seasons).items():
-            new[pid]["episode_sort"] = place
         named = season_names([e for e in eps if e["path_kind"] in MEDIA_KINDS], seasons, by_show.get(sid, []))
         # The show's Just Rolled With It posts belong to the season of the episodes they talk about
         rolled = [{**p, **new[p["id"]]} for p in posts if new[p["id"]]["show_id"] == sid
@@ -648,8 +660,7 @@ def classify_all(db: Db) -> None:
     for p in posts:
         n = new[p["id"]]
         n.setdefault("season", n["explicit_season"])
-        n.setdefault("episode_sort", None)
-        fields = {k: n[k] for k in ("show_id", "tab", "tabs", "places", "episode", "season", "episode_sort")}
+        fields = {k: n[k] for k in ("show_id", "tab", "tabs", "places", "episode", "season")}
         if any(fields[k] != p[k] for k in fields):
             db.update("posts", "id", p["id"], fields)
         p.update(fields)
@@ -695,9 +706,16 @@ def classify_all(db: Db) -> None:
         for m in members[1:]:
             if _close_in_time(primary["published"], m["published"]):
                 new_pairs[m["id"]] = primary["id"]
+    # Where each post goes in its show's Episodes, now that each episode's versions are grouped
+    places = episode_places(posts, new_pairs)
     for p in posts:
+        fields = {}
         if p["pair_id"] != new_pairs[p["id"]]:
-            db.update("posts", "id", p["id"], {"pair_id": new_pairs[p["id"]]})
+            fields["pair_id"] = new_pairs[p["id"]]
+        if p["episode_sort"] != places.get(p["id"]):
+            fields["episode_sort"] = places.get(p["id"])
+        if fields:
+            db.update("posts", "id", p["id"], fields)
 
 
 def _close_in_time(a: str | None, b: str | None, days: int = 21) -> bool:
