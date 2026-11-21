@@ -56,13 +56,15 @@ def probe_duration(path: Path) -> float | None:
     return None
 
 
-def loudness(path: Path, start: float, length: float) -> np.ndarray:
-    """A file's loudness from `start` for `length` seconds, RATE points a second, on a log scale."""
+def loudness(path: Path | str, start: float, length: float, headers: dict | None = None) -> np.ndarray:
+    """A file's loudness from `start` for `length` seconds, RATE points a second, on a log scale. `path` can be an
+    http address (a file in TubeArchivist), with the request headers it needs."""
     exe = ffmpeg_exe()
     if not exe:
         raise RuntimeError("ffmpeg is needed to compare video and audio")
     sr = 8000
-    cmd = [exe, "-v", "error", "-ss", f"{max(0.0, start):.3f}", "-t", f"{length:.3f}", "-i", str(path), "-vn",
+    extra = ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())] if headers else []
+    cmd = [exe, "-v", "error", *extra, "-ss", f"{max(0.0, start):.3f}", "-t", f"{length:.3f}", "-i", str(path), "-vn",
            "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"]
     raw = subprocess.run(cmd, capture_output=True, timeout=1800).stdout
     x = np.frombuffer(raw, dtype=np.float32)
@@ -103,18 +105,22 @@ def confident(score: float, runner_up: float) -> bool:
     return score >= 0.25 and score - runner_up >= 0.15
 
 
-def find_offset(video: Path, audio: Path, video_len: float | None = None, audio_len: float | None = None) -> dict:
+def find_offset(video: Path | str, audio: Path | str, video_len: float | None = None, audio_len: float | None = None,
+                video_headers: dict | None = None, audio_headers: dict | None = None) -> dict:
     """How far the audio version is from the video's soundtrack. Returns {"offset": seconds, "checked": bool,
-    "score": float}; offset is 0 and checked False when the two can't be lined up with confidence."""
-    video_len = video_len or probe_duration(video) or 0
-    audio_len = audio_len or probe_duration(audio) or 0
+    "score": float}; offset is 0 and checked False when the two can't be lined up with confidence.
+
+    Also lines up two videos (the archived one as `video`, the YouTube one as `audio`): the offset is then how much
+    later the same moment is in the second. Either can be an http address, with its headers and its length given."""
+    video_len = video_len or (None if video_headers else probe_duration(video)) or 0
+    audio_len = audio_len or (None if audio_headers else probe_duration(audio)) or 0
     unsure = {"offset": 0.0, "checked": False, "score": 0.0}
     if min(video_len, audio_len) < 10:
         return unsure
     first = min(FIRST, audio_len, video_len)
     max_shift = int(min(MAX_SHIFT, first / 2) * RATE)
-    a = loudness(audio, 0, first + max_shift / RATE)
-    v = loudness(video, 0, first + max_shift / RATE)
+    a = loudness(audio, 0, first + max_shift / RATE, audio_headers)
+    v = loudness(video, 0, first + max_shift / RATE, video_headers)
     k, score, runner_up = best_shift(a, v, max_shift)
     shift = k / RATE                    # video position = audio position + shift
     if not confident(score, runner_up):
@@ -124,8 +130,8 @@ def find_offset(video: Path, audio: Path, video_len: float | None = None, audio_
     if audio_len > first + CHECK + 60:
         mid = audio_len / 2
         window = 15.0
-        a2 = loudness(audio, mid, CHECK)
-        v2 = loudness(video, mid + shift - window, CHECK + 2 * window)
+        a2 = loudness(audio, mid, CHECK, audio_headers)
+        v2 = loudness(video, mid + shift - window, CHECK + 2 * window, video_headers)
         # v2 starts `window` seconds before where the audio's stretch should be, so k2 should be about +window
         k2, score2, runner_up2 = best_shift(a2, v2, int(2 * window * RATE))
         shift2 = shift + (k2 / RATE - window)

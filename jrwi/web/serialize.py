@@ -86,8 +86,13 @@ class Serializer:
         for m in members:
             for e in m["embeds"] or []:
                 if e.get("kind") == "youtube" and e.get("youtube_id"):
-                    return {"post_id": m["id"], "youtube_id": e["youtube_id"], "youtube_url": e["url"],
-                            "duration": m["duration"]}
+                    out = {"post_id": m["id"], "youtube_id": e["youtube_id"], "youtube_url": e["url"],
+                           "duration": m["duration"]}
+                    # The item's archived video was deleted because TubeArchivist has this one (contract v0.15)
+                    done = next((x for x in members if (x.get("handover") or {}).get("status") == "done"), None)
+                    if done:
+                        out["handed_over"] = {"at": done["handover"].get("at"), "post_id": done["id"]}
+                    return out
         return None
 
     def _audio(self, members: list[dict]) -> dict | None:
@@ -179,14 +184,24 @@ class Serializer:
         primary = self.primary_of(post["id"]) or post
         return [{"post_id": m["id"], "version": self.version_of(m), "title": m["title"], "url": m["url"],
                  "date": iso(m["published"]), "like_count": m["like_count"], "comment_count": m["comment_count"],
-                 "main": m["id"] == primary["id"]}
+                 "main": m["id"] == primary["id"], "removed_from_site": m.get("site_gone")}
                 for m in self.members(primary)]
+
+    @staticmethod
+    def handed_over(post: dict) -> dict | None:
+        """For a post whose archived video was deleted because TubeArchivist has it from YouTube (contract v0.15)."""
+        h = post.get("handover") or {}
+        if h.get("status") != "done":
+            return None
+        return {"at": h.get("at"), "youtube_id": h.get("youtube_id"), "youtube_url": h.get("youtube_url"),
+                "post_id": h.get("youtube_post")}
 
     def post_flags(self, post: dict) -> dict:
         item_id = post["pair_id"] or post["id"]
         others = self.db.one("SELECT COUNT(*) AS n FROM posts WHERE (pair_id=? OR id=?) AND id != ?",
                              (item_id, item_id, post["id"]))["n"]
-        return {"version": self.version_of(post), "item_id": item_id, "paired": bool(others)}
+        return {"version": self.version_of(post), "item_id": item_id, "paired": bool(others),
+                "removed_from_site": post.get("site_gone"), "handed_over": self.handed_over(post)}
 
     def post_summary(self, post: dict) -> dict:
         """One post on its own: its own likes, comment count and files, never merged with its other versions."""

@@ -24,7 +24,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from .. import NAME, VERSION
 from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
-from ..db import Db
+from .. import files as files_mod
+from .. import handover
+from ..db import Db, now
+from ..tubearchivist import TaError, TubeArchivist
 from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, MAX_PICTURE, TABS, add_show, art_choices, choose_show_art,
                         classify_all, delete_saved_override, drop_shared_show_art, norm, post_pictures, refresh_jellyfin,
                         reorganize, saved_overrides, set_art_override, show_tag_names, tag_role)
@@ -361,6 +364,44 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             raise HTTPException(404, "no video for this post")
         return FileResponse(f, media_type="video/mp4", filename=f.name, content_disposition_type="inline")
 
+    # ------------------------------------------------------------------ files (contract v0.15)
+
+    def visible_post(post_id: int) -> dict:
+        p = db.post(post_id)
+        if not p:
+            raise HTTPException(404, "no such post")
+        return p
+
+    @app.get("/api/posts/{post_id}/files", dependencies=[Depends(api_auth)])
+    def api_post_files(post_id: int):
+        """Every file of one post: video, audio, documents, attachments, images, thumbnail, and Google links that
+        couldn't be saved."""
+        p = visible_post(post_id)
+        return {"post_id": p["id"], "files": files_mod.post_files(paths, p)}
+
+    @app.get("/api/items/{post_id}/files", dependencies=[Depends(api_auth)])
+    def api_item_files(post_id: int):
+        """Every file of all of an item's versions, each saying which post it's from."""
+        p = visible_post(post_id)
+        primary = ser.primary_of(p["id"]) or p
+        return {"item_id": primary["id"], "files": files_mod.item_files(paths, ser.members(primary))}
+
+    @app.get("/api/preview/{rel:path}", dependencies=[Depends(api_auth)])
+    def api_preview(rel: str, page: int | None = None):
+        """What's inside a file under /files/ (JSON), or with ?page=N one page of a PDF as a PNG."""
+        f = safe_join(paths.archive, rel)
+        if not f or not f.is_file():
+            raise HTTPException(404, "not found")
+        rel = f.relative_to(paths.archive.resolve()).as_posix()
+        if page is not None:
+            if files_mod.type_of(f.name, f) != "pdf":
+                raise HTTPException(400, "pages are only for PDFs")
+            png = files_mod.pdf_page(paths, f, page)
+            if not png:
+                raise HTTPException(404, "no such page")
+            return FileResponse(png, media_type="image/png")
+        return files_mod.preview(paths, rel, f)
+
     @app.get("/api/progress/{post_id}", dependencies=[Depends(api_auth)])
     def api_progress(post_id: int):
         """Where you are in the episode, in the timeline of this post's video or audio (contract v0.9)."""
@@ -572,6 +613,25 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                       video_progress=video_at,
                       more=more, csort=csort)
 
+    @app.get("/items/{post_id}/files", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def item_files_page(request: Request, post_id: int, f: str = ""):
+        """The file inspector: every file of a post, and of its other versions, each opened in place."""
+        post = db.post(post_id)
+        if not post:
+            raise HTTPException(404, "No such post")
+        own = files_mod.post_files(paths, post)
+        primary = ser.primary_of(post_id) or post
+        others = [e for e in files_mod.item_files(paths, ser.members(primary)) if e["post_id"] != post_id]
+        titles = {m["id"]: m["title"] for m in ser.members(primary)}
+        return render(request, "files.html", post=post, own=own, others=others, titles=titles, pick=f)
+
+    @app.get("/admin/files", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin_files(request: Request):
+        posts = db.q("SELECT id, media, embeds, handover, documents, attachments, images, thumbnail, links "
+                     "FROM posts WHERE status IN ('complete', 'partial', 'gone')")
+        return render(request, "admin_files.html", rows=files_mod.summary(paths, posts),
+                      previewable=files_mod.PREVIEWABLE)
+
     @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def pages_index(request: Request):
         return render(request, "pages.html", pages=db.q("SELECT path, title, fetched FROM pages ORDER BY path"))
@@ -589,7 +649,14 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     def admin(request: Request):
         runs = db.q("SELECT * FROM runs ORDER BY id DESC LIMIT 15")
         events = db.q("SELECT * FROM events ORDER BY id DESC LIMIT 20")
-        return render(request, "admin.html", st=status_obj(), runs=runs, events=events,
+        rows = db.q("SELECT id, title, handover FROM posts WHERE handover IS NOT NULL ORDER BY published DESC, id DESC")
+        counts: dict = {}
+        for r in rows:
+            counts[r["handover"].get("status")] = counts.get(r["handover"].get("status"), 0) + 1
+        handovers = {"rows": rows, "counts": counts,
+                     "freed": sum((r["handover"].get("freed") or 0) for r in rows if r["handover"].get("status") == "done")}
+        ta_set = TubeArchivist.from_settings(db.settings()).configured
+        return render(request, "admin.html", st=status_obj(), runs=runs, events=events, handovers=handovers, ta_set=ta_set,
                       last_reparse=db.setting("last_reparse"),
                       configured=bool(db.setting("site_email") or os.environ.get("JRWI_EMAIL")))
 
@@ -609,7 +676,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/admin/settings", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def admin_settings(request: Request, saved: bool = False, msg: str | None = None):
-        return render(request, "settings.html", s=db.settings(), saved=saved, msg=msg,
+        return render(request, "settings.html", s=db.settings(), saved=saved, msg=msg, ta_status=db.setting("ta_status"),
                       env_login=bool(os.environ.get("JRWI_EMAIL")),
                       has_session=any(True for _ in archiver.client.session.cookies))
 
@@ -617,19 +684,23 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     async def admin_settings_post(request: Request):
         form = await request.form()
         s = db.settings()
-        for key in ("site_email", "notify_url", "public_url"):
+        for key in ("site_email", "notify_url", "public_url", "ta_url"):
             db.set_setting(key, (form.get(key) or "").strip())
+        if form.get("ta_token"):
+            db.set_setting("ta_token", form["ta_token"].strip())
+        elif form.get("ta_token_clear"):
+            db.set_setting("ta_token", "")
         if form.get("site_password"):
             db.set_setting("site_password", form["site_password"])
             archiver.client.clear_cookies()
         for key, cast in (("check_interval_hours", float), ("max_height", int), ("comment_refresh_days", int),
-                          ("request_delay", float)):
+                          ("request_delay", float), ("recheck_days", int)):
             try:
                 db.set_setting(key, cast(form.get(key) or s[key]))
             except ValueError:
                 pass
         for key in ("video", "audio", "images", "attachments", "comments", "google_docs", "public_pages",
-                    "youtube_embeds"):
+                    "youtube_embeds", "handover"):
             db.set_setting(key, form.get(key) == "on")
         if form.get("new_web_password"):
             if len(form["new_web_password"]) >= 8:
@@ -638,6 +709,20 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if form.get("regenerate_token"):
             db.set_setting("api_token", new_token())
         return RedirectResponse("/admin/settings?saved=1", 303)
+
+    @app.post("/admin/test-ta", dependencies=[Depends(web_auth)])
+    def admin_test_ta():
+        ta = TubeArchivist.from_settings(db.settings())
+        if not ta.configured:
+            msg = "Enter TubeArchivist's address and API token, and save, first."
+        else:
+            try:
+                msg = "TubeArchivist: " + ta.ping() + "."
+                db.set_setting("ta_status", {"ok": True, "message": "reachable", "at": now()})
+            except TaError as e:
+                msg = f"TubeArchivist: {e}."
+                db.set_setting("ta_status", {"ok": False, "message": str(e), "at": now()})
+        return RedirectResponse("/admin/settings?msg=" + quote(msg), 303)
 
     def check_site_login() -> tuple[bool, str]:
         """Ask the members feed whether the saved session is logged in."""
@@ -796,12 +881,44 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return RedirectResponse("/admin/shows", 303)
 
     @app.get("/admin/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def admin_item(request: Request, post_id: int, queued: str = ""):
+    def admin_item(request: Request, post_id: int, queued: str = "", error: str = ""):
         p = db.post(post_id)
         if not p:
             raise HTTPException(404, "No such post")
         return render(request, "admin_item.html", p=p, shows=db.q("SELECT id, name FROM shows ORDER BY sort"),
-                      tabs=TABS, queued=queued, st=status_obj())
+                      tabs=TABS, queued=queued, st=status_obj(), ho=handover_of(p), error=error)
+
+    def handover_of(p: dict) -> dict | None:
+        """The hand-over to TubeArchivist of the episode this post is in: which post has (or had) the archived video,
+        and where it stands."""
+        primary = ser.primary_of(p["id"]) or p
+        holder = next((m for m in ser.members(primary) if m.get("handover")), None)
+        if not holder:
+            return None
+        h = holder["handover"]
+        return {"post": holder, "h": h, "text": handover.STATUSES.get(h.get("status"), ""),
+                "gone": bool(holder.get("site_gone")), "tolerance": handover.TOLERANCE}
+
+    @app.post("/admin/items/{post_id}/handover", dependencies=[Depends(web_auth)])
+    def admin_item_handover(post_id: int, choice: str = Form(...)):
+        """keep: keep the archived video; allow: let it be handed over again; force: delete it at the next check even
+        though the lengths differ; redownload: download the members-only video again (while the site still has it)
+        and keep it."""
+        p = db.post(post_id)
+        if not p:
+            raise HTTPException(404, "No such post")
+        try:
+            if choice == "redownload":
+                if not handover.is_done(p):
+                    raise ValueError("the archived video is still there")
+                handover.remember(db, post_id, p["handover"], status="keep", force=None)
+                db.update("posts", "id", post_id, {"refetch": "page"})
+                started = scheduler.check_now()
+                return RedirectResponse(f"/admin/items/{post_id}?queued={'now' if started else 'later'}", 303)
+            handover.set_choice(db, post_id, choice)
+        except ValueError as e:
+            return RedirectResponse(f"/admin/items/{post_id}?error={quote(str(e))}", 303)
+        return RedirectResponse(f"/admin/items/{post_id}", 303)
 
     @app.post("/admin/items/{post_id}", dependencies=[Depends(web_auth)])
     async def admin_item_post(request: Request, post_id: int):

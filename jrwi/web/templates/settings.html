@@ -65,9 +65,41 @@
     <input id="wp" type="password" name="new_web_password" autocomplete="new-password" placeholder="Leave empty to keep it">
   </div>
 </div>
+<div class="panel">
+  <h3>TubeArchivist</h3>
+  <p class="muted small">Riptide and other episodes go up on YouTube some weeks after the members-only video. Once
+    TubeArchivist has downloaded the YouTube version, the archiver can delete its own copy, and the episode plays from
+    TubeArchivist like the other YouTube episodes. It only does that when both are the same length (within 10 seconds);
+    otherwise it keeps both and lists the episode on the Admin page. With TubeArchivist connected, YouTube-only episodes
+    that have an audio version are lined up with it too, so the apps carry your place between them.
+    The archiver only reads from TubeArchivist; it never changes anything there.</p>
+  <div class="cols">
+    <div>
+      <label for="taurl">TubeArchivist's address</label>
+      <input id="taurl" type="url" name="ta_url" value="{{ s.ta_url }}" placeholder="http://tubearchivist:8000">
+      <div class="hint">As this server reaches it. In the same compose file that's its service name and port; if
+        TubeArchivist runs through gluetun, use gluetun's name instead (http://gluetun:8000).</div>
+    </div>
+    <div>
+      <label for="tatok">TubeArchivist API token</label>
+      <input id="tatok" type="password" name="ta_token" autocomplete="off"
+        placeholder="{{ 'Saved; leave empty to keep it' if s.ta_token else "From TubeArchivist's Settings page" }}">
+      <label class="check"><input type="checkbox" name="ta_token_clear"> Forget the saved token</label>
+    </div>
+  </div>
+  <label class="check"><input type="checkbox" name="handover" {% if s.handover %}checked{% endif %}> Delete an archived video once TubeArchivist has the same video from YouTube</label>
+  <label for="rd">Read the feed back this many days on every check</label>
+  <input id="rd" type="number" min="0" name="recheck_days" value="{{ s.recheck_days }}">
+  <div class="hint">The YouTube version of an episode is posted with the date of the members-only one, so it shows up
+    further down the feed. 0 stops at the first posts it already knows, as before.</div>
+  <p class="small">{% if ta_status %}{{ 'Last contact: ' if ta_status.ok else 'Last try: ' }}{{ ta_status.message }}
+    <span class="muted">({{ ta_status.at }})</span>{% endif %}
+    <button form="test-ta" class="ghost" style="padding:.15rem .6rem">Test connection</button> (save first)</p>
+</div>
 <p><button type="submit">Save settings</button></p>
 </form>
 <form id="test-login" method="post" action="/admin/test-login"></form>
+<form id="test-ta" method="post" action="/admin/test-ta"></form>
 
 <div class="panel">
   <h3>Log in with your browser instead</h3>

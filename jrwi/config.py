@@ -50,6 +50,10 @@ DEFAULTS: dict = {
     "request_delay": 1.5,          # seconds between page requests to the site
     "notify_url": "",              # ntfy topic URL or Discord webhook
     "public_url": "",              # how the app and podcast apps reach this server, for the RSS feed
+    "ta_url": "",                  # TubeArchivist, such as http://tubearchivist:8000
+    "ta_token": "",                # its API token (its Settings page)
+    "handover": True,              # delete an archived video once TubeArchivist has the same video from YouTube
+    "recheck_days": 60,            # each check reads the feed back this far, to catch posts added with an older date
     "api_token": "",
     "web_password_hash": "",
     "session_secret": "",

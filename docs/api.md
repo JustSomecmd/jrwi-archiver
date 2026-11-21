@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.14)
+# JRWI archiver API (contract v0.15)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.7.1.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.0.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -15,7 +15,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.12:** items and posts gain `tabs`, every tab they're in, and `?tab=` lists everything in that tab, so one item can be in two tabs' lists; tab counts count it in each. Shows gain `image`, never empty; `poster` and `banner` are now the same picture, the show's own, or `null`. Shows can come from the site's tags, not only its menu. In the service since 0.6.0.
 - **v0.13:** items and posts gain `places`, every show and tab they're in, and a show's lists and counts include the posts its tags place there from other shows. Shows gain `seasons` (with `GET /api/shows/{showId}`), and `GET /api/shows/{showId}/items` takes `?season=`. `season` is now also worked out when titles don't name it. In the service since 0.7.0.
 - **v0.14:** items in a show's own Just Rolled With It have a `season` too, and the show's `episodes` and `aftershow` tabs each list their `seasons`, so `?tab=aftershow&season=2` gives a season's Just Rolled With It. In the service since 0.7.1.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`.
+- **v0.15:** `GET /api/items/{postId}/files`, `GET /api/posts/{postId}/files` and `GET /api/preview/<path>` (see Files and previews). A YouTube `video` gains `handed_over` when the item's archived video was deleted because TubeArchivist has it; posts gain `handed_over` and `removed_from_site`, and item `versions` gain `removed_from_site`. The event `video_handed_over`. `sync` on YouTube-only items can now be checked. A post whose video was handed over still takes video progress. Offline downloads keep the post's files. In the service since 0.9.0.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -28,7 +29,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.8.0"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.0"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, then shows from the site's tags or added on the admin page, `other` last. `?include_empty=true` lists all of them. |
@@ -38,14 +39,17 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/latest?limit=20` | Newest items, for a home screen |
 | `GET /api/items/{postId}` | Full item. Either post ID of a video/audio pair works. |
 | `GET /api/items/{postId}/comments?page=` | Threaded comments from every version of the item, paged by top-level comment. Each says which post it's on (`post_id`). |
+| `GET /api/items/{postId}/files` | (v0.15) `{"item_id": 300, "files": [...]}`: every file of all the item's versions (File, below) |
 | `GET /api/posts?q=&show=&tab=&order=desc` | (v0.7) Paged single posts, every version listed on its own. Same filters as items. |
 | `GET /api/posts/{postId}` | (v0.7) One post on its own: only its own text, likes, files and media |
 | `GET /api/posts/{postId}/comments?page=` | (v0.7) Only that post's comments |
+| `GET /api/posts/{postId}/files` | (v0.15) `{"post_id": 299, "files": [...]}`: only that post's files |
+| `GET /api/preview/<path>` | (v0.15) What's inside a file under `/files/<path>` (Preview, below). `?page=N` gives page N of a PDF as a PNG. |
 | `GET /api/audio/{postId}` | The audio file, with HTTP range support |
 | `GET /api/video/{postId}` | The video file, with HTTP range support. This is a fallback; Jellyfin is the main way to play video. |
 | `GET /api/progress/{postId}` | `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`, in the timeline of the post in the address (see Progress) |
 | `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`, plus `updated_at` for progress sent later (v0.11). Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`: what the archive holds after the save. |
-| `GET /api/events?since=<time>` | New items and failures since a time (default: the last 24 hours) |
+| `GET /api/events?since=<time>` | New items, hand-overs and failures since a time (default: the last 24 hours) |
 | `GET /api/problems` | Posts that couldn't be fully saved |
 | `GET /api/feed.xml?token=<key>` | Private podcast RSS of all audio |
 | `GET /files/<path>` | Images, thumbnails, attachments, documents |
@@ -63,13 +67,19 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **Older saves:** progress saved before 0.4.0 (audio only, under the audio post) is read in the audio's timeline and moved to the item's record on the next save.
 - **Responses** include `post_id`, the post whose timeline `position` is in.
 - **Progress sent later (v0.11):** progress made offline, or held back for any reason, is sent with `updated_at`: when it was made, with a UTC offset. The archiver keeps whichever of the two is newer, so a late save can't undo listening or watching done since on another device or in the web app; when the archive's is newer, nothing changes and the response shows what it holds. A time later than the server's clock counts as now. Without `updated_at`, a save counts as made when it arrives, as before. A malformed time, or one without an offset, gets `400`.
+- **Handed-over videos (v0.15):** after a hand-over, `video.post_id` is the YouTube post, and positions are in the YouTube video's timeline (the archiver moved the saved ones). The members-only post's ID, which apps may still hold, keeps working for video positions too, in the YouTube video's timeline.
 
 **Downloading for offline listening (v0.11):** what an app needs to keep an episode's audio on the device (decision 11).
 - **The file:** `GET /api/audio/{audio.post_id}` (the item's `audio.url`), with `?token=` or the header. Downloads can resume: the server takes `Range` requests and answers `206`.
 - **Checking it:** a whole download's `Content-Length` matches `audio.size`, and the response has `ETag`, `Last-Modified` and `Content-Type` (`audio.mime`). A different `audio.size` or `ETag` later means the archive downloaded the episode again, and the copy on the device can be replaced.
 - **Its name:** `Content-Disposition` gives the archived file's name, made from the post's title; apps can just as well name the file by post ID.
 - **Picture and text:** the item's `thumbnail`, `images`, `attachments` and `documents` are plain files under `/files/` that take the token the same way, and the item and comments JSON can be kept as they are.
+- **The post's files (v0.15, decision 17):** an offline download keeps the files too. `GET /api/items/{postId}/files` (or the shown version's `/api/posts/{postId}/files`) lists them; keep every entry with `saved: true` whose `role` isn't `video` or `audio` (those download on their own) by its `url`, and its Preview JSON from `/api/preview/<path>` for spreadsheets, documents, text and zips, so the inspector works offline. PDFs can be drawn on the device (Android's `PdfRenderer`) or kept as their page PNGs.
 - **Progress:** saved on the device while offline, then sent with `updated_at` (above) once the archiver can be reached.
+
+**Files and previews (v0.15, decision 16):** for a file inspector.
+- **Lists:** `GET /api/posts/{postId}/files` gives one post's files, in the order the web app lists them: video, audio, documents, attachments, pictures, thumbnail, then Google links that couldn't be saved. `GET /api/items/{postId}/files` gives every version's, the main post's first, each file once.
+- **Opening a file:** `url` is where it is, with the token like any address. `type` says how to show it: `image`, `audio` and `video` are shown or played from `url`; `pdf`, `table`, `document`, `text` and `archive` have a `preview` address; `youtube` plays through TubeArchivist; `link` was never saved and only has `source`; `other` can only be downloaded.
 
 ## Objects
 
@@ -87,7 +97,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **`last_result`:** one of `ok`, `login_failed`, `blocked`, `error` or `stopped`.
 - **`next_check`:** `null` when checks only run by hand.
 - **`progress` (`current` since v0.6):** `done` of `total` steps in the current phase, for example posts. `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the phase has no known length yet, such as while reading the feed.
-- **`phase`** can also be `re-reading saved pages`. The service does that by itself after an update that reads pages differently, before its next check. At the end of a check it can be `lining up video and audio`, counting the pairs it measures.
+- **`phase`** can also be `re-reading saved pages`. The service does that by itself after an update that reads pages differently, before its next check. At the end of a check it can be `checking TubeArchivist for videos now on YouTube` (since 0.9.0) and `lining up video and audio`, counting the items it looks at.
 
 ### Show
 
@@ -138,6 +148,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **`video` takes one of two shapes, or is `null`:**
 - **Archived file:** `{post_id, jellyfin_path, url, height, size, duration}`. `jellyfin_path` is the path as the archiver sees it. Match Jellyfin items on the `[jrwi-<post id>]` tag in the file name, not on the full path.
 - **YouTube only:** `{post_id, youtube_id, youtube_url, duration}`. The video exists only as a YouTube embed. If TubeArchivist has that video ID, play it from there.
+- **Handed over (v0.15):** the YouTube shape plus `"handed_over": {"at": "2026-11-28T10:02:11+00:00", "post_id": 286486}`, when the item had an archived video that was deleted because TubeArchivist has the same video (decision 15). `post_id` there is the members-only post the file belonged to. The Jellyfin episode is gone, so play it through TubeArchivist; a copy downloaded to the device through Jellyfin stays there until it's removed.
 
 **`audio`** is `null` when there's no archived audio version.
 
@@ -145,7 +156,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 
 **`sync` (v0.3):** `{"offset": <seconds>, "checked": <true or false>}` on every item with both a video (archived or YouTube-only) and an audio version.
 - **Meaning:** `audio position = video position + offset`. In the example, the video has 17.2 seconds at the start that the audio doesn't, so 1:00:00 in the video is 59:42.8 in the audio.
-- **`checked`:** `true` when the archiver compared the two versions and found the offset. `false` when it couldn't or wasn't sure, in which case the offset is 0.
+- **`checked`:** `true` when the archiver compared the two versions and found the offset. `false` when it couldn't or wasn't sure, in which case the offset is 0. Since v0.15 YouTube-only videos can be checked too, through TubeArchivist's copy.
 - **`null`** only when the item has just one version, and on single posts (`/api/posts`).
 - **Apps** keep a carried-over position between 0 and the other version's `duration`.
 
@@ -164,28 +175,72 @@ The list fields, plus:
  "documents": [{"name": "Riptide 135 - Blue Jay [TRANSCRIPT] [1B_ZJmqV].pdf", "url": "/files/google-docs/..."}],
  "embeds": [{"kind": "youtube", "url": "https://www.youtube.com/watch?v=CzZ13VPQOcw"}],
  "versions": [{"post_id": 300, "version": "video", "main": true, "title": "Through the Fire | Riptide #136",
-               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 469, "comment_count": 12},
+               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 469, "comment_count": 12,
+               "removed_from_site": null},
               {"post_id": 298, "version": "audio", "main": false, "title": "Through the Fire | Riptide #136 (AUDIO ONLY)",
-               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 10, "comment_count": 1}],
+               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 10, "comment_count": 1,
+               "removed_from_site": null}],
  "problems": []}
 ```
 
 - **`body_html`:** cleaned of scripts, with images pointing at the archived copies.
 - **`attachments`, `documents` and `images`:** collected from every version of the item.
 - **`documents`:** linked Google Docs, saved as PDFs, and since 0.5.0 files shared from Google Drive, under the name Drive gives them.
-- **`versions` (fields beyond `post_id`, `title` and `url` since v0.7):** every post of the item, main post first, each with its own counts. `version` is `video` (members-only video), `audio`, `youtube`, or `null` for a post without either.
+- **`versions` (fields beyond `post_id`, `title` and `url` since v0.7):** every post of the item, main post first, each with its own counts. `version` is `video` (members-only video), `audio`, `youtube`, or `null` for a post without either. `removed_from_site` (v0.15): when the archiver noticed the site no longer has that post, or `null`.
 
 ### Post (v0.7)
 
 A single post, never merged with its other versions. It has the same fields as an item, list or full, but only from this one post: its own `body_html`, `like_count`, `comment_count`, `tags`, `tabs`, `places`, files, and `video` or `audio` only if this post has them. Plus:
 
 ```json
-{"id": 298, "version": "audio", "item_id": 300, "paired": true}
+{"id": 298, "version": "audio", "item_id": 300, "paired": true,
+ "removed_from_site": null, "handed_over": null}
 ```
 
 - **`version`:** which version of its episode this post is: `video`, `audio`, `youtube`, or `null`.
 - **`item_id`:** the item it's grouped into. The same as `id` for a main post or a post on its own.
 - **`paired`:** `true` when the item has other versions.
+- **`removed_from_site` (v0.15):** when the archiver noticed that the site's feed no longer shows the post, such as a members-only episode taken down once its YouTube version is up, or `null`. The archive keeps the post.
+- **`handed_over` (v0.15):** for a members-only post whose video was deleted because TubeArchivist has it: `{"at": "...", "youtube_id": "...", "youtube_url": "...", "post_id": 286882}`, where `post_id` is the post with the YouTube version. Its `video` is then `null`. Otherwise `null`.
+
+### File (v0.15)
+
+```json
+{"name": "Zombie Character Sheets.pdf", "role": "attachment", "type": "pdf", "mime": "application/pdf",
+ "size": 1234567, "url": "/files/posts/299/attachments/Zombie%20Character%20Sheets.pdf",
+ "path": "posts/299/attachments/Zombie Character Sheets.pdf", "post_id": 299, "source": null, "saved": true,
+ "preview": "/api/preview/posts/299/attachments/Zombie%20Character%20Sheets.pdf"}
+```
+
+- **`role`:** where the file comes from: `video`, `audio`, `document` (a linked Google Doc or Drive file), `attachment`, `image` (a picture in the post), `thumbnail`, or `link` (a Google link that couldn't be saved).
+- **`type`:** how to show it: `image`, `audio`, `video`, `pdf`, `table`, `document`, `text`, `archive`, `youtube`, `link` or `other`. Worked out from the name, and for a file without a usable name (Drive files saved as `.bin`) from what's in it.
+- **`url`:** the file's address, or `null` when it isn't saved (`youtube`, `link`). For the video and audio it's `/api/video/{postId}` and `/api/audio/{postId}`.
+- **`path`:** the file's path under `/files/`, for `/api/preview/<path>`, or `null` for the video and for what isn't saved.
+- **`source`:** the address it was saved from: the Google Docs or Drive link for a document, the site's address for a picture, the YouTube address for `youtube`, the link for `link`. Otherwise `null`.
+- **`saved`:** `false` for `youtube` and `link` entries, which aren't files in the archive.
+- **`preview`:** the Preview address, for `pdf`, `table`, `document`, `text` and `archive`; `null` for the rest.
+- **Extra fields:** `duration` on the video and audio, `youtube_id` on `youtube` entries.
+
+### Preview (v0.15)
+
+`GET /api/preview/<path>` always gives `name`, `type`, `mime`, `size` and `url`, plus by `type`:
+
+```json
+{"type": "pdf", "pages": 12, "page_url": "/api/preview/google-docs/Riptide%20135.pdf?page={n}"}
+{"type": "table", "sheets": [{"name": "Party", "rows": [["Name", "Class"], ["Ferin", "Rogue"]], "truncated": false}]}
+{"type": "document", "blocks": [{"kind": "heading", "level": 1, "text": "Session notes"},
+                                {"kind": "paragraph", "text": "..."}, {"kind": "item", "text": "..."},
+                                {"kind": "row", "cells": ["...", "..."]}]}
+{"type": "text", "text": "...", "format": "subtitles", "truncated": false}
+{"type": "archive", "entries": [{"name": "maps/harbour.png", "size": 1234, "folder": false}], "truncated": false}
+```
+
+- **`pdf`:** `page_url` with `{n}` replaced by a page number (from 1) gives that page as a PNG 1400 pixels wide. `page_url` is `null` when the pages can't be counted; show the PDF itself then.
+- **`table`:** every sheet, cells as text, up to 500 rows and 60 columns; `truncated` when there's more.
+- **`document`:** `.docx` and `.pptx`. Each slide of a `.pptx` starts with a heading "Slide N".
+- **`text`:** up to 400,000 characters; `format` is `plain`, `markdown`, `subtitles`, `json` or `html` (shown as text, never as a page).
+- **`note`:** on a `table`, `document` or `archive` that can't be read, or is too big to show; the file can still be downloaded.
+- Other types give only the common fields.
 
 ### Comment
 
@@ -217,5 +272,6 @@ A single post, never merged with its other versions. It has the same fields as a
 {"type": "new_item", "at": "2026-11-20T11:19:30+00:00", "post_id": 300, "title": "Through the Fire | Riptide #136", "message": ""}
 ```
 
-- **`type`:** one of `new_item`, `check_failed` or `login_failed`.
+- **`type`:** one of `new_item`, `video_handed_over` (v0.15), `check_failed` or `login_failed`.
 - **`new_item`:** sent once per item, when it has finished archiving.
+- **`video_handed_over` (v0.15):** an item's archived video was deleted because TubeArchivist has it (decision 15). `post_id` is the item's `id`; `message` names the YouTube ID. Apps holding that item can load it again.

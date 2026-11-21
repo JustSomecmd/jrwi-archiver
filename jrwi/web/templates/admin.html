@@ -66,6 +66,30 @@
 </div>
 
 <div class="panel">
+  <h3>Files</h3>
+  <p class="muted small">Which types of file the archived posts carry, and which the file inspector can look inside.
+    <a href="/admin/files">See the files by type</a>.</p>
+</div>
+<div class="panel">
+  <h3>Videos now on YouTube</h3>
+  {% set c = handovers.counts %}
+  {% if not handovers.rows %}
+  <p class="muted small">No archived video has a YouTube version yet. When an episode goes up on YouTube and the site
+    adds its post, the archiver asks TubeArchivist for it{% if not ta_set %} (connect TubeArchivist in Settings){% endif %}.</p>
+  {% else %}
+  <p class="small">{{ c.done or 0 }} handed over to TubeArchivist{% if handovers.freed %} ({{ human_size(handovers.freed) }} freed){% endif %},
+    {{ c.waiting or 0 }} waiting for TubeArchivist, {{ c.differs or 0 }} with a different length, {{ c.keep or 0 }} kept by you
+    {%- if c.ready %}, {{ c.ready }} ready (deleting is off in Settings){% endif %}.
+    {% if not ta_set %}<b>TubeArchivist isn't connected</b>, so nothing is handed over: <a href="/admin/settings">Settings</a>.{% endif %}</p>
+  <table class="small">
+    {% for r in handovers.rows if r.handover.status in ('differs', 'waiting', 'ready') %}
+    <tr><td><a href="/admin/items/{{ r.id }}">{{ r.title }}</a></td>
+        <td class="muted">{{ {'differs': 'length differs', 'waiting': 'waiting', 'ready': 'ready'}[r.handover.status] }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+<div class="panel">
   <h3>Re-read saved pages</h3>
   <p class="muted small">Every post page, comment page, feed card and site page is saved as it was downloaded.
     This reads them all again with the current rules, so a fix in an update also corrects what was archived before it:

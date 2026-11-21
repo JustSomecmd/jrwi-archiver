@@ -25,10 +25,15 @@ class Progress:
         return primary, members, self.ser._video(members), self.ser._audio(members)
 
     @staticmethod
-    def _timeline(post_id: int, video: dict | None, audio: dict | None) -> str | None:
+    def _timeline(post_id: int, video: dict | None, audio: dict | None, members: list[dict] | None = None) -> str | None:
         if audio and audio["post_id"] == post_id:
             return "audio"
         if video and video["post_id"] == post_id:
+            return "video"
+        # A post whose archived video was handed over to TubeArchivist still takes video positions, now in the
+        # YouTube video's timeline, so an app that kept the old post ID keeps working
+        if video and members and any(m["id"] == post_id and (m.get("handover") or {}).get("status") == "done"
+                                     for m in members):
             return "video"
         return None
 
@@ -45,7 +50,7 @@ class Progress:
         found = self.read(post["id"], primary, members, video, audio)
         if found:
             return found
-        part = {"video": video, "audio": audio}.get(self._timeline(post["id"], video, audio)) or {}
+        part = {"video": video, "audio": audio}.get(self._timeline(post["id"], video, audio, members)) or {}
         return {"post_id": post["id"], "position": 0.0, "duration": part.get("duration"), "finished": False,
                 "updated_at": None}
 
@@ -55,7 +60,7 @@ class Progress:
 
     def read(self, post_id: int, primary: dict, members: list[dict], video: dict | None,
              audio: dict | None) -> dict | None:
-        timeline = self._timeline(post_id, video, audio)
+        timeline = self._timeline(post_id, video, audio, members)
         part = {"video": video, "audio": audio}.get(timeline) or {}
         duration = part.get("duration")
         ids = [m["id"] for m in members]
@@ -66,7 +71,7 @@ class Progress:
             return None
         saved_in = row["timeline"]
         if saved_in is None:  # saved before v0.9: in the timeline of the post it was saved under
-            saved_in = self._timeline(row["post_id"], video, audio) or "audio"
+            saved_in = self._timeline(row["post_id"], video, audio, members) or "audio"
         sync = self.ser.sync_of(primary, video, audio)
         position = self._convert(row["position"] or 0.0, saved_in, timeline, sync["offset"] if sync else 0.0)
         if duration:
@@ -93,7 +98,7 @@ class Progress:
         """Save progress. An app sending progress made offline gives updated_at, the time it was made; the archiver
         then keeps whichever is newer, so a late save can't undo listening done since (contract v0.11)."""
         primary, members, video, audio = self._item(post)
-        timeline = self._timeline(post["id"], video, audio)
+        timeline = self._timeline(post["id"], video, audio, members)
         made = self.when(body.get("updated_at"))
         ids = [m["id"] for m in members if m["id"] != primary["id"]]
         with self.db.lock:

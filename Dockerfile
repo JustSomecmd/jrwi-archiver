@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends ffmpeg poppler-utils ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

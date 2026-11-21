@@ -37,6 +37,45 @@
     <input type="hidden" name="what" value="files"><button class="ghost">Everything, files included</button>
     <div class="muted small">Deletes and re-downloads its video, audio, images and attachments.</div></form>
 </div>
+{% if ho %}{% set h = ho.h %}
+<div class="panel">
+  <h3>YouTube and TubeArchivist</h3>
+  {% if error %}<p class="error small">{{ error }}</p>{% endif %}
+  <p class="small">{{ ho.text }}</p>
+  <table class="small">
+    <tr><th>YouTube video</th><td><a href="{{ h.youtube_url }}" target="_blank" rel="noopener">{{ h.youtube_id }}</a>
+      (<a href="/items/{{ h.youtube_post }}">its post</a>)</td></tr>
+    <tr><th>Archived video</th><td><a href="/items/{{ ho.post.id }}">{{ ho.post.title }}</a>{% if ho.gone %} <span class="muted">(no longer on the site)</span>{% endif %}</td></tr>
+    {% if h.archived_duration %}<tr><th>Lengths</th><td>archived {{ human_duration(h.archived_duration) }}{% if h.ta_duration %},
+      TubeArchivist {{ human_duration(h.ta_duration) }}{% endif %}</td></tr>{% endif %}
+    {% if h.status == 'done' %}<tr><th>Deleted</th><td>{{ h.at }}{% if h.freed %}, {{ human_size(h.freed) }} freed{% endif %}.
+      {% if h.shift_checked %}The YouTube video runs {{ '%.1f' | format(h.shift | abs) }} s {{ 'later' if h.shift > 0 else 'earlier' }}; saved positions were moved to match.{% else %}They were taken to line up.{% endif %}</td></tr>{% endif %}
+    {% if h.note %}<tr><th>Note</th><td>{{ h.note }}</td></tr>{% endif %}
+    {% if h.checked_at %}<tr><th>Last looked</th><td>{{ h.checked_at }}</td></tr>{% endif %}
+  </table>
+  {% if h.status == 'done' %}
+    {% if not ho.gone %}
+    <form method="post" action="/admin/items/{{ ho.post.id }}/handover" onsubmit="return confirm('Download the members-only video again and keep it?')">
+      <input type="hidden" name="choice" value="redownload"><button class="ghost">Download the members-only video again</button>
+      <div class="muted small">Only works while the post is still on the site. It's then kept, next to TubeArchivist's copy.</div></form>
+    {% endif %}
+  {% elif h.status == 'keep' %}
+    <form method="post" action="/admin/items/{{ ho.post.id }}/handover"><input type="hidden" name="choice" value="allow">
+      <button class="ghost">Stop keeping it</button>
+      <div class="muted small">It's then deleted at a check once TubeArchivist has the same video.</div></form>
+  {% else %}
+    {% if h.force %}<p class="small">It will be deleted at the next check, if TubeArchivist has the video then.</p>{% endif %}
+    <form method="post" action="/admin/items/{{ ho.post.id }}/handover"><input type="hidden" name="choice" value="keep">
+      <button class="ghost">Keep the archived video</button></form>
+    {% if h.status == 'differs' and not h.force %}
+    <form method="post" action="/admin/items/{{ ho.post.id }}/handover" style="margin-top:.6rem"
+          onsubmit="return confirm('Delete the archived video at the next check, even though the lengths differ?')">
+      <input type="hidden" name="choice" value="force"><button class="ghost">Delete it anyway</button>
+      <div class="muted small">The lengths differ by more than {{ ho.tolerance | int }} seconds, so the two may not be the same cut.</div></form>
+    {% endif %}
+  {% endif %}
+</div>
+{% endif %}
 <div class="panel">
   <h3>Details</h3>
   <table>
@@ -47,6 +86,7 @@
     <tr><th>Original</th><td><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.url }}</a></td></tr>
     <tr><th>Video file</th><td class="small">{{ (p.media or {}).get('video', {}).get('path', '') }}</td></tr>
     <tr><th>Audio file</th><td class="small">{{ (p.media or {}).get('audio', {}).get('path', '') }}</td></tr>
+    {% if p.site_gone %}<tr><th>On the site</th><td>Gone since {{ p.site_gone }}</td></tr>{% endif %}
     <tr><th>Grouped with</th><td>{% if p.pair_id %}<a href="/admin/items/{{ p.pair_id }}">{{ p.pair_id }}</a>{% endif %}</td></tr>
     <tr><th>Last read</th><td>{{ p.last_fetched or '' }}</td></tr>
     <tr><th>Problems</th><td class="small">{% for x in p.problems %}<div>{{ x }}</div>{% endfor %}</td></tr>

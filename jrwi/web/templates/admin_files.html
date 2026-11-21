@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}Files · Admin · JRWI archive{% endblock %}
+{% set type_names = {'pdf': 'PDF', 'table': 'Spreadsheet', 'document': 'Document', 'text': 'Text', 'archive': 'Zip archive',
+  'image': 'Picture', 'audio': 'Audio', 'video': 'Video', 'youtube': 'YouTube', 'link': 'Google link, not saved', 'other': 'Other'} %}
+{% block content %}
+<a class="back" href="/admin">&lsaquo; Admin</a>
+<h1>Files in the archive</h1>
+<p class="muted">Every file the archived posts carry, by type. Pictures, audio and video are shown or played as they
+  are; for PDFs, spreadsheets, documents, text and zip files the inspector shows what's inside. "Other" files can only be
+  downloaded: if one of those is a type you'd like to look inside, say which.</p>
+<table>
+  <tr><th>Type</th><th>Extension</th><th>Files</th><th>Size</th><th>In the inspector</th></tr>
+  {% for r in rows %}
+  <tr><td>{{ type_names.get(r.type, r.type) }}</td><td>{{ r.ext }}</td><td>{{ r.count }}</td>
+      <td>{{ human_size(r.bytes) if r.bytes else '' }}</td>
+      <td class="small">{% if r.type in previewable %}what's inside{% elif r.type in ('image', 'audio', 'video') %}shown or played{% elif r.type == 'youtube' %}played from YouTube{% elif r.type == 'link' %}original link only{% else %}<b>download only</b>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="5" class="muted">No files yet.</td></tr>{% endfor %}
+</table>
+{% endblock %}

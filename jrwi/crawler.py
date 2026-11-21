@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 
-from . import organize
+from . import handover, organize
 from .config import DRIVE_DOWNLOAD, GDOCS_BASE, MUX_BASE, SITE_BASE, Paths
 from .db import Db, now
 from .site import parse as P
@@ -25,11 +25,13 @@ from .site.client import (HTML_ACCEPT, TURBO_ACCEPT, Blocked, Client, LoginFaile
                           SiteError, logged_in)
 from .site.download import Downloader, DownloadError, glob_escape, probe_height
 from .sync import find_offset, probe_duration
+from .tubearchivist import TaError, TubeArchivist
 
 log = logging.getLogger("jrwi.crawler")
 
 PAGES_EVERY = timedelta(hours=24)
 STOP_AFTER_KNOWN = 15
+TA_LINE_UP_PER_CHECK = 40   # YouTube-only episodes lined up through TubeArchivist per check
 
 
 @dataclass
@@ -149,6 +151,7 @@ class Archiver:
             archived = self.archive_posts()
             if s["comments"]:
                 self.refresh_comments()
+            handover.run(self.db, self.paths, self.s, self.status, self.stop_event)
             self.line_up()
             organize.classify_all(self.db)
             organize.reorganize(self.db, self.paths)
@@ -206,6 +209,11 @@ class Archiver:
         visited, seen_ids = set(), set()
         known_streak = page_no = 0
         reached_end = False
+        # A post can be added with an older date (the YouTube version of an episode gets the date of the members-only
+        # post it replaces), so it sits further down the feed: read back this many days before stopping
+        days = int(self.s.get("recheck_days") or 0)
+        window = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat() if days else None
+        oldest: str | None = None
         first_soup = None
         while url:
             if url in visited:
@@ -242,8 +250,10 @@ class Archiver:
                     known_streak = 0
                 elif not card["pinned"]:
                     known_streak += 1
+                if card.get("published") and not card["pinned"]:
+                    oldest = min(oldest or card["published"], card["published"])
             self.status.set(detail=f"page {page_no}, {len(seen_ids)} posts")
-            if incremental and known_streak >= STOP_AFTER_KNOWN:
+            if incremental and feed_read_far_enough(known_streak, oldest, window):
                 break
             nxt = P.find_load_more(soup, final)
             if not frames or not nxt:
@@ -252,7 +262,20 @@ class Archiver:
             url = nxt
         if reached_end:
             self.db.set_setting("crawl_complete", True)
+        if seen_ids and not self.stop_event.is_set() and (reached_end or oldest):
+            self.note_gone_posts(seen_ids, None if reached_end else oldest)
         return first_soup
+
+    def note_gone_posts(self, seen: set[int], since: str | None) -> None:
+        """Mark posts that the feed no longer shows (site_gone), such as a members-only episode taken down once its
+        YouTube version is up. Only posts dated after the oldest one read count (all of them after reading the whole
+        feed). The archive keeps them; this only records that the site doesn't have them any more."""
+        sql = "SELECT id, site_gone FROM posts" + (" WHERE published > ?" if since else "")
+        for r in self.db.q(sql, (since,) if since else ()):
+            if r["id"] in seen and r["site_gone"]:
+                self.db.update("posts", "id", r["id"], {"site_gone": None})
+            elif r["id"] not in seen and not r["site_gone"]:
+                self.db.update("posts", "id", r["id"], {"site_gone": now()})
 
     def save_tags(self, tags: list[dict]) -> None:
         for t in tags:
@@ -356,7 +379,8 @@ class Archiver:
 
     def line_up(self) -> int:
         """Measure video and audio files that have no length yet, and work out how far each episode's video and
-        audio version are apart (sync). Only pairs that are new or whose files changed are compared again."""
+        audio version are apart (sync). Only pairs that are new or whose files changed are compared again. A
+        YouTube-only video is compared through TubeArchivist's copy, when TubeArchivist is connected and has it."""
         posts = self.db.q("SELECT id, media FROM posts WHERE media IS NOT NULL AND media != '{}'")
         for p in posts:
             media = p["media"] or {}
@@ -368,24 +392,37 @@ class Archiver:
                     changed = changed or bool(m["duration"])
             if changed:
                 self.db.update("posts", "id", p["id"], {"media": media})
-        pairs = []
+        pairs, ta_pairs = [], []
+        ta = TubeArchivist.from_settings(self.s)
         for primary in self.db.q("SELECT * FROM posts WHERE pair_id IS NULL AND id IN (SELECT pair_id FROM posts)"):
             members = [primary] + self.db.q("SELECT * FROM posts WHERE pair_id=? ORDER BY id", (primary["id"],))
             video = next(((m["id"], (m["media"] or {})["video"]) for m in members
                           if (m["media"] or {}).get("video") and (self.paths.media / m["media"]["video"]["path"]).exists()), None)
             audio = next(((m["id"], (m["media"] or {})["audio"]) for m in members
                           if (m["media"] or {}).get("audio") and (self.paths.archive / m["media"]["audio"]["path"]).exists()), None)
-            if not video or not audio:
+            if not audio:
+                continue
+            old = primary.get("sync") or {}
+            if not video:
+                # A YouTube-only video: lined up against TubeArchivist's copy, when it has one
+                yt = handover.youtube_version(members) if ta.configured else None
+                key = {"video_post": yt[0]["id"], "audio_post": audio[0], "audio_size": audio[1].get("size"),
+                       "via": "TubeArchivist"} if yt else None
+                if key and not all(old.get(k) == v for k, v in key.items()):
+                    ta_pairs.append((primary, yt[1]["youtube_id"], audio, key))
                 continue
             key = {"video_post": video[0], "video_size": video[1].get("size"),
                    "audio_post": audio[0], "audio_size": audio[1].get("size")}
-            old = primary.get("sync") or {}
             if all(old.get(k) == v for k, v in key.items()):
                 continue
             pairs.append((primary, video, audio, key))
-        if not pairs:
+        # Newest first, and only so many a check, since each reads part of a video from TubeArchivist
+        ta_pairs.sort(key=lambda t: (t[0]["published"] or "", t[0]["id"]), reverse=True)
+        ta_pairs = ta_pairs[:TA_LINE_UP_PER_CHECK]
+        if not pairs and not ta_pairs:
             return 0
-        self.status.set(phase="lining up video and audio", detail="", done=0, total=len(pairs), current=None)
+        total = len(pairs) + len(ta_pairs)
+        self.status.set(phase="lining up video and audio", detail="", done=0, total=total, current=None)
         for n, (primary, video, audio, key) in enumerate(pairs):
             if self.stop_event.is_set():
                 break
@@ -397,7 +434,26 @@ class Archiver:
                 log.warning("couldn't line up %s: %s", primary["id"], e)
                 result = {"offset": 0.0, "checked": False, "score": 0.0}
             self.db.update("posts", "id", primary["id"], {"sync": {**result, **key, "at": now()}})
-        return len(pairs)
+        for n, (primary, youtube_id, audio, key) in enumerate(ta_pairs, len(pairs)):
+            if self.stop_event.is_set():
+                break
+            self.status.set(done=n, detail=primary["title"] or "")
+            try:
+                video = ta.video(youtube_id)
+            except TaError as e:
+                log.warning("TubeArchivist: %s", e)
+                break
+            url = ta.file_url(video) if video else None
+            if not url:
+                continue   # not in TubeArchivist yet: tried again next check
+            try:
+                result = find_offset(url, self.paths.archive / audio[1]["path"], TubeArchivist.duration(video),
+                                     audio[1].get("duration"), video_headers=ta.headers)
+            except Exception as e:
+                log.warning("couldn't line up %s with TubeArchivist's copy: %s", primary["id"], type(e).__name__)
+                result = {"offset": 0.0, "checked": False, "score": 0.0}
+            self.db.update("posts", "id", primary["id"], {"sync": {**result, **key, "at": now()}})
+        return total
 
     def grow_archive_size(self, post: dict) -> None:
         """Add a newly archived post to the archive size shown on the admin page. The full count at the end of
@@ -504,6 +560,10 @@ class Archiver:
         def have(key: str) -> bool:
             return key in files and (self.paths.archive / files[key]).exists()
 
+        def have_video() -> bool:
+            # A video handed over to TubeArchivist counts as saved, so it isn't downloaded again
+            return handover.is_done(post) or ("video" in media and (self.paths.media / media["video"]["path"]).exists())
+
         for it in items:
             cls = self.media_class(it)
             if cls and not wanted.get(cls, True):
@@ -542,7 +602,7 @@ class Archiver:
                         media["audio"] = {"path": self.rel(p), "mime": mime_of(p), "size": p.stat().st_size,
                                           "duration": probe_duration(p)}
                     elif cls == "video":
-                        if "video" in media and (self.paths.media / media["video"]["path"]).exists():
+                        if have_video():
                             continue
                         p = downloader.file(it["url"], d, f"{title_base}{ext or '.mp4'}", referer=final)
                         self.store_video(post, update, media, p)
@@ -577,7 +637,7 @@ class Archiver:
                         media["audio"] = {"path": self.rel(p), "mime": mime_of(p), "size": p.stat().st_size,
                                           "duration": probe_duration(p)}
                     else:
-                        if "video" in media and (self.paths.media / media["video"]["path"]).exists():
+                        if have_video():
                             continue
                         url = it.get("url") or f"{MUX_BASE}/{pid}.m3u8{q}"
                         p = downloader.stream(url, d, title_base, referer=final, audio_only=False)
@@ -585,7 +645,7 @@ class Archiver:
                 elif it["kind"] in ("youtube", "embed"):
                     if not wanted.get("embeds"):
                         continue
-                    if "video" in media and (self.paths.media / media["video"]["path"]).exists():
+                    if have_video():
                         continue
                     p = downloader.stream(it["url"], d, title_base, referer=final, audio_only=False)
                     self.store_video(post, update, media, p)
@@ -1071,7 +1131,7 @@ class Archiver:
 
         def have_video() -> bool:
             v = media.get("video") or {}
-            return bool(v.get("path")) and (self.paths.media / v["path"]).exists()
+            return handover.is_done(post) or bool(v.get("path")) and (self.paths.media / v["path"]).exists()
 
         def have_audio() -> bool:
             a = media.get("audio") or {}
@@ -1121,6 +1181,14 @@ class Archiver:
                     f.unlink(missing_ok=True)
                     removed += 1
         return removed
+
+
+def feed_read_far_enough(known_streak: int, oldest: str | None, window: str | None) -> bool:
+    """Whether an incremental check can stop reading the feed: enough known posts in a row, and back past the
+    window of days that's always read again (when cards show no dates, the known posts alone decide)."""
+    if known_streak < STOP_AFTER_KNOWN:
+        return False
+    return window is None or oldest is None or oldest < window
 
 
 def thumb_name(it: dict) -> str:

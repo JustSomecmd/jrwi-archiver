@@ -5,6 +5,14 @@
 {% set v = item.video %}{% set a = item.audio %}
 <div class="watch">
 <div>
+  {% if item.handed_over %}{% set ho = item.handed_over %}
+    <div class="notice small">This post's members-only video was archived until {{ nice_date(ho.at) }}. It's on YouTube now
+      and TubeArchivist has the same video, so the archived copy was deleted:
+      <a href="/items/{{ ho.post_id }}">watch the YouTube version</a>.</div>
+  {% endif %}
+  {% if item.removed_from_site %}
+    <div class="notice small">This post is no longer on the site (gone since {{ nice_date(item.removed_from_site) }}). The archive keeps it.</div>
+  {% endif %}
   {% if v and v.url and a %}
     <div class="switch" data-switch>
       <button class="on" data-show="video">Video</button><button data-show="audio">Audio</button>
@@ -50,14 +58,16 @@
     {% endif %}
     {% if item.attachments or item.documents %}
       <div class="files">
-        {% for f in item.attachments %}<a href="{{ f.url }}" download>{{ icon('file') }} {{ f.name }}{% if f.size %} <span class="muted">({{ human_size(f.size) }})</span>{% endif %}</a>{% endfor %}
-        {% for f in item.documents %}<a href="{{ f.url }}" target="_blank">{{ icon('doc') }} {{ f.name }}</a>{% endfor %}
+        {% for f in item.attachments %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('file') }} {{ f.name }}{% if f.size %} <span class="muted">({{ human_size(f.size) }})</span>{% endif %}</a>{% endfor %}
+        {% for f in item.documents %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }} {{ f.name }}</a>{% endfor %}
       </div>
     {% endif %}
     {% if item.tags %}<div class="tags">{% for t in item.tags %}<span class="tag">{{ t }}</span>{% endfor %}</div>{% endif %}
     <div class="pfoot">
       {{ counts(item) }}
       <a class="pill" href="{{ item.original_url }}" target="_blank" rel="noopener">{{ icon('external') }} Original post</a>
+      {% if item.images or item.attachments or item.documents or item.audio or (v and v.url) or item.handed_over or item.thumbnail %}
+      <a class="pill" href="/items/{{ item.id }}/files">{{ icon('file') }} Files</a>{% endif %}
       {% if v and v.youtube_url %}<a class="pill" href="{{ v.youtube_url }}" target="_blank" rel="noopener">{{ icon('video') }} YouTube</a>{% endif %}
     </div>
     {% if item.paired %}

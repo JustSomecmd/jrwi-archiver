@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS posts (
     thumbnail TEXT, files TEXT DEFAULT '{}',
     show_id TEXT, tab TEXT, episode INTEGER, special INTEGER, pair_id INTEGER,
     show_override TEXT, tab_override TEXT, episode_override INTEGER, season INTEGER, season_override INTEGER,
-    tabs TEXT DEFAULT '[]', places TEXT DEFAULT '[]',
+    tabs TEXT DEFAULT '[]', places TEXT DEFAULT '[]', handover TEXT, site_gone TEXT,
     status TEXT DEFAULT 'new', problems TEXT DEFAULT '[]', skipped TEXT DEFAULT '[]',
     first_seen TEXT, last_fetched TEXT, comments_fetched TEXT, refetch TEXT, sync TEXT
 );
@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 JSON_FIELDS = {"tag_ids", "links", "images", "attachments", "documents", "embeds", "media", "files",
-               "problems", "skipped", "aliases", "author_badges", "sync", "tabs", "art_options", "places", "seasons"}
+               "problems", "skipped", "aliases", "author_badges", "sync", "tabs", "art_options", "places", "seasons",
+               "handover"}
 
 
 def now() -> str:
@@ -90,7 +91,8 @@ class Db:
     def _migrate(self) -> None:
         """Add columns that newer versions use to databases made by older ones."""
         wanted = {"posts": {"refetch": "TEXT", "sync": "TEXT", "season": "INTEGER", "season_override": "INTEGER",
-                            "tabs": "TEXT DEFAULT '[]'", "places": "TEXT DEFAULT '[]'"},
+                            "tabs": "TEXT DEFAULT '[]'", "places": "TEXT DEFAULT '[]'",
+                            "handover": "TEXT", "site_gone": "TEXT"},
                   "shows": {"source": "TEXT", "art": "TEXT", "art_source": "TEXT", "art_options": "TEXT DEFAULT '[]'",
                             "seasons": "TEXT DEFAULT '[]'"},
                   "progress": {"timeline": "TEXT"},

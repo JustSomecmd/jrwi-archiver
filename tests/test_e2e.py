@@ -604,3 +604,159 @@ def test_same_number_twice_keeps_upload_order(app, client):
     finally:
         db.x("DELETE FROM posts WHERE id >= 9501 AND id < 9600")
         organize.classify_all(db)
+
+
+def test_file_inspector(app, client):
+    """Every file of a post through the API, and what's inside PDFs, spreadsheets, documents, text and zips."""
+    import io
+    import zipfile
+    import openpyxl
+    db, archiver = app.state.db, app.state.archiver
+    got = client.get("/api/posts/299/files").json()
+    by_role = {}
+    for f in got["files"]:
+        by_role.setdefault(f["role"], []).append(f)
+    sheet = by_role["attachment"][0]
+    assert sheet["name"] == "Zombie Character Sheets.pdf" and sheet["type"] == "pdf" and sheet["mime"] == "application/pdf"
+    assert sheet["saved"] and sheet["post_id"] == 299 and client.get(sheet["url"]).status_code == 200
+    link = by_role["link"][0]   # Google Docs are off in these tests, so the doc is a link that wasn't saved
+    assert link["source"].startswith("https://docs.google.com/document/d/") and not link["saved"] and link["url"] is None
+    docs = [f for f in client.get("/api/posts/290/files").json()["files"] if f["role"] == "document"]
+    assert {d["name"] for d in docs} >= {"Map.pdf", "Big Map.pdf"}
+    assert all(d["type"] == "pdf" and d["source"].startswith("https://drive.google.com/") for d in docs)
+    assert by_role["image"][0]["type"] == "image" and by_role["image"][0]["preview"] is None
+    # A PDF: its pages, each as a picture
+    p = client.get(sheet["preview"]).json()
+    assert p["type"] == "pdf" and p["pages"] == 2
+    page = client.get(p["page_url"].replace("{n}", "2"))
+    assert page.status_code == 200 and page.headers["content-type"] == "image/png" and page.content[:4] == b"\x89PNG"
+    assert client.get(p["page_url"].replace("{n}", "9")).status_code == 404
+    # Items list every version's files; the audio comes with its address for playing
+    files = client.get("/api/items/300/files").json()["files"]
+    assert {f["post_id"] for f in files} >= {300, 298}
+    audio = next(f for f in files if f["role"] == "audio")
+    assert audio["url"] == "/api/audio/298" and audio["type"] == "audio" and audio["mime"].startswith("audio/")
+    assert any(f["role"] == "video" and f["url"] == "/api/video/300" for f in files)
+    # Other kinds of file, as Drive might hand them over
+    folder = archiver.paths.archive / "inspect-test"
+    folder.mkdir(exist_ok=True)
+    wb = openpyxl.Workbook()
+    wb.active.title = "Cast"
+    wb.active.append(["Name", "Class", "Level"])
+    wb.active.append(["Ferin", "Rogue", 7])
+    wb.create_sheet("Loot").append(["Gold", 120.0])
+    wb.save(folder / "cast.xlsx")
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    body = (f'<w:document xmlns:w="{w}"><w:body>'
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Session notes</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>The crew reach the harbour.</w:t></w:r></w:p>'
+            '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Find the captain</w:t></w:r></w:p>'
+            '</w:body></w:document>')
+    with zipfile.ZipFile(folder / "notes.docx", "w") as z:
+        z.writestr("word/document.xml", body)
+    with zipfile.ZipFile(folder / "handouts.zip", "w") as z:
+        z.writestr("maps/harbour.png", b"x" * 10)
+        z.writestr("readme.txt", "hi")
+    (folder / "transcript.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nHello, everyone!\n")
+    (folder / "drive-file.bin").write_bytes((folder / "cast.xlsx").read_bytes())   # a Drive file without a name
+    t = client.get("/api/preview/inspect-test/cast.xlsx").json()
+    assert t["type"] == "table" and [s["name"] for s in t["sheets"]] == ["Cast", "Loot"]
+    assert t["sheets"][0]["rows"] == [["Name", "Class", "Level"], ["Ferin", "Rogue", "7"]]
+    assert t["sheets"][1]["rows"] == [["Gold", "120"]]
+    assert client.get("/api/preview/inspect-test/drive-file.bin").json()["type"] == "table"
+    d = client.get("/api/preview/inspect-test/notes.docx").json()
+    assert d["type"] == "document" and d["blocks"] == [
+        {"kind": "heading", "level": 1, "text": "Session notes"},
+        {"kind": "paragraph", "text": "The crew reach the harbour."}, {"kind": "item", "text": "Find the captain"}]
+    z = client.get("/api/preview/inspect-test/handouts.zip").json()
+    assert z["type"] == "archive" and [e["name"] for e in z["entries"]] == ["maps/harbour.png", "readme.txt"]
+    s = client.get("/api/preview/inspect-test/transcript.srt").json()
+    assert s["type"] == "text" and s["format"] == "subtitles" and "Hello, everyone!" in s["text"]
+    assert client.get("/api/preview/inspect-test/cast.xlsx?page=1").status_code == 400
+    assert client.get("/api/preview/../../etc/passwd").status_code == 404
+    assert client.get("/api/preview/inspect-test/nothing.pdf").status_code == 404
+    assert TestClient(app).get("/api/posts/299/files").status_code == 401   # needs the token or a login
+    # The web pages
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    page = web.get("/items/299/files").text
+    assert "Zombie Character Sheets.pdf" in page and "inspector.js" in page and "Linked Google file" in page
+    assert '/items/299/files?f=' in web.get("/items/299").text
+    summary = web.get("/admin/files").text
+    assert "PDF" in summary and ".pdf" in summary and "what's inside" in summary
+
+
+def test_feed_is_read_back_far_enough():
+    """An incremental check reads on past its known posts until it's back past the days it always rereads."""
+    from jrwi.crawler import STOP_AFTER_KNOWN, feed_read_far_enough
+    assert not feed_read_far_enough(STOP_AFTER_KNOWN - 1, "2020-01-01", "2026-09-22")
+    assert not feed_read_far_enough(STOP_AFTER_KNOWN, "2026-10-01", "2026-09-22")   # still inside the window
+    assert feed_read_far_enough(STOP_AFTER_KNOWN, "2026-09-20", "2026-09-22")
+    assert feed_read_far_enough(STOP_AFTER_KNOWN, "2026-10-01", None)                # window turned off
+    assert feed_read_far_enough(STOP_AFTER_KNOWN, None, "2026-09-22")                # cards without dates
+
+
+def test_video_handed_over_to_tubearchivist(app, client):
+    """Once an episode's YouTube version is up and TubeArchivist has it, the archived video is deleted and the item
+    plays from YouTube. Positions move with the measured gap; a video whose length differs is kept. Runs last: it
+    changes the mock site."""
+    import requests as rq
+    from jrwi import handover
+    db, archiver = app.state.db, app.state.archiver
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    old_file = Path(os.environ["JRWI_MEDIA"]) / db.post(297)["media"]["video"]["path"]
+    keeper_file = Path(os.environ["JRWI_MEDIA"]) / db.post(287)["media"]["video"]["path"]
+    assert old_file.is_file() and keeper_file.is_file()
+    client.put("/api/progress/297", json={"position": 5.0, "duration": 20.0, "finished": False})
+    # The site adds the YouTube posts; TubeArchivist isn't connected yet, so nothing is deleted
+    rq.get(f"http://127.0.0.1:{PORT}/_test/stage?n=1", timeout=5)
+    assert archiver.run_check()["result"] == "ok"
+    assert db.post(295)["pair_id"] == 297 and db.post(294)["pair_id"] == 287
+    assert db.post(297)["handover"]["status"] == "waiting" and old_file.is_file()
+    assert db.post(297)["site_gone"] and not db.post(295)["site_gone"]   # the members-only post is gone from the site
+    assert "connect TubeArchivist" not in web.get("/admin").text and "isn't connected" in web.get("/admin").text
+    # Connect TubeArchivist on the Settings page; the token is never shown again
+    web.post("/admin/settings", data={"ta_url": f"http://127.0.0.1:{PORT}/ta", "ta_token": "wrong", "handover": "on",
+                                      "recheck_days": "60", "video": "on", "audio": "on", "images": "on",
+                                      "attachments": "on", "comments": "on", "public_pages": "on"})
+    assert "turned the API token down" in web.post("/admin/test-ta").text
+    web.post("/admin/settings", data={"ta_url": f"http://127.0.0.1:{PORT}/ta", "ta_token": "ta-test-token",
+                                      "handover": "on", "recheck_days": "60", "video": "on", "audio": "on",
+                                      "images": "on", "attachments": "on", "comments": "on", "public_pages": "on"})
+    page = web.post("/admin/test-ta").text
+    assert "connected, TubeArchivist v0.5.4" in page and "ta-test-token" not in page
+    assert archiver.run_check()["result"] == "ok"
+    # Same length within 10 s: handed over, the file and its Jellyfin files are gone
+    h = db.post(297)["handover"]
+    assert h["status"] == "done" and h["youtube_id"] == "JRWI136ytAA" and h["shift_checked"]
+    assert abs(h["shift"] - 3.0) < 0.1 and h["freed"] > 0
+    assert not old_file.exists() and not list(old_file.parent.glob(old_file.stem + "*"))
+    item = client.get("/api/items/297").json()
+    assert item["video"]["youtube_id"] == "JRWI136ytAA" and item["video"]["post_id"] == 295
+    assert item["video"]["handed_over"]["post_id"] == 297 and item["kind"] == "youtube"
+    post = client.get("/api/posts/297").json()
+    assert post["video"] is None and post["handed_over"]["post_id"] == 295 and post["removed_from_site"]
+    # Progress saved in the archived video's timeline moved 3 s, and the old post ID still works
+    at = client.get("/api/progress/297").json()
+    assert abs(at["position"] - 8.0) < 0.15, at
+    assert client.get("/api/video/297").status_code == 404
+    assert any(e["type"] == "video_handed_over" and e["post_id"] == 297 for e in client.get("/api/events").json())
+    assert "watch the YouTube version" in web.get("/items/297").text
+    assert "TubeArchivist has the same video from YouTube" in web.get("/admin/items/295").text
+    # A different length: both are kept until the user says otherwise
+    h = db.post(287)["handover"]
+    assert h["status"] == "differs" and keeper_file.is_file()
+    page = web.get("/admin/items/287").text
+    assert "Delete it anyway" in page and "Keep the archived video" in page
+    # YouTube-only episodes with audio are lined up against TubeArchivist's copy (3 s intro, audio 2 s in)
+    sync = client.get("/api/items/289").json()["sync"]
+    assert sync["checked"] and abs(sync["offset"] - (-5.0)) < 0.1, sync
+    # Another check doesn't download the deleted video again
+    assert archiver.run_check()["result"] == "ok"
+    assert not old_file.exists() and db.post(297)["handover"]["status"] == "done"
+    # Deleting anyway, then keeping
+    web.post("/admin/items/287/handover", data={"choice": "force"})
+    handover.run(db, archiver.paths, db.settings())
+    assert db.post(287)["handover"]["status"] == "done" and not keeper_file.exists()
+    assert "already deleted" in web.post("/admin/items/287/handover", data={"choice": "force"}).text

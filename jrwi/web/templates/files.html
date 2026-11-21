@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon %}
+{% block title %}Files · {{ post.title }} · JRWI archive{% endblock %}
+{% set type_names = {'pdf': 'PDF', 'table': 'Spreadsheet', 'document': 'Document', 'text': 'Text', 'archive': 'Zip archive',
+  'image': 'Picture', 'audio': 'Audio', 'video': 'Video', 'youtube': 'YouTube', 'link': 'Link, not saved', 'other': 'File'} %}
+{% set role_names = {'video': 'Video', 'audio': 'Audio', 'document': 'Linked Google file', 'attachment': 'Attachment',
+  'image': 'Picture in the post', 'thumbnail': 'Thumbnail', 'link': 'Linked Google file'} %}
+{% set type_icons = {'pdf': 'doc', 'table': 'doc', 'document': 'doc', 'text': 'doc', 'archive': 'file', 'image': 'image',
+  'audio': 'audio', 'video': 'video', 'youtube': 'video', 'link': 'link', 'other': 'file'} %}
+{% macro row(e, from_title=None) %}
+<button type="button" class="insp-file" data-file='{{ e | tojson }}'>
+  <span class="insp-icon">{{ icon(type_icons.get(e.type, 'file')) }}</span>
+  <span class="insp-text"><span class="insp-name">{{ e.name }}</span>
+    <span class="insp-meta">{{ role_names.get(e.role, 'File') }} · {{ type_names.get(e.type, 'File') }}{% if e.size %} · {{ human_size(e.size) }}{% endif %}{% if from_title %} · {{ from_title }}{% endif %}</span></span>
+</button>
+{% endmacro %}
+{% block content %}
+<a class="back" href="/items/{{ post.id }}">&lsaquo; Back to the post</a>
+<h1>Files</h1>
+<p class="muted">{{ post.title }}</p>
+{% if not own and not others %}
+<p class="muted">This post has no files.</p>
+{% else %}
+<div class="inspector" data-inspector data-pick="{{ pick }}">
+  <div class="insp-list">
+    {% if own %}<div class="insp-group">This post</div>{% endif %}
+    {% for e in own %}{{ row(e) }}{% endfor %}
+    {% if others %}<div class="insp-group">Its other versions</div>
+      {% for e in others %}{{ row(e, titles.get(e.post_id)) }}{% endfor %}{% endif %}
+  </div>
+  <div class="insp-view" data-view aria-live="polite"><p class="muted">Pick a file to look inside it.</p></div>
+</div>
+<script src="/static/inspector.js?v={{ version }}"></script>
+{% endif %}
+{% endblock %}

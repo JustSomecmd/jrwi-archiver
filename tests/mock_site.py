@@ -3,6 +3,7 @@
 Run: python tests/mock_site.py 8765   (needs tests/media, made by tests/make_media.sh)
 Login: fan@example.com / hunter2
 """
+import json
 import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -225,8 +226,36 @@ def watch_page(pid, fr):
             f'</div></div>{sidebar}</div></div></turbo-frame></div>')
 
 
+# Stage 1 (set by GET /_test/stage?n=1): Riptide #136's aftershow and the Unwitness keeper notes go up on YouTube.
+# The site adds a post embedding each YouTube video, dated like the members-only post, and takes the aftershow's
+# members-only post (297) down.
+STAGE = {"n": 0}
+YT_POSTS = [
+    (295, "/supporters/video_embeds/just-rolled-with-it-riptide-136-yt", "Just Rolled With It | Riptide #136", "Nov 7, 2026",
+     '<div class="embed-player" data-controller="youtube-player" data-youtube-player-video-id-value="JRWI136ytAA"></div>',
+     "<p>Now on YouTube.</p>", {"access": "public", "tags": "tag_102"}),
+    (294, "/supporters/video_embeds/keeper-notes-unwitness-yt", "Keeper Notes - Unwitness [Empty Graves]", "Oct 8, 2026",
+     '<div class="embed-player" data-controller="youtube-player" data-youtube-player-video-id-value="KEEPERytBB"></div>',
+     "<p>Notes, on YouTube.</p>", {"access": "public"}),
+]
+for _pid, _path, _title, _date, _media, _body, _kw in YT_POSTS:
+    add(_pid, _path, _title, _date, _media, _body, **_kw)
+GONE = {"/supporters/videos/just-rolled-with-it-riptide-136"}
+# TubeArchivist: (duration, file) for the YouTube videos it has downloaded
+TA_TOKEN = "ta-test-token"
+TA_VIDEOS = {"JRWI136ytAA": (23.0, "youtube.mp4"), "KEEPERytBB": (999.0, "youtube.mp4"), "CzZ13VPQOcw": (23.0, "youtube.mp4")}
+
+
+def stage_posts(posts):
+    if STAGE["n"] < 1:
+        return posts
+    added = [POSTS[path][1] for pid, path, *_ in YT_POSTS]
+    gone = {POSTS[g][1] for g in GONE}
+    return added[:1] + [f for f in posts if f not in gone] if posts is P1 else [f for f in posts if f not in gone] + added[1:]
+
+
 def feed_page1(li):
-    items = P1 if li else [P1[4]]
+    items = stage_posts(P1) if li else [P1[4]]
     more = ('<turbo-frame id="posts_load_more"><a data-turbo-stream="true" data-controller="infinite-scroll" '
             'href="/supporters/load_more?last_id=296&amp;last_live_at=x&amp;order=desc"></a></turbo-frame>')
     return page(f'{TAGS}<div id="posts_list">{"".join(items)}</div>{more}', li)
@@ -287,9 +316,16 @@ class H(BaseHTTPRequestHandler):
             if "turbo-stream" not in (self.headers.get("Accept") or ""):
                 return self.send(406, "no")
             if q.get("last_id") == ["296"]:
-                return self.send(200, stream(P2, "/supporters/load_more?last_id=287&last_live_at=y&order=desc"),
+                return self.send(200, stream(stage_posts(P2), "/supporters/load_more?last_id=287&last_live_at=y&order=desc"),
                                  "text/vnd.turbo-stream.html")
             return self.send(200, stream([], None), "text/vnd.turbo-stream.html")
+        if p == "/_test/stage":
+            STAGE["n"] = int(q.get("n", ["0"])[0])
+            return self.send(200, "ok")
+        if p.startswith("/ta/"):
+            return self.tubearchivist(p[3:])
+        if STAGE["n"] >= 1 and p in GONE:
+            return self.send(404, "gone")
         if p in POSTS and p.split("/")[2] in ("videos", "audio", "video_embeds"):
             pid, fr = POSTS[p]
             if pid == 296:
@@ -356,6 +392,25 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/mux/") and (MEDIA / p[5:]).exists():
             f = MEDIA / p[5:]
             return self.file(f, "application/vnd.apple.mpegurl" if f.suffix == ".m3u8" else "video/mp2t")
+        return self.send(404, "not found")
+
+    def tubearchivist(self, p):
+        if self.headers.get("Authorization") != f"Token {TA_TOKEN}":
+            return self.send(403, '{"detail": "Invalid token."}', "application/json")
+        if p == "/api/ping/":
+            return self.send(200, '{"response": "pong", "user": 1, "version": "v0.5.4"}', "application/json")
+        m = re.match(r"^/api/video/([\w-]+)/$", p)
+        if m:
+            vid = m.group(1)
+            if vid not in TA_VIDEOS:
+                return self.send(404, '{"detail": "video not found"}', "application/json")
+            duration, name = TA_VIDEOS[vid]
+            return self.send(200, json.dumps({"youtube_id": vid, "title": vid, "player": {"duration": duration},
+                                              "media_url": f"/media/UCjrwi/{vid}.mp4", "active": True,
+                                              "media_size": (MEDIA / name).stat().st_size}), "application/json")
+        m = re.match(r"^/media/UCjrwi/([\w-]+)\.mp4$", p)
+        if m and m.group(1) in TA_VIDEOS:
+            return self.file(MEDIA / TA_VIDEOS[m.group(1)][1], "video/mp4")
         return self.send(404, "not found")
 
     def do_POST(self):
