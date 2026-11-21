@@ -586,21 +586,28 @@ def test_seasons_from_restarting_numbers(app, client):
 
 
 def test_same_number_twice_keeps_upload_order(app, client):
-    """Riptide has two episodes numbered 68 (on purpose, to skip 69): both stay, in upload order."""
+    """Riptide has two episodes numbered 68 (on purpose, to skip 69): both stay, in upload order. A post without a
+    number (a Q&A) sits after the episode uploaded before it, in either order."""
     from jrwi import organize
     db = app.state.db
     try:
         for pid, day, title in [(9501, "2022-01-07", "The Greatest Form of Flattery | Riptide #68"),
                                 (9502, "2022-01-14", "A Stranger at Sea | Riptide #68"),
-                                (9503, "2022-01-21", "Next One | Riptide #70")]:
+                                (9503, "2022-01-21", "Next One | Riptide #70"),
+                                (9504, "2022-01-28", "Riptide Q&A")]:   # no number: sits after #70, not before #1
             db.upsert("posts", "id", {"id": pid, "url": f"https://example.invalid/{pid}", "title": title,
                                       "path_kind": "videos", "status": "complete", "tag_ids": ["101"],
                                       "published": day + "T00:00:00+00:00"})
         organize.classify_all(db)
         ids = [i["id"] for i in client.get("/api/shows/riptide/items?tab=episodes&order=asc&page_size=200").json()["items"]]
         mine = [i for i in ids if i >= 9501]
-        assert mine == [9501, 9502, 9503]
+        assert mine == [9501, 9502, 9503, 9504]
+        assert ids.index(9504) == ids.index(9503) + 1 and ids.index(9504) < ids.index(300)   # before #136
         assert {db.post(i)["pair_id"] for i in mine} == {None}   # two episodes, not two versions of one
+        assert db.post(9504)["episode"] is None and db.post(9504)["episode_sort"] == 70.5
+        newest = [i["id"] for i in client.get("/api/shows/riptide/items?tab=episodes&page_size=200").json()["items"]]
+        assert [i for i in newest if i >= 9501] == [9504, 9503, 9502, 9501]
+        assert newest.index(9504) == newest.index(9503) - 1
     finally:
         db.x("DELETE FROM posts WHERE id >= 9501 AND id < 9600")
         organize.classify_all(db)

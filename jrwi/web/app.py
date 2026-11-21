@@ -257,7 +257,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             args.append(youtube_id)
         direction = "ASC" if order == "asc" else "DESC"
         if tab == "episodes":
-            order_by = f"COALESCE(season, 1) {direction}, episode {direction}, published {direction}, id {direction}"
+            # A post without a number sits after the episode uploaded before it (episode_sort), not before #1
+            order_by = (f"COALESCE(season, 1) {direction}, COALESCE(episode_sort, episode) {direction}, "
+                        f"published {direction}, id {direction}")
         else:
             order_by = f"published {direction}, id {direction}"
         return f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY {order_by}", args

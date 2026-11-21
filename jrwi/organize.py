@@ -464,6 +464,22 @@ def season_name_of(title: str, show_names: list[str]) -> str:
     return re.sub(r"\s+", " ", t).strip(" -–—.,") or ""
 
 
+def episode_places(posts: list[dict], seasons: dict[int, int]) -> dict[int, float]:
+    """Where each of a show's Episodes goes in the tab's order, within its season: a numbered episode at its number,
+    a post without a number (a Q&A, say) just after the highest-numbered episode of its season uploaded before it,
+    so it sits where it came out instead of before #1 or after the last one."""
+    out: dict[int, float] = {}
+    best: dict[int, float] = {}   # season -> highest number so far, in upload order
+    for p in sorted(posts, key=lambda p: (p["published"] or "", p["id"])):
+        season = seasons.get(p["id"], 1)
+        if p["episode"] is not None:
+            out[p["id"]] = float(p["episode"])
+            best[season] = max(best.get(season, 0.0), float(p["episode"]))
+        else:
+            out[p["id"]] = best.get(season, 0.0) + 0.5
+    return out
+
+
 def infer_seasons(posts: list[dict], show_names: list[str]) -> dict[int, int]:
     """Seasons for one show's episodes, in upload order. A season named in the title, a tag or by the user is used
     as it is. Otherwise a post that's another version of an earlier episode (same number and name) gets that
@@ -580,7 +596,7 @@ def classify_all(db: Db) -> None:
     tag_names = {t["id"]: t["name"] for t in db.q("SELECT id, name FROM tags")}
     posts = db.q("SELECT id, title, path_kind, tag_ids, body_text, images, published, show_override, "
                  "tab_override, episode_override, season_override, pair_id, show_id, tab, tabs, places, episode, "
-                 "season FROM posts")
+                 "season, episode_sort FROM posts")
     order = [x for x, _ in TABS]
     new: dict[int, dict] = {}
     for p in posts:
@@ -617,6 +633,8 @@ def classify_all(db: Db) -> None:
         seasons = infer_seasons(eps, by_show.get(sid, []) + ["just roll with it", "jrwi"])
         for pid, season in seasons.items():
             new[pid]["season"] = season
+        for pid, place in episode_places(eps, seasons).items():
+            new[pid]["episode_sort"] = place
         named = season_names([e for e in eps if e["path_kind"] in MEDIA_KINDS], seasons, by_show.get(sid, []))
         # The show's Just Rolled With It posts belong to the season of the episodes they talk about
         rolled = [{**p, **new[p["id"]]} for p in posts if new[p["id"]]["show_id"] == sid
@@ -630,7 +648,8 @@ def classify_all(db: Db) -> None:
     for p in posts:
         n = new[p["id"]]
         n.setdefault("season", n["explicit_season"])
-        fields = {k: n[k] for k in ("show_id", "tab", "tabs", "places", "episode", "season")}
+        n.setdefault("episode_sort", None)
+        fields = {k: n[k] for k in ("show_id", "tab", "tabs", "places", "episode", "season", "episode_sort")}
         if any(fields[k] != p[k] for k in fields):
             db.update("posts", "id", p["id"], fields)
         p.update(fields)

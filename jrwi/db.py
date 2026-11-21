@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS posts (
     thumbnail TEXT, files TEXT DEFAULT '{}',
     show_id TEXT, tab TEXT, episode INTEGER, special INTEGER, pair_id INTEGER,
     show_override TEXT, tab_override TEXT, episode_override INTEGER, season INTEGER, season_override INTEGER,
-    tabs TEXT DEFAULT '[]', places TEXT DEFAULT '[]', handover TEXT, site_gone TEXT,
+    tabs TEXT DEFAULT '[]', places TEXT DEFAULT '[]', handover TEXT, site_gone TEXT, episode_sort REAL,
     status TEXT DEFAULT 'new', problems TEXT DEFAULT '[]', skipped TEXT DEFAULT '[]',
     first_seen TEXT, last_fetched TEXT, comments_fetched TEXT, refetch TEXT, sync TEXT
 );
@@ -92,7 +92,8 @@ class Db:
         """Add columns that newer versions use to databases made by older ones."""
         wanted = {"posts": {"refetch": "TEXT", "sync": "TEXT", "season": "INTEGER", "season_override": "INTEGER",
                             "tabs": "TEXT DEFAULT '[]'", "places": "TEXT DEFAULT '[]'",
-                            "handover": "TEXT", "site_gone": "TEXT"},
+                            "handover": "TEXT", "site_gone": "TEXT",
+                            "episode_sort": "REAL"},
                   "shows": {"source": "TEXT", "art": "TEXT", "art_source": "TEXT", "art_options": "TEXT DEFAULT '[]'",
                             "seasons": "TEXT DEFAULT '[]'"},
                   "progress": {"timeline": "TEXT"},
