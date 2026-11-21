@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import pager, post_card, icon %}
+{% from "macros.html" import pager, post_card, icon, fit_img %}
 {% set active = 'home' %}
 {% block title %}JRWI archive{% endblock %}
 {% block content %}
@@ -19,6 +19,24 @@
         <span>{{ s.name }}</span><small>{{ s.item_count }}</small></a>
       {% endfor %}
     </div>
+    {% endif %}
+    {% if resume %}
+    <section class="resume" aria-label="Continue watching">
+      <h2 class="resume-head">Continue watching</h2>
+      <div class="resume-row">
+        {% for it in resume %}
+        <a class="resume-card" href="{{ it.href }}" title="{{ it.title }}">
+          <div class="thumb">
+            {{ fit_img(it.thumbnail) }}
+            <span class="badge resume-kind">{{ icon('audio' if it.played == 'audio' else 'video') }} {{ 'Audio' if it.played == 'audio' else 'Video' }}</span>
+            <span class="resume-bar"><span style="width: {{ '%.1f' | format(it.fraction * 100) }}%"></span></span>
+          </div>
+          <div class="resume-title">{{ it.title }}</div>
+          <div class="resume-meta">{% if it.show_name %}{{ it.show_name }} · {% endif %}{{ human_duration(it.left) }} left</div>
+        </a>
+        {% endfor %}
+      </div>
+    </section>
     {% endif %}
     <form class="toolbar" method="get" action="/">
       <a class="pill" href="/?q={{ q | urlencode }}{{ '&locked=on' if locked else '' }}&order={{ 'asc' if order == 'desc' else 'desc' }}">

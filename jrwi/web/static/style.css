@@ -493,3 +493,21 @@ pre.insp-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85re
   .inspector { grid-template-columns: 1fr; }
   .insp-list { position: static; max-height: none; }
 }
+
+/* Continue watching, on Home under the show tiles */
+.resume { margin: 0 0 1.4rem; }
+.resume-head { font-size: 1rem; margin: 0 0 .7rem; }
+.resume-row { display: flex; gap: .9rem; overflow-x: auto; padding-bottom: .4rem; scrollbar-width: thin; }
+.resume-card { flex: 0 0 220px; color: var(--text); min-width: 0; }
+.resume-card:hover { text-decoration: none; }
+.resume-card:hover .resume-title { color: var(--accent); }
+.resume-card .thumb { aspect-ratio: 16 / 9; position: relative; overflow: hidden; border-radius: var(--radius); background: #0b0c14; }
+.resume-card .thumb > .fit { position: absolute; inset: 0; }
+.resume-kind { position: absolute; left: .5rem; top: .5rem; display: inline-flex; align-items: center; gap: .3rem; }
+.resume-kind svg { width: 12px; height: 12px; }
+.resume-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255, 255, 255, .25); }
+.resume-bar span { display: block; height: 100%; background: var(--accent); }
+.resume-title { font-weight: 700; font-size: .9rem; line-height: 1.25; margin-top: .45rem; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.resume-meta { color: var(--muted); font-size: .8rem; margin-top: .15rem; }
+@media (max-width: 600px) { .resume-card { flex-basis: 180px; } }

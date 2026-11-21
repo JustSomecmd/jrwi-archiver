@@ -689,6 +689,27 @@ def test_file_inspector(app, client):
     assert "PDF" in summary and ".pdf" in summary and "what's inside" in summary
 
 
+def test_continue_watching_on_home(app, client):
+    """Home lists started, unfinished episodes under the show tiles, most recently played first, each opening the
+    version that was played."""
+    import re
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    client.put("/api/progress/297", json={"position": 3.0, "duration": 20.0, "finished": False})   # barely started
+    client.put("/api/progress/300", json={"position": 19.5, "duration": 20.0, "finished": True})   # finished
+    client.put("/api/progress/287", json={"position": 12.0, "duration": 20.0, "finished": False})
+    time.sleep(1.1)
+    client.put("/api/progress/288", json={"position": 15.0, "duration": 20.0, "finished": False})  # audio, played last
+    home = web.get("/").text
+    assert "Continue watching" in home
+    section = home.split('class="resume"', 1)[1].split("</section>", 1)[0]
+    links = re.findall(r'class="resume-card" href="(/items/\d+)"', section)
+    assert links.index("/items/288") < links.index("/items/287")
+    assert "/items/297" not in links and "/items/300" not in links
+    assert "0:05 left" in section and "Audio" in section
+    assert "Continue watching" not in web.get("/?page=2").text and "Continue watching" not in web.get("/?q=Riptide").text
+
+
 def test_feed_is_read_back_far_enough():
     """An incremental check reads on past its known posts until it's back past the days it always rereads."""
     from jrwi.crawler import STOP_AFTER_KNOWN, feed_read_far_enough

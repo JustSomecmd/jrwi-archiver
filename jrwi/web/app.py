@@ -568,7 +568,38 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return render(request, "feed.html", posts=posts, q=q or "", page=max(1, page),
                       pages=math.ceil(total / 20) or 1, locked=locked, order=order,
                       tiles=[s for s in shows if s["item_count"]],
+                      resume=continue_watching() if page <= 1 and not q else [],
                       empty=not total and not q and not db.one("SELECT 1 FROM posts LIMIT 1"))
+
+    CONTINUE_MIN = 10.0   # seconds in before an episode counts as started
+
+    def continue_watching(limit: int = 12) -> list[dict]:
+        """Episodes (video or audio) that were started and not finished, most recently played first. Each opens the
+        version that was played last, which resumes where it was left."""
+        out, seen = [], set()
+        for row in db.q("SELECT * FROM progress WHERE NOT finished AND position >= ? ORDER BY updated_at DESC LIMIT 200",
+                        (CONTINUE_MIN,)):
+            primary = ser.primary_of(row["post_id"])
+            if not primary or primary["id"] in seen or primary["status"] == "locked":
+                continue
+            seen.add(primary["id"])
+            item = ser.summary(primary)
+            played = "audio" if row["timeline"] == "audio" else "video"
+            part = item[played] or item["video"] or item["audio"]
+            if not part:
+                continue
+            at = progress.get(db.post(part["post_id"]))
+            duration = at.get("duration") or part.get("duration")
+            if not duration or at["position"] >= duration:
+                continue
+            show = db.one("SELECT name FROM shows WHERE id=?", (item["show"],))
+            out.append({**item, "played": played if item[played] else ("video" if item["video"] else "audio"),
+                        "href": f"/items/{part['post_id']}", "position": at["position"], "length": duration,
+                        "fraction": max(0.0, min(1.0, at["position"] / duration)), "left": duration - at["position"],
+                        "show_name": show["name"] if show else "", "played_at": row["updated_at"]})
+            if len(out) >= limit:
+                break
+        return out
 
     def sorted_comments(post: dict, csort: str = "top") -> list[dict]:
         """A post's own comments. 'top' (most relevant, as on the site): pinned first, then the most liked.
