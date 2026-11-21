@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -25,8 +25,9 @@ from .. import NAME, VERSION
 from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
 from ..db import Db
-from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, TABS, add_show, art_choices, choose_show_art, classify_all,
-                        drop_shared_show_art, norm, refresh_jellyfin, reorganize, show_tag_names, tag_role)
+from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, MAX_PICTURE, TABS, add_show, art_choices, choose_show_art,
+                        classify_all, delete_saved_override, drop_shared_show_art, norm, post_pictures, refresh_jellyfin,
+                        reorganize, saved_overrides, set_art_override, show_tag_names, tag_role)
 from ..scheduler import Scheduler
 from .progress import Progress
 from .serialize import Serializer, clean_html, files_url, iso, safe_join, tab_name
@@ -730,23 +731,58 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             reorganize(db, paths)
         return RedirectResponse("/admin/shows", 303)
 
+    PICTURES_PER_PAGE = 40
+
     @app.get("/admin/shows/{show_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def admin_show(request: Request, show_id: str):
+    def admin_show(request: Request, show_id: str, page: int = 1, error: str = "", done: str = ""):
         row = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
         if not row:
             raise HTTPException(404, "No such show")
-        return render(request, "admin_show.html", show=row, choices=[(c, files_url(c)) for c in art_choices(row)],
-                      art=files_url(row["art"]), logo=files_url(db.setting("site_logo")),
-                      source=ART_SOURCES.get(row["art_source"] or "", ""))
+        from_posts = post_pictures(db, paths.archive, show_id)
+        pages = max(1, math.ceil(len(from_posts) / PICTURES_PER_PAGE))
+        page = min(max(1, page), pages)
+        shown = from_posts[(page - 1) * PICTURES_PER_PAGE:page * PICTURES_PER_PAGE]
+        return render(request, "admin_show.html", show=row, art=files_url(row["art"]),
+                      override=row["art_source"] == "override", source=ART_SOURCES.get(row["art_source"] or "", ""),
+                      saved=[(r, files_url(r)) for r in saved_overrides(paths.archive, row)],
+                      choices=[(c, files_url(c)) for c in art_choices(row)],
+                      from_posts=[{**p, "url": files_url(p["rel"])} for p in shown], page=page, pages=pages,
+                      total=len(from_posts), max_mb=MAX_PICTURE // 1024 // 1024, error=error, done=done)
+
+    def back_to_show(show_id: str, error: str = "", done: str = "") -> RedirectResponse:
+        q = f"?error={quote(error)}" if error else (f"?done={quote(done)}" if done else "")
+        return RedirectResponse(f"/admin/shows/{quote(show_id)}{q}", 303)
 
     @app.post("/admin/shows/{show_id}/art", dependencies=[Depends(web_auth)])
     def admin_show_art(show_id: str, choice: str = Form(...)):
+        """Override the show's picture with a picture in the archive or the JRWI logo, or (choice=auto) turn the
+        override off."""
         try:
-            choose_show_art(db, show_id, choice)
+            choose_show_art(db, paths.archive, show_id, choice)
         except ValueError as e:
-            raise HTTPException(400, str(e))
+            return back_to_show(show_id, error=str(e))
         refresh_jellyfin(db, paths)
-        return RedirectResponse(f"/admin/shows/{show_id}", 303)
+        return back_to_show(show_id, done="off" if choice == "auto" else "on")
+
+    @app.post("/admin/shows/{show_id}/art/upload", dependencies=[Depends(web_auth)])
+    async def admin_show_art_upload(show_id: str, picture: UploadFile = File(...)):
+        data = await picture.read(MAX_PICTURE + 1)
+        try:
+            if not data:
+                raise ValueError("pick a picture to upload first")
+            set_art_override(db, paths.archive, show_id, data)
+        except ValueError as e:
+            return back_to_show(show_id, error=str(e))
+        refresh_jellyfin(db, paths)
+        return back_to_show(show_id, done="on")
+
+    @app.post("/admin/shows/{show_id}/art/delete", dependencies=[Depends(web_auth)])
+    def admin_show_art_delete(show_id: str, file: str = Form(...)):
+        try:
+            delete_saved_override(db, paths.archive, show_id, file)
+        except ValueError as e:
+            return back_to_show(show_id, error=str(e))
+        return back_to_show(show_id, done="deleted")
 
     @app.post("/admin/shows", dependencies=[Depends(web_auth)])
     async def admin_shows_post(request: Request):

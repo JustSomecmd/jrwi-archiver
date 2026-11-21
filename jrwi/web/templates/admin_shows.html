@@ -16,7 +16,7 @@
   <tr><td><a href="/admin/shows/{{ r.id }}" title="Change the picture"><img class="show-thumb" src="{{ r.image }}" alt=""></a></td>
       <td><a href="/shows/{{ r.id }}">{{ r.name }}</a>
         <div class="muted small">{{ r.id }} · {% if r.source == 'tags' %}from the site's tags{% elif r.source == 'manual' %}added here{% elif r.id == 'other' %}posts no show matches{% else %}in the site's Shows menu{% endif %}
-          · <a href="/admin/shows/{{ r.id }}">{% if r.poster %}picture{% else %}JRWI logo{% endif %}{% if r.art_source == 'picked' %} (picked){% endif %}</a></div></td>
+          · <a href="/admin/shows/{{ r.id }}">{% if r.poster %}picture{% else %}JRWI logo{% endif %}{% if r.art_source == 'override' %} (override){% endif %}</a></div></td>
       <td>{{ r.item_count }}</td>
       <td>{% if r.id != 'other' %}<input type="text" name="aliases_{{ r.id }}" value="{{ (r.aliases or []) | join(', ') }}">{% endif %}</td></tr>
   {% endfor %}

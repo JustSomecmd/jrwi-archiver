@@ -148,7 +148,7 @@ def test_jellyfin_layout():
 
 def test_show_pictures(app, client):
     """A show page's own share picture is the show's picture. Pages that only carry the site-wide one get none, and
-    the JRWI logo is shown instead. A picture picked on the admin page stays when pages are read again."""
+    the JRWI logo is shown instead. An override set on the admin page stays until it's turned off."""
     shows = {s["id"]: s for s in client.get("/api/shows?include_empty=true").json()}
     rip = shows["riptide"]
     assert rip["poster"] and rip["poster"] == rip["banner"] == rip["image"]
@@ -161,26 +161,69 @@ def test_show_pictures(app, client):
     web.post("/login", data={"password": "test-password"})
     assert 'src="' + logo + '"' in web.get("/").text   # Home's tile for a show without a picture
     page = web.get("/admin/shows/riptide").text
-    assert "own picture on its page on the site" in page
+    assert "own picture on its page on the site" in page and "Override on" not in page
     row = db.one("SELECT * FROM shows WHERE id='riptide'")
+    archive = archiver.paths.archive
     other = next(o for o in row["art_options"] if o != row["art"])   # the picture further down its page
     assert web.post("/admin/shows/riptide/art", data={"choice": other}).status_code == 200
-    archiver.reparse()                                                # pages read again: the pick stays
     row = db.one("SELECT * FROM shows WHERE id='riptide'")
-    assert (row["art"], row["art_source"]) == (other, "picked")
-    assert web.post("/admin/shows/riptide/art", data={"choice": "shows/../../etc/passwd"}).status_code == 400
-    # Jellyfin: the picture fitted whole into a 2:3 poster; the JRWI logo when a show has none
+    # The picked picture is copied into the show's own override folder, so clearing a post can't take it away
+    assert row["art_source"] == "override" and row["art"].startswith("shows/riptide/override/")
+    assert (archive / row["art"]).read_bytes() == (archive / other).read_bytes()
+    picked = row["art"]
+    archiver.reparse()                                                # pages read again: the override stays
     from jrwi import organize
+    organize.drop_shared_show_art(db)
+    row = db.one("SELECT * FROM shows WHERE id='riptide'")
+    assert (row["art"], row["art_source"]) == (picked, "override")
+    assert client.get("/api/shows/riptide").json()["image"] == "/files/" + picked
+    page = web.get("/admin/shows/riptide").text
+    assert "Override on" in page and "Turn off the override" in page
+    # Upload your own picture: a real picture is kept, anything else is turned away
+    png = TMP / "own.png"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=200x300", "-frames:v", "1",
+                    str(png)], check=True)
+    r = web.post("/admin/shows/riptide/art/upload", files={"picture": ("own.png", png.read_bytes(), "image/png")})
+    assert r.status_code == 200 and "Override on" in r.text
+    row = db.one("SELECT * FROM shows WHERE id='riptide'")
+    uploaded = row["art"]
+    assert uploaded.endswith(".png") and uploaded.startswith("shows/riptide/override/") and uploaded != picked
+    r = web.post("/admin/shows/riptide/art/upload", files={"picture": ("notes.png", b"not a picture", "image/png")})
+    assert "isn&#39;t a JPEG, PNG, GIF or WebP" in r.text
+    assert db.one("SELECT art FROM shows WHERE id='riptide'")["art"] == uploaded
+    # Pictures from the show's posts, and any picture in the archive by its address
+    page = web.get("/admin/shows/riptide").text
+    assert "From the show's posts" in page and "Your pictures" in page
+    thumb = organize.post_pictures(db, archive, "riptide")[0]["rel"]
+    assert thumb.startswith("posts/")
+    web.post("/admin/shows/riptide/art", data={"choice": f"http://box:8090/files/{thumb}"})
+    row = db.one("SELECT * FROM shows WHERE id='riptide'")
+    assert row["art_source"] == "override" and (archive / row["art"]).read_bytes() == (archive / thumb).read_bytes()
+    for bad in ("shows/../../etc/passwd", "/files/../../../etc/passwd", "pages/home.html.gz", "nothing/here.jpg"):
+        r = web.post("/admin/shows/riptide/art", data={"choice": bad})
+        assert r.status_code == 200 and 'class="error"' in r.text, bad
+        assert db.one("SELECT art FROM shows WHERE id='riptide'")["art"] == row["art"], bad
+    # Saved pictures not in use can be deleted; the one in use can't
+    assert 'class="error"' in web.post("/admin/shows/riptide/art/delete", data={"file": row["art"]}).text
+    assert 'class="error"' in web.post("/admin/shows/riptide/art/delete", data={"file": other}).text  # not a saved one
+    web.post("/admin/shows/riptide/art/delete", data={"file": uploaded})
+    assert not (archive / uploaded).exists() and (archive / row["art"]).exists()
+    web.post("/admin/shows/riptide/art", data={"choice": "/files/" + picked})   # back to the page picture's copy
+    # Jellyfin: the picture fitted whole into a 2:3 poster; the JRWI logo when a show has none
     folder = Path(os.environ["JRWI_MEDIA"]) / "Riptide"
     made = json.loads((folder / ".jrwi-art.json").read_text())
-    assert made["poster.jpg"] == "fit:" + other and made["fanart.jpg"] == "own:" + other
+    assert made["poster.jpg"] == "fit:" + picked and made["fanart.jpg"] == "own:" + picked
     web.post("/admin/shows/riptide/art", data={"choice": "logo"})
+    assert db.one("SELECT art, art_source FROM shows WHERE id='riptide'") == {"art": None, "art_source": "override"}
     made = json.loads((folder / ".jrwi-art.json").read_text())
     assert made["poster.jpg"] == "fit:" + db.setting("site_logo") and made["fanart.jpg"].startswith("own:posts/")
     size = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0",
                            str(folder / "poster.jpg")], capture_output=True, text=True).stdout.strip()
     assert size == "1000,1500"
-    web.post("/admin/shows/riptide/art", data={"choice": "auto"})   # back to the page's own share picture
+    archiver.reparse()                                                # the logo override stays too
+    assert db.one("SELECT art, art_source FROM shows WHERE id='riptide'") == {"art": None, "art_source": "override"}
+    r = web.post("/admin/shows/riptide/art", data={"choice": "auto"})   # override off: the page's own share picture
+    assert "Override off" in r.text
     row = db.one("SELECT * FROM shows WHERE id='riptide'")
     assert (row["art"], row["art_source"]) == (row["poster"], "page")
     organize.refresh_jellyfin(db, archiver.paths)

@@ -891,13 +891,13 @@ class Archiver:
             if desc and desc.get("content"):
                 fields["description"] = P.norm_space(desc["content"])
             # The page's own share picture is the show's picture: the creators set it for this page. Once a show has
-            # a picture it only changes for another such picture, and never when the user picked one.
+            # a picture it only changes for another such picture, and never while the user's override is on.
             if poster_url and asset_name(poster_url) not in shared:
                 local = self.save_asset(poster_url, self.paths.archive / "shows" / show["id"])
                 if local:
                     fields["poster"] = local
                     options.append(local)
-                    if current.get("art_source") != "picked":
+                    if current.get("art_source") != "override":
                         fields.update(art=local, art_source="page")
             # Other pictures on the page are only offered on the admin page, to pick from
             imgs = [i for i in P.page_images(main, final) if asset_name(i) not in shared]

@@ -452,3 +452,7 @@ html.lb-open, html.lb-open body { overflow: hidden; }
 .show-pick img { width: 180px; height: 120px; object-fit: contain; }
 .show-pick.on { border-color: var(--accent); }
 .error { color: var(--bad); }
+.ok { color: var(--ok); }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+.show-pick span { font-size: .8rem; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.show-pick-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }

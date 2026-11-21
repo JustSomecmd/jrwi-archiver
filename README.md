@@ -41,6 +41,7 @@ Mount the video folder into Jellyfin, for example `/srv/jrwi/videos:/media/jrwi:
 - **Episodes:** each show gets a folder, such as `Riptide/Season 01/Riptide - S01E136 - Through the Fire [jrwi-286486].mp4`.
 - **Specials:** aftershows, extras and unnumbered videos go in `Season 00`.
 - **Metadata:** every episode has a `.nfo` with the title, date and post text, plus a thumbnail. Every show has a poster.
+- **Show pictures:** a show's picture is its page's own share picture on the site, or the JRWI logo when it has none. To set your own, open **Admin > Shows**, pick the show, and upload a picture or pick one from the show's page, its posts or anywhere in the archive. That override is used on Home, in the API and for the Jellyfin poster, and nothing changes it until you press **Turn off the override**.
 - **Matching:** the `[jrwi-<post id>]` tag in each file name is how apps find the post that belongs to a Jellyfin episode.
 
 ### Tubedroid

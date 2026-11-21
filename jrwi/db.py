@@ -104,6 +104,8 @@ class Db:
                         # 0.6.0: a show's picture is kept as it is until another explicit one turns up
                         self.conn.execute("UPDATE shows SET art = COALESCE(banner, poster), art_source = 'kept' "
                                           "WHERE COALESCE(banner, poster) IS NOT NULL")
+        # 0.8.0: a picture picked on the admin page became an override, which stays until it's turned off
+        self.conn.execute("UPDATE shows SET art_source = 'override' WHERE art_source = 'picked'")
 
     # ------------------------------------------------------------------ basics
 

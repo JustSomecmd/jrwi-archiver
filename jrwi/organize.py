@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import re
 import shutil
 from datetime import date
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from xml.sax.saxutils import escape
 
 from .config import Paths
@@ -120,13 +122,13 @@ def shared_show_art(db: Db) -> set[str]:
 
 
 def drop_shared_show_art(db: Db) -> int:
-    """Forget show pictures that are really the site's own picture. Returns how many were dropped. A picture the
-    user picked stays."""
+    """Forget show pictures that are really the site's own picture. Returns how many were dropped. An override
+    stays."""
     shared = shared_show_art(db)
     dropped = 0
     for s in db.q("SELECT id, poster, banner, art, art_source FROM shows"):
         fields = {k: None for k in ("poster", "banner") if s[k] and Path(s[k]).name in shared}
-        if s["art"] and s["art_source"] != "picked" and Path(s["art"]).name in shared:
+        if s["art"] and s["art_source"] != "override" and Path(s["art"]).name in shared:
             fields.update(art=None, art_source=None)
         if fields:
             db.update("shows", "id", s["id"], fields)
@@ -134,13 +136,19 @@ def drop_shared_show_art(db: Db) -> int:
     return dropped
 
 
-ART_SOURCES = {"page": "the show's own picture on its page on the site", "picked": "picked by you",
+ART_SOURCES = {"page": "the show's own picture on its page on the site", "override": "your override",
                "kept": "kept from before 0.6.0, when pictures further down a show's page were used too"}
+
+# An override is a picture the user set for a show. Nothing changes it (re-reading pages, checks, the shared-picture
+# cleanup) until the user turns it off. Its file is kept in the show's own folder, so clearing a post can't take it.
+OVERRIDE_FOLDER = "override"
+MAX_PICTURE = 25 * 1024 * 1024
+PICTURE_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"), (b"GIF87a", ".gif"), (b"GIF89a", ".gif"))
 
 
 def show_art(db: Db, show: dict) -> str | None:
-    """A show's picture: its page's own share picture, or the one picked on the admin page. None when it has none,
-    and the JRWI logo is shown instead."""
+    """A show's picture: its override, or its page's own share picture. None when it has neither, and the JRWI logo
+    is shown instead."""
     return show.get("art") or None
 
 
@@ -148,9 +156,59 @@ def site_logo(db: Db) -> str | None:
     return db.setting("site_logo") or None
 
 
-def choose_show_art(db: Db, show_id: str, choice: str) -> None:
-    """The admin page's choice: "auto" (the page's own share picture, when it has one), "logo", or one of the
-    pictures on the show's page. A picked picture (or the logo) stays until another is picked."""
+def picture_ext(head: bytes) -> str | None:
+    """A picture's file type from its first bytes: JPEG, PNG, GIF or WebP, or None for anything else."""
+    for magic, ext in PICTURE_TYPES:
+        if head.startswith(magic):
+            return ext
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+def override_folder(archive: Path, show_id: str) -> Path:
+    return archive / "shows" / show_id / OVERRIDE_FOLDER
+
+
+def archive_file(archive: Path, ref: str) -> Path | None:
+    """A file in the archive from what the admin page sends: its path, its /files/ address, or a full link to it.
+    None for anything outside the archive."""
+    path = unquote(urlparse(ref.strip()).path if "://" in ref else ref.strip())
+    path = path.removeprefix("/").removeprefix("files/")
+    if not path:
+        return None
+    root = archive.resolve()
+    f = (root / path).resolve()
+    try:
+        f.relative_to(root)
+    except ValueError:
+        return None
+    return f if f.is_file() else None
+
+
+def set_art_override(db: Db, archive: Path, show_id: str, data: bytes) -> str:
+    """Make a picture the show's override. It's saved in the show's own override folder, named by its content, so the
+    same picture set twice is one file."""
+    if not db.one("SELECT id FROM shows WHERE id=?", (show_id,)):
+        raise ValueError("no such show")
+    if len(data) > MAX_PICTURE:
+        raise ValueError(f"that picture is over {MAX_PICTURE // 1024 // 1024} MB")
+    ext = picture_ext(data[:16])
+    if not ext:
+        raise ValueError("that isn't a JPEG, PNG, GIF or WebP picture")
+    folder = override_folder(archive, show_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    f = folder / f"{hashlib.sha1(data).hexdigest()[:16]}{ext}"
+    if not f.exists():
+        f.write_bytes(data)
+    rel = f.relative_to(archive).as_posix()
+    db.update("shows", "id", show_id, {"art": rel, "art_source": "override"})
+    return rel
+
+
+def choose_show_art(db: Db, archive: Path, show_id: str, choice: str) -> None:
+    """The admin page's choice: "auto" turns the override off (the page's own share picture when it has one, else the
+    JRWI logo); "logo" overrides with the JRWI logo; anything else is a picture in the archive to override with."""
     show = db.one("SELECT * FROM shows WHERE id=?", (show_id,))
     if not show:
         raise ValueError("no such show")
@@ -158,20 +216,57 @@ def choose_show_art(db: Db, show_id: str, choice: str) -> None:
         shared = shared_show_art(db)
         own = show["poster"] if show["poster"] and Path(show["poster"]).name not in shared else None
         db.update("shows", "id", show_id, {"art": own, "art_source": "page" if own else None})
-    elif choice == "logo":
-        db.update("shows", "id", show_id, {"art": None, "art_source": "picked"})
-    elif choice in art_choices(show):
-        db.update("shows", "id", show_id, {"art": choice, "art_source": "picked"})
-    else:
-        raise ValueError("that picture isn't one of the show's")
+        return
+    if choice == "logo":
+        db.update("shows", "id", show_id, {"art": None, "art_source": "override"})
+        return
+    f = archive_file(archive, choice)
+    if not f:
+        raise ValueError("there's no such picture in the archive")
+    if f.stat().st_size > MAX_PICTURE:
+        raise ValueError(f"that picture is over {MAX_PICTURE // 1024 // 1024} MB")
+    set_art_override(db, archive, show_id, f.read_bytes())
+
+
+def saved_overrides(archive: Path, show: dict) -> list[str]:
+    """Pictures in a show's override folder, the current one first, then newest first."""
+    folder = override_folder(archive, show["id"])
+    files = sorted((f for f in folder.glob("*") if f.is_file()), key=lambda f: -f.stat().st_mtime) if folder.is_dir() else []
+    rels = [f.relative_to(archive).as_posix() for f in files]
+    return sorted(rels, key=lambda r: r != show.get("art"))
+
+
+def delete_saved_override(db: Db, archive: Path, show_id: str, ref: str) -> None:
+    """Delete a picture from a show's override folder. The one in use stays."""
+    show = db.one("SELECT art FROM shows WHERE id=?", (show_id,))
+    f = archive_file(archive, ref)
+    if not show or not f or f.parent != override_folder(archive, show_id).resolve():
+        raise ValueError("that isn't one of the show's saved pictures")
+    if f.relative_to(archive.resolve()).as_posix() == show["art"]:
+        raise ValueError("that picture is in use; pick another or turn the override off first")
+    f.unlink()
 
 
 def art_choices(show: dict) -> list[str]:
-    """Pictures found on a show's page, plus its current one."""
+    """Pictures found on a show's page."""
     out = []
-    for rel in [show.get("art"), *(show.get("art_options") or [])]:
+    for rel in show.get("art_options") or []:
         if rel and rel not in out:
             out.append(rel)
+    return out
+
+
+def post_pictures(db: Db, archive: Path, show_id: str) -> list[dict]:
+    """Thumbnails and pictures from a show's posts, newest post first, without repeats or missing files."""
+    rows = db.q("SELECT id, title, thumbnail, images FROM posts WHERE status IN ('complete', 'partial') AND "
+                "(show_id=? OR EXISTS (SELECT 1 FROM json_each(posts.places) WHERE substr(value, 1, ?) = ?)) "
+                "ORDER BY published DESC, id DESC", (show_id, len(show_id) + 1, show_id + ":"))
+    out, seen = [], set()
+    for r in rows:
+        for rel in [r["thumbnail"], *(i.get("url") for i in r["images"] or [])]:
+            if rel and rel not in seen and (archive / rel).is_file():
+                seen.add(rel)
+                out.append({"rel": rel, "post_id": r["id"], "title": r["title"]})
     return out
 
 

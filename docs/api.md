@@ -28,7 +28,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.7.1"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.8.0"}`. Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `GET /api/shows` | Shows that have items, in the site's menu order, then shows from the site's tags or added on the admin page, `other` last. `?include_empty=true` lists all of them. |
