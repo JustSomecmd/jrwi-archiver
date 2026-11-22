@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS posts (
 );
 CREATE INDEX IF NOT EXISTS posts_show ON posts(show_id, tab);
 CREATE INDEX IF NOT EXISTS posts_published ON posts(published);
+-- The other versions of a post are looked up for every post a list shows
+CREATE INDEX IF NOT EXISTS posts_pair ON posts(pair_id);
 
 CREATE TABLE IF NOT EXISTS comments (
     id TEXT PRIMARY KEY, post_id INTEGER, parent_id TEXT,
