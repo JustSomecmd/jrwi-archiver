@@ -538,7 +538,8 @@ a.chip:hover, a.tag:hover { color: var(--accent); text-decoration: none; }
 .status-icon .icon { width: 22px; height: 22px; }
 .status-icon.on { color: var(--accent); }
 .status-icon.on .icon { animation: spin 2.4s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+/* The refresh arrows point counter-clockwise, so it turns that way */
+@keyframes spin { to { transform: rotate(-360deg); } }
 .status-text { min-width: 0; flex: 1; }
 .status-text [data-phase] { font-size: 1.05rem; }
 .status-text [data-detail] { overflow-wrap: anywhere; margin-top: .15rem; }
