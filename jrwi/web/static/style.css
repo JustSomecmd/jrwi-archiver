@@ -523,3 +523,45 @@ pre.insp-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85re
 .toolbar .tagpick { width: auto; max-width: 15rem; flex: none; margin: 0; }
 a.chip:hover, a.tag:hover { color: var(--accent); text-decoration: none; }
 @media (max-width: 600px) { .toolbar .tagpick { max-width: none; flex: 1 1 100%; } }
+
+/* Home's side column: never taller than the window; the list of shows scrolls on its own */
+.aside { max-height: calc(100vh - 130px); }
+.aside > * { flex: none; }
+.aside .aside-shows { display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto; }
+.aside .aside-shows .links { overflow-y: auto; min-height: 0; overscroll-behavior: contain; padding-right: .5rem;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+
+/* Admin: what's happening now and when the next check is */
+.status-line { display: flex; gap: .9rem; align-items: flex-start; }
+.status-icon { flex: none; width: 2.4rem; height: 2.4rem; border-radius: 50%; display: grid; place-items: center;
+  background: var(--card-2); color: var(--muted); }
+.status-icon .icon { width: 22px; height: 22px; }
+.status-icon.on { color: var(--accent); }
+.status-icon.on .icon { animation: spin 2.4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.status-text { min-width: 0; flex: 1; }
+.status-text [data-phase] { font-size: 1.05rem; }
+.status-text [data-detail] { overflow-wrap: anywhere; margin-top: .15rem; }
+.status-text [data-schedule] { margin-top: .2rem; }
+
+/* Admin: each button an icon, its name, and a line on what it does (like TubeArchivist's) */
+.actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .8rem; margin: 0 0 .8rem; }
+.actions form { display: contents; }
+button.action, a.action { display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  gap: .35rem; text-align: center; width: 100%; height: 100%; padding: 1.1rem .9rem 1rem; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--radius); color: var(--text); font: inherit; cursor: pointer;
+  text-decoration: none; }
+button.action:hover, a.action:hover { background: var(--card-2); border-color: var(--accent); color: var(--text);
+  text-decoration: none; }
+.action .icon { width: 34px; height: 34px; color: var(--accent); stroke-width: 1.7; }
+.action b { font-size: 1rem; font-weight: 700; }
+.action > span { color: var(--muted); font-size: .82rem; line-height: 1.35; font-weight: 400; }
+button.action.stop .icon { color: var(--bad); }
+button.action.stop:hover { border-color: var(--bad); }
+button.action:disabled { opacity: .45; cursor: not-allowed; }
+button.action:disabled:hover { background: var(--card); border-color: var(--line); }
+@media (max-width: 600px) {
+  .actions { grid-template-columns: repeat(2, 1fr); gap: .6rem; }
+  button.action, a.action { padding: .9rem .6rem .8rem; }
+  .action .icon { width: 28px; height: 28px; }
+}

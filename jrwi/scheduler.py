@@ -24,6 +24,8 @@ class Scheduler:
         self.full_requested = False
         self.reparse_requested = False
         self.next_check: datetime | None = None
+        self.planned_with: timedelta | None = None   # the interval next_check was planned with
+        self.last_start: datetime | None = None
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
 
     def start(self) -> None:
@@ -73,7 +75,10 @@ class Scheduler:
         return timedelta(hours=hours) if hours > 0 else None
 
     def _plan_next(self, after: datetime) -> None:
+        """The next check comes one interval (give or take 10%) after `after`: the start of the last check, so the
+        time shown stays right while a check runs, instead of being the time that check was planned for."""
         interval = self._interval()
+        self.planned_with = interval
         if interval is None:
             self.next_check = None
             return
@@ -82,23 +87,28 @@ class Scheduler:
 
     def _loop(self) -> None:
         self._reparse_after_update()
-        last = self.db.one("SELECT finished FROM runs WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1")
+        last = self.db.one("SELECT started FROM runs WHERE started IS NOT NULL ORDER BY id DESC LIMIT 1")
         start = datetime.now(timezone.utc)
-        if last and last["finished"]:
-            self._plan_next(datetime.fromisoformat(last["finished"]))
+        if last and last["started"]:
+            self.last_start = datetime.fromisoformat(last["started"])
+            self._plan_next(self.last_start)
             if self.next_check and self.next_check < start + FIRST_CHECK_DELAY:
                 self.next_check = start + FIRST_CHECK_DELAY
         else:
             self.next_check = start + FIRST_CHECK_DELAY if self._interval() else None
+            self.planned_with = self._interval()
         while True:
             timeout = None
             if self.next_check:
                 timeout = max(0.0, (self.next_check - datetime.now(timezone.utc)).total_seconds())
             woke = self.wake.wait(timeout=min(timeout, 60) if timeout is not None else 60)
             if not woke and (self.next_check is None or datetime.now(timezone.utc) < self.next_check):
-                # Pick up interval changes made on the admin page
-                if self.next_check is None and self._interval():
-                    self._plan_next(datetime.now(timezone.utc))
+                # Pick up a new interval set in Settings
+                if self._interval() != self.planned_with:
+                    now = datetime.now(timezone.utc)
+                    self._plan_next(self.last_start or now)
+                    if self.next_check and self.next_check < now + FIRST_CHECK_DELAY:
+                        self.next_check = now + FIRST_CHECK_DELAY
                 continue
             manual = woke or self.wake.is_set()
             self.wake.clear()
@@ -111,12 +121,17 @@ class Scheduler:
                 self._plan_next(datetime.now(timezone.utc))
                 continue
             full, self.full_requested = self.full_requested, False
+            self.last_start = datetime.now(timezone.utc)
+            self._plan_next(self.last_start)
             try:
                 result = self.archiver.run_check(full=full)
                 log.info("check finished: %s", result)
             except Exception:
                 log.exception("check crashed")
-            self._plan_next(datetime.now(timezone.utc))
+            # A check that ran past the next one's time: the next comes a whole interval after this one ended
+            now = datetime.now(timezone.utc)
+            if self.next_check and self.next_check < now + timedelta(minutes=10):
+                self._plan_next(now)
 
     def disk(self) -> dict:
         try:

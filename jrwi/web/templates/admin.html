@@ -3,9 +3,6 @@
 {% block title %}Admin · JRWI archive{% endblock %}
 {% block content %}
 <h1>Admin</h1>
-<p class="admin-links"><a class="btn ghost" href="/admin/settings">Settings</a>
-  <a class="btn ghost" href="/admin/shows">Shows</a>
-  <a class="btn ghost" href="/admin/problems"><span>Problems (<span data-stat="problems">{{ st.counts.problems }}</span>)</span></a></p>
 {% if not configured %}
   <div class="notice">Add your jrwishow.com email and password in <a href="/admin/settings">Settings</a> before the first check.</div>
 {% endif %}
@@ -13,26 +10,42 @@
   <div class="notice" data-last-problem>The last check ended with <b>{{ st.last_result.replace('_', ' ') }}</b>: {{ st.message }}</div>
 {% endif %}
 
-<div class="panel" data-live-status data-was-running="{{ '1' if st.running else '0' }}">
-  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:center">
-    <div>
-      <b data-phase>{{ st.phase if st.running else 'Idle' }}</b>
+<div class="panel" data-live-status data-was-running="{{ '1' if st.running else '0' }}" data-every="{{ every or 0 }}">
+  <div class="status-line">
+    <span class="status-icon {% if st.running %}on{% endif %}">{{ icon('refresh' if st.running else 'clock') }}</span>
+    <div class="status-text">
+      <b data-phase>{% if st.running %}{{ st.phase }}{% elif st.next_check %}Next check: {{ st.next_check[:16].replace('T', ' ') }} UTC{% else %}No checks scheduled{% endif %}</b>
       <span class="muted small" data-count></span>
-      <div class="muted small" data-detail>{{ st.detail if st.running else '' }}</div>
-    </div>
-    <div>
-      {% if st.running %}
-        <form class="inline" method="post" action="/admin/stop"><button class="danger">Stop</button></form>
-      {% else %}
-        <form class="inline" method="post" action="/admin/check"><button title="Look for new posts now, as the scheduled checks do">Check now</button></form>
-        <form class="inline" method="post" action="/admin/check"><input type="hidden" name="full" value="1">
-          <button class="ghost" title="Read the whole members feed, back to the first post">Full check</button></form>
-      {% endif %}
+      <div class="small" data-detail>{{ st.detail if st.running else '' }}</div>
+      <div class="muted small" data-schedule>{% if not st.next_check and not st.running %}Checks only run when you press Check now. Set a schedule in Settings.{% endif %}</div>
     </div>
   </div>
   <div class="bar{% if st.running and (not st.progress.total or (st.step == 'posts' and st.progress.current is none)) %} busy{% endif %}" {% if not st.running %}hidden{% endif %}><i data-bar style="width:0"></i></div>
-  <details class="check-help">
-    <summary class="muted small">What do Check now and Full check do?</summary>
+</div>
+
+<div class="actions">
+  {% if st.running %}
+  <form method="post" action="/admin/stop"><button class="action stop">{{ icon('stop') }}<b>Stop</b>
+    <span>Stop the check that's running. The next check carries on from there.</span></button></form>
+  {% else %}
+  <form method="post" action="/admin/check"><button class="action">{{ icon('refresh') }}<b>Check now</b>
+    <span>Look for new posts and save them</span></button></form>
+  <form method="post" action="/admin/check"><input type="hidden" name="full" value="1"><button class="action">{{ icon('fullscan') }}<b>Full check</b>
+    <span>Read the whole feed again, back to the first post</span></button></form>
+  {% endif %}
+  <form method="post" action="/admin/reparse"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('reread') }}<b>Re-read saved pages</b>
+    <span>Apply this version's fixes to what's saved, without downloading</span></button></form>
+  <form method="post" action="/admin/refetch-all" onsubmit="return confirm('Fetch every archived post\'s page and comments again? Files are kept.')">
+    <button class="action" {% if st.running %}disabled{% endif %}>{{ icon('download') }}<b>Fetch all posts again</b>
+    <span>Download every post's page and comments again; files are kept</span></button></form>
+  <a class="action" href="/admin/settings">{{ icon('sliders') }}<b>Settings</b><span>Login, schedule, downloads and TubeArchivist</span></a>
+  <a class="action" href="/admin/shows">{{ icon('grid') }}<b>Shows</b><span>Which shows there are, their pictures and tags</span></a>
+  <a class="action" href="/admin/problems">{{ icon('alert') }}<b>Problems (<span data-stat="problems">{{ st.counts.problems }}</span>)</b>
+    <span>Posts that didn't save completely</span></a>
+  <a class="action" href="/admin/files">{{ icon('file') }}<b>Files</b><span>Which types of file the archive holds</span></a>
+</div>
+<details class="check-help">
+  <summary class="muted small">What do these do?</summary>
     <div class="small">
       <p><b>Check now</b> runs the same check as the schedule{% if every %} (every {{ every | float | round(1) | string | replace('.0', '') }} hours){% endif %}:</p>
       <ol>
@@ -51,9 +64,21 @@
         feed shows about older posts (titles, tags, likes, comment counts, whether you can see them), finds anything a
         normal check skipped, and notes posts the site has taken down. Nothing already saved is downloaded again.
         It takes longer, mostly for reading the feed, so it's only worth running now and then.</p>
-    </div>
-  </details>
-</div>
+    <p><b>Re-read saved pages:</b> every post page, comment page, feed card and site page is saved as it was downloaded.
+      This reads them all again with the current rules, so a fix in an update also corrects what was archived before it:
+      post text, dates, tags, comments, profile pictures and badges. It runs by itself after an update that changes
+      how pages are read. Nothing big is downloaded again; if the re-read finds files an older version missed,
+      the next check fetches just those.</p>
+  {% if last_reparse %}<p class="small">Last re-read {{ (last_reparse.finished or '')[:16].replace('T', ' ') }} UTC:
+    {{ last_reparse.posts }} posts, {{ last_reparse.pages }} site pages
+    {%- if last_reparse.to_fetch %}, {{ last_reparse.to_fetch }} posts with files to fetch on the next check{% endif %}
+    {%- if last_reparse.removed %}, {{ last_reparse.removed }} unused pictures removed{% endif %}
+    {%- if last_reparse.stopped %} (stopped before the end){% endif %}.</p>{% endif %}
+    <p><b>Fetch all posts again</b> fetches every archived post's page and all its comments from the site again, as a
+      check. Downloaded video, audio and other files are kept. It takes about as long as reading every post once, so
+      try Re-read saved pages first; a single post can be fetched again from Admin at the bottom of its page.</p>
+  </div>
+</details>
 
 <div class="stats">
   <div class="stat"><b data-stat="archived">{{ st.counts.archived }}</b><span class="muted small">posts archived</span></div>
@@ -61,7 +86,6 @@
   <div class="stat"><b data-stat="locked">{{ st.counts.locked }}</b><span class="muted small">above your tier</span></div>
   <div class="stat"><b data-stat="archive_bytes">{{ human_size(st.disk.archive_bytes) }}</b><span class="muted small">archive size</span></div>
   <div class="stat"><b data-stat="free_bytes">{{ human_size(st.disk.free_bytes) }}</b><span class="muted small">free space</span></div>
-  <div class="stat"><b>{{ (st.next_check or 'manual only')[:16].replace('T', ' ') }}</b><span class="muted small">next check (UTC)</span></div>
 </div>
 
 <div class="cols" style="margin-top:1rem">
@@ -88,11 +112,6 @@
 </div>
 
 <div class="panel">
-  <h3>Files</h3>
-  <p class="muted small">Which types of file the archived posts carry, and which the file inspector can look inside.
-    <a href="/admin/files">See the files by type</a>.</p>
-</div>
-<div class="panel">
   <h3>Videos now on YouTube</h3>
   {% set c = handovers.counts %}
   {% if not handovers.rows %}
@@ -110,28 +129,5 @@
     {% endfor %}
   </table>
   {% endif %}
-</div>
-<div class="panel">
-  <h3>Re-read saved pages</h3>
-  <p class="muted small">Every post page, comment page, feed card and site page is saved as it was downloaded.
-    This reads them all again with the current rules, so a fix in an update also corrects what was archived before it:
-    post text, dates, tags, comments, profile pictures and badges. It runs by itself after an update that changes
-    how pages are read. Nothing big is downloaded again; if the re-read finds files an older version missed,
-    the next check fetches just those.</p>
-  {% if last_reparse %}<p class="small">Last re-read {{ (last_reparse.finished or '')[:16].replace('T', ' ') }} UTC:
-    {{ last_reparse.posts }} posts, {{ last_reparse.pages }} site pages
-    {%- if last_reparse.to_fetch %}, {{ last_reparse.to_fetch }} posts with files to fetch on the next check{% endif %}
-    {%- if last_reparse.removed %}, {{ last_reparse.removed }} unused pictures removed{% endif %}
-    {%- if last_reparse.stopped %} (stopped before the end){% endif %}.</p>{% endif %}
-  <form method="post" action="/admin/reparse"><button class="ghost" {% if st.running %}disabled{% endif %}>Re-read saved pages</button></form>
-</div>
-<div class="panel">
-  <h3>Download posts again</h3>
-  <p class="muted small">Fetches every archived post's page and all its comments from the site again, as a check. Downloaded
-    video, audio and other files are kept. This takes about as long as reading every post once, so try
-    <b>Re-read saved pages</b> first; a single post can be fetched again from <b>Admin</b> at the bottom of its page.</p>
-  <form method="post" action="/admin/refetch-all"
-        onsubmit="return confirm('Fetch every archived post\'s page and comments again? Files are kept.')">
-    <button class="ghost" {% if st.running %}disabled{% endif %}>Fetch all posts again</button></form>
 </div>
 {% endblock %}

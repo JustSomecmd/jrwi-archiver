@@ -754,7 +754,15 @@ def test_check_status_says_what_it_does(app, client):
     web = TestClient(app)
     web.post("/login", data={"password": "test-password"})
     page = web.get("/admin").text
-    assert "What do Check now and Full check do?" in page and "back to the very first post" in page
+    assert "What do these do?" in page and "back to the very first post" in page
+    # Each button: an icon, its name and what it does; the next check comes from the status, kept current by the page
+    for name, what in (("Check now", "Look for new posts and save them"),
+                       ("Full check", "Read the whole feed again, back to the first post"),
+                       ("Re-read saved pages", "without downloading"), ("Settings", "Login, schedule"),
+                       ("Shows", "their pictures and tags"), ("Files", "types of file")):
+        assert re.search(r'class="action[^"]*"[^>]*>\s*<svg[^>]*>.*?</svg><b>' + re.escape(name) + r'</b>\s*<span>[^<]*'
+                         + re.escape(what), page, re.S), name
+    assert "data-schedule" in page and "next check (UTC)" not in page
 
 
 def test_feed_by_tag(app):

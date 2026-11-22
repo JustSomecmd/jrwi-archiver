@@ -73,6 +73,28 @@ def test_scheduled_check_waits_for_a_login(archiver, monkeypatch):
     assert ran == [False]
 
 
+def test_next_check_is_known_while_a_check_runs(archiver, monkeypatch):
+    """The next check is planned when a check starts, so while one runs, next_check is the next one (an interval
+    ahead), not the time this one was planned for."""
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    from jrwi import scheduler as sched
+
+    archiver.db.set_setting("check_interval_hours", 4)
+    archiver.db.set_setting("site_email", "fan@example.com")
+    archiver.db.set_setting("site_password", "hunter2")
+    s = sched.Scheduler(archiver, archiver.db)
+    during = []
+    monkeypatch.setattr(archiver, "run_check", lambda full=False: during.append(s.next_check) or {"result": "ok"})
+    monkeypatch.setattr(sched, "FIRST_CHECK_DELAY", timedelta(seconds=0))
+    s.start()
+    time.sleep(1.5)
+    now = datetime.now(timezone.utc)
+    assert len(during) == 1                                   # the first check ran
+    assert during[0] > now + timedelta(hours=3.5)             # and knew the next one while it ran
+    assert s.next_check == during[0]                          # which stays planned after it ends
+
 def test_reparse_after_an_update(archiver, monkeypatch):
     from jrwi import scheduler as sched
     from jrwi.site.parse import PARSER_VERSION

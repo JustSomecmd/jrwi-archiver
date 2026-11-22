@@ -63,7 +63,7 @@
   <aside class="aside">
     <div class="avatar-circle" {% if logo %}style="background-image:url('{{ logo }}')"{% endif %}></div>
     {% if shows_nav %}
-    <div>
+    <div class="aside-shows">
       <div class="boxhead">Shows</div>
       <div class="links">{% for s in shows_nav %}<a href="/shows/{{ s.id }}">{{ s.name }}</a>{% endfor %}</div>
     </div>

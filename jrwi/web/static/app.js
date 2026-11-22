@@ -56,14 +56,55 @@ const humanSize = (n) => {
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return i === 0 ? `${Math.round(n)} B` : `${n.toFixed(1)} ${units[i]}`;
 };
+// A time in the browser's own time zone: "today at 16:29", "tomorrow at 02:15", "Sun 23 Nov at 16:29"
+const whenAt = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(d) - day(new Date())) / 86400000);
+  if (days === 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  if (days === -1) return `yesterday at ${time}`;
+  return `${d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })} at ${time}`;
+};
+// How long until then: "in 2 h 5 min", "in 4 min", "due now"
+const whenIn = (iso) => {
+  const m = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+  if (m <= 0) return "due now";
+  if (m < 60) return `in ${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `in ${h} h ${r} min` : `in ${h} h`;
+};
+const RESULT_WORDS = { ok: "ok", login_failed: "the login failed", blocked: "blocked by the site", error: "an error",
+                       stopped: "stopped" };
 const live = document.querySelector("[data-live-status]");
 if (live) {
+  const every = Number(live.dataset.every || 0);
+  const everyText = every ? `checks every ${Number.isInteger(every) ? every : every.toFixed(1)} hour${every === 1 ? "" : "s"}` : "";
   const tick = async () => {
     try {
       const r = await fetch("/api/status", { cache: "no-store" });
       if (!r.ok) return;
       const s = await r.json();
-      live.querySelector("[data-phase]").textContent = s.running ? s.phase : "Idle";
+      // What's happening now, and when the next check is: always the next one, also while a check runs
+      const last = s.last_check_finished
+        ? `last check finished ${whenAt(s.last_check_finished)}${s.last_result ? ` (${RESULT_WORDS[s.last_result] || s.last_result})` : ""}`
+        : "";
+      const phase = live.querySelector("[data-phase]");
+      const sched = live.querySelector("[data-schedule]");
+      if (s.running) {
+        phase.textContent = s.phase;
+        sched.textContent = [s.last_check_started ? `Started ${whenAt(s.last_check_started)}` : "",
+                             s.next_check ? `next check ${whenAt(s.next_check)}` : ""].filter(Boolean).join(" · ");
+      } else if (s.next_check) {
+        phase.textContent = `Next check ${whenAt(s.next_check)}`;
+        sched.textContent = [whenIn(s.next_check), everyText, last].filter(Boolean).join(" · ");
+      } else {
+        phase.textContent = "No checks scheduled";
+        sched.textContent = ["Checks only run when you press Check now. Set a schedule in Settings.", last]
+          .filter(Boolean).join(" · ");
+      }
       live.querySelector("[data-detail]").textContent = s.running ? s.detail || "" : "";
       // While archiving, the bar follows the post being archived (its file downloading now), and the count says
       // how many posts are done. Other phases, such as re-reading saved pages, show how far the whole job is.
@@ -92,7 +133,8 @@ if (live) {
       set("free_bytes", humanSize(s.disk.free_bytes));
       // The last check's problem is old news once a new check is running
       if (s.running) document.querySelectorAll("[data-last-problem]").forEach((el) => { el.hidden = true; });
-      if (live.dataset.wasRunning === "1" && !s.running) location.reload();
+      // A check started or ended: reload, so the buttons (Check now or Stop), counts and tables are current
+      if ((live.dataset.wasRunning === "1") !== s.running) location.reload();
       live.dataset.wasRunning = s.running ? "1" : "0";
     } catch (e) {}
   };
