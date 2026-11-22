@@ -325,7 +325,11 @@ def test_youtube_lookup_and_progress_in_lists(client):
     assert client.get("/api/items/298").json()["progress"]["position"] == 9.0   # the item's main post's timeline
     latest = {i["id"]: i for i in client.get("/api/latest").json()}
     assert latest[300]["progress"]["position"] == 9.0
-    assert "progress" not in client.get("/api/posts/300").json()   # single posts: ask /api/progress
+    # Contract v0.17: single posts have it too, each in its own timeline
+    assert client.get("/api/posts/300").json()["progress"]["position"] == 9.0
+    posts = {p["id"]: p for p in client.get("/api/posts?page_size=200").json()["items"]}
+    assert posts[298]["progress"]["post_id"] == 298 and posts[300]["progress"]["post_id"] == 300
+    assert posts[299]["progress"] is None   # no video or audio
 
 
 def test_locked_hidden_and_auth(app, client):
@@ -785,6 +789,81 @@ def test_feed_by_tag(app):
     home = web.get("/").text
     assert 'href="/?tag=Art"' in home and '<option value="Riptide Rolled">Riptide Rolled (' in home
     assert 'href="/?tag=RIPTIDE"' in web.get("/items/300").text           # the post page's tags too
+
+
+def test_api_for_the_apps(app, client):
+    """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
+    from jrwi import CONTRACT, FEATURES
+    ping = TestClient(app).get("/api/ping").json()   # needs no token
+    assert ping["contract"] == CONTRACT == "0.17" and set(ping["features"]) == set(FEATURES)
+    assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
+
+    # Tags: listed with counts, picked by name whatever the capitals, and found by q
+    tags = client.get("/api/tags").json()
+    assert tags == sorted(tags, key=lambda t: t["name"].lower()) and set(tags[0]) == {"name", "count"}
+    art = next(t for t in tags if t["name"] == "Art")
+    posts = client.get("/api/posts?tag=art").json()
+    assert [p["id"] for p in posts["items"]] == [290] and posts["total"] == art["count"] == 1
+    assert client.get("/api/posts?tag=Nonsense").json()["total"] == 0
+    both = [p["id"] for p in client.get("/api/posts?tag=RIPTIDE&q=Blue").json()["items"]]
+    assert 289 in both and 290 not in both and 297 not in both
+    assert 297 in [p["id"] for p in client.get("/api/posts?q=Riptide Rolled").json()["items"]]
+    items = [i["id"] for i in client.get("/api/items?tag=RIPTIDE").json()["items"]]
+    assert 300 in items and 298 not in items   # items by their main post's tags
+    assert client.get("/api/items?tag=Nonsense").json()["total"] == 0
+    assert 297 in [i["id"] for i in client.get("/api/items?q=Riptide Rolled").json()["items"]]
+
+    # The feed: whole posts with their first two comments and their progress, in the web feed's order
+    feed = client.get("/api/feed?page_size=50").json()
+    ids = [p["id"] for p in feed["items"]]
+    assert ids == [p["id"] for p in client.get("/api/posts?page_size=50").json()["items"]]
+    assert feed["page_size"] == 50 and client.get("/api/feed?page_size=500").json()["page_size"] == 50
+    by_id = {p["id"]: p for p in feed["items"]}
+    p299 = by_id[299]
+    assert p299["body_text"].startswith("Hi, scouts!") and p299["attachments"]
+    assert len(p299["top_comments"]) == 2 and p299["more_comments"] is True
+    assert p299["top_comments"][0]["author"]["name"] == "Sam" and p299["progress"] is None
+    assert by_id[300]["top_comments"][0]["pinned"] and by_id[300]["progress"]["post_id"] == 300
+    assert [p["id"] for p in client.get("/api/feed?tag=Art").json()["items"]] == [290]
+    assert client.get("/api/feed?order=asc&page_size=50").json()["items"][0]["id"] == ids[-1]
+
+    # Continue watching: the web app's row, each with its progress in the version played last
+    client.put("/api/progress/287", json={"position": 12.0, "duration": 20.0, "finished": False})
+    time.sleep(1.1)
+    client.put("/api/progress/288", json={"position": 15.0, "duration": 20.0, "finished": False})
+    rows = client.get("/api/continue").json()["items"]
+    web_order = [r["progress"]["post_id"] for r in rows]
+    assert web_order.index(288) < web_order.index(287)
+    audio = next(r for r in rows if r["progress"]["post_id"] == 288)
+    assert audio["progress"]["position"] == 15.0 and audio["item"]["audio"]["post_id"] == 288
+    assert "progress" in audio["item"] and audio["item"]["id"] == audio["item"]["progress"]["post_id"]
+    assert len(client.get("/api/continue?limit=1").json()["items"]) == 1
+
+    # Stop: 409 when nothing runs, 202 while something does
+    assert client.post("/api/stop").status_code == 409
+    archiver = app.state.archiver
+    archiver.status.set(running=True)
+    try:
+        r = client.post("/api/stop")
+        assert r.status_code == 202 and r.json() == {"stopping": True} and archiver.stop_event.is_set()
+    finally:
+        archiver.status.set(running=False)
+        archiver.stop_event.clear()
+    assert TestClient(app).post("/api/stop").status_code == 401
+
+    # Stats: the checks, the files by type, and who comments most
+    stats = client.get("/api/stats").json()
+    runs = app.state.db.q("SELECT * FROM runs ORDER BY id DESC LIMIT 15")
+    assert [c["started"] for c in stats["checks"]] == [r["started"] for r in runs]
+    assert set(stats["checks"][0]) == {"started", "finished", "result", "message", "new_items", "archived"}
+    assert any(f["type"] == "pdf" and f["count"] >= 1 for f in stats["files"])
+    total = app.state.db.one("SELECT COUNT(*) AS n FROM comments")["n"]
+    c = stats["comments"]
+    assert c["total"] == total and 0 < c["replies"] < total and c["commenters"] >= 3
+    assert len(c["top"]) <= 10 and c["top"] == sorted(c["top"], key=lambda t: -t["count"])
+    sam = next(t for t in c["top"] if t["name"] == "Sam")
+    assert sam["avatar"].startswith("/files/avatars/") and sam["count"] >= 1 and sam["likes"] >= 4
+    assert set(sam) == {"name", "avatar", "badges", "color", "count", "likes"}
 
 
 def test_feed_is_read_back_far_enough():

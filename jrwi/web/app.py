@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import NAME, VERSION
+from .. import CONTRACT, FEATURES, NAME, VERSION
 from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
 from .. import files as files_mod
@@ -221,9 +221,11 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return {"items": [(one or ser.summary)(r) for r in rows], "page": page, "page_size": page_size, "total": total}
 
     def item_query(show=None, tab=None, kind=None, q=None, order="desc", include_locked=False,
-                   separate=False, youtube_id=None, season=None) -> tuple[str, list]:
-        """Items group an episode's versions under its main post. separate=True lists every post on its own."""
+                   separate=False, youtube_id=None, season=None, tag=None) -> tuple[str, list]:
+        """Items group an episode's versions under its main post. separate=True lists every post on its own.
+        For items, q and tag look at the main post, as its tags are the item's (contract v0.17)."""
         where, args = ([] if separate else ["pair_id IS NULL"]) + ["status != 'gone'"], []
+        q, tag = (q or "").strip(), (tag or "").strip()
         if not include_locked:
             where.append("status != 'locked'")
         if show and tab:
@@ -247,8 +249,19 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                                    "OR id IN (SELECT pair_id FROM posts WHERE path_kind='audio'))",
                           "post": "path_kind = 'posts'"}.get(kind, "1=1"))
         if q:
-            where.append("(title LIKE ? OR body_text LIKE ?)")
-            args += [f"%{q}%", f"%{q}%"]
+            # The title, the text, or the name of one of its tags
+            where.append("(title LIKE ? OR body_text LIKE ? OR EXISTS (SELECT 1 FROM json_each(posts.tag_ids) j "
+                         "JOIN tags t ON t.id = CAST(j.value AS TEXT) WHERE t.name LIKE ?))")
+            args += [f"%{q}%", f"%{q}%", f"%{q}%"]
+        if tag:
+            # One tag, by its name as the site shows it, whatever the capitals; a tag nobody uses finds nothing
+            ids = [r["id"] for r in db.q("SELECT id FROM tags WHERE name = ? COLLATE NOCASE", (tag,))]
+            if ids:
+                where.append("EXISTS (SELECT 1 FROM json_each(posts.tag_ids) WHERE CAST(value AS TEXT) IN (%s))"
+                             % ",".join("?" * len(ids)))
+                args += ids
+            else:
+                where.append("0")
         if youtube_id:
             # Items with a post (any version) that embeds this YouTube video
             group = "e.id" if separate else "COALESCE(e.pair_id, e.id)"
@@ -264,9 +277,19 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             order_by = f"published {direction}, id {direction}"
         return f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY {order_by}", args
 
+    def post_out(row: dict, full: bool = False) -> dict:
+        """A single post, with its progress in its own timeline when it has a video or audio (contract v0.17)."""
+        out = (ser.post_full if full else ser.post_summary)(row)
+        out["progress"] = None
+        if out.get("video") or out.get("audio") or out.get("handed_over"):
+            primary, members, video, audio = progress._item(row)
+            out["progress"] = progress.read(row["id"], primary, members, video, audio)
+        return out
+
     @app.get("/api/ping")
     def api_ping():
-        return {"name": NAME, "version": VERSION}
+        # What this archiver has, so apps needn't ask for each part to find out (contract v0.17)
+        return {"name": NAME, "version": VERSION, "contract": CONTRACT, "features": FEATURES}
 
     @app.get("/api/status", dependencies=[Depends(api_auth)])
     def api_status():
@@ -277,6 +300,14 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if scheduler.check_now(full=full):
             return JSONResponse({"started": True}, status_code=202)
         return JSONResponse({"error": "a check is already running"}, status_code=409)
+
+    @app.post("/api/stop", dependencies=[Depends(api_auth)])
+    def api_stop():
+        """Stops the check or the re-read of saved pages that's running, as the admin page's Stop does (v0.17)."""
+        if not scheduler.running:
+            return JSONResponse({"error": "nothing is running"}, status_code=409)
+        scheduler.stop()
+        return JSONResponse({"stopping": True}, status_code=202)
 
     @app.get("/api/shows", dependencies=[Depends(api_auth)])
     def api_shows(include_empty: bool = False):
@@ -300,9 +331,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     @app.get("/api/items", dependencies=[Depends(api_auth)])
     def api_items(q: str | None = None, show: str | None = None, tab: str | None = None, kind: str | None = None,
                   order: str = "desc", page: int = 1, page_size: int = 50, include_locked: bool = False,
-                  youtube_id: str | None = None):
+                  youtube_id: str | None = None, tag: str | None = None):
         sql, args = item_query(show=show, tab=tab, kind=kind, q=q, order=order, include_locked=include_locked,
-                               youtube_id=youtube_id)
+                               youtube_id=youtube_id, tag=tag)
         return paged(sql, args, page, page_size, one=item_out)
 
     @app.get("/api/latest", dependencies=[Depends(api_auth)])
@@ -333,14 +364,63 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/api/posts", dependencies=[Depends(api_auth)])
     def api_posts(q: str | None = None, show: str | None = None, tab: str | None = None, order: str = "desc",
-                  page: int = 1, page_size: int = 50, include_locked: bool = False, youtube_id: str | None = None):
+                  page: int = 1, page_size: int = 50, include_locked: bool = False, youtube_id: str | None = None,
+                  tag: str | None = None):
         sql, args = item_query(show=show, tab=tab, q=q, order=order, include_locked=include_locked, separate=True,
-                               youtube_id=youtube_id)
-        return paged(sql, args, page, page_size, ser.post_summary)
+                               youtube_id=youtube_id, tag=tag)
+        return paged(sql, args, page, page_size, post_out)
 
     @app.get("/api/posts/{post_id}", dependencies=[Depends(api_auth)])
     def api_post(post_id: int):
-        return ser.post_full(get_post(post_id))
+        return post_out(get_post(post_id), full=True)
+
+    @app.get("/api/tags", dependencies=[Depends(api_auth)])
+    def api_tags():
+        """The site's tags that posts in your tier carry, by name, with how many posts each (contract v0.17)."""
+        return [{"name": t["name"], "count": t["n"]} for t in feed_tags()]
+
+    def feed_post(row: dict) -> dict:
+        """A post as the feed shows it: the whole post, its first two comments, and its progress."""
+        out = post_out(row, full=True)
+        out["top_comments"], out["more_comments"] = top_comments(row)
+        return out
+
+    @app.get("/api/feed", dependencies=[Depends(api_auth)])
+    def api_feed_posts(q: str | None = None, tag: str | None = None, order: str = "desc", page: int = 1,
+                       page_size: int = 20, include_locked: bool = False):
+        """The archive's feed, a page at a time, as the web app's Home shows it (contract v0.17)."""
+        sql, args = item_query(q=q, tag=tag, order=order, include_locked=include_locked, separate=True)
+        return paged(sql, args, page, min(page_size, 50), feed_post)
+
+    @app.get("/api/continue", dependencies=[Depends(api_auth)])
+    def api_continue(limit: int = 12):
+        """Episodes started and not finished, most recently played first, as the web app's row (contract v0.17).
+        progress is in the timeline of the version played last."""
+        out = []
+        for e in continue_entries(max(1, min(limit, 50))):
+            item = dict(e["item"])
+            item["progress"] = progress.of_item(e["primary"], e["members"], item["video"], item["audio"])
+            out.append({"item": item, "progress": e["at"]})
+        return {"items": out}
+
+    @app.get("/api/stats", dependencies=[Depends(api_auth)])
+    def api_stats():
+        """The archive's own numbers that apps can't work out from posts and items (contract v0.17)."""
+        checks = [{k: r[k] for k in ("started", "finished", "result", "message", "new_items", "archived")}
+                  for r in db.q("SELECT * FROM runs ORDER BY id DESC LIMIT 15")]
+        totals = db.one("SELECT COUNT(*) AS total, SUM(parent_id IS NOT NULL) AS replies, "
+                        "COUNT(DISTINCT NULLIF(author_name, '')) AS commenters FROM comments")
+        top = []
+        # The site shows no member IDs, so commenters are told apart by name
+        for r in db.q("SELECT author_name AS name, COUNT(*) AS n, COALESCE(SUM(like_count), 0) AS likes FROM comments "
+                      "WHERE COALESCE(author_name, '') != '' GROUP BY author_name "
+                      "ORDER BY n DESC, likes DESC, author_name LIMIT 10"):
+            newest = db.one("SELECT author_name, author_avatar, author_badges, author_color FROM comments "
+                            "WHERE author_name = ? ORDER BY date DESC, rowid DESC LIMIT 1", (r["name"],))
+            top.append({**ser.author(newest), "count": r["n"], "likes": r["likes"]})
+        return {"checks": checks, "files": files_mod.summary(paths, archived_posts()),
+                "comments": {"total": int(totals["total"] or 0), "replies": int(totals["replies"] or 0),
+                             "commenters": int(totals["commenters"] or 0), "top": top}}
 
     @app.get("/api/posts/{post_id}/comments", dependencies=[Depends(api_auth)])
     def api_post_comments(post_id: int, page: int = 1, page_size: int = 50):
@@ -546,33 +626,14 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
              tag: str | None = None):
         order = "asc" if order == "asc" else "desc"
         q, tag = (q or "").strip(), (tag or "").strip()
-        where, args = ["status != 'gone'"], []
-        if not locked:
-            where.append("status != 'locked'")
-        if q:
-            # The title, the text, or the name of one of its tags
-            where.append("(title LIKE ? OR body_text LIKE ? OR EXISTS (SELECT 1 FROM json_each(posts.tag_ids) j "
-                         "JOIN tags t ON t.id = CAST(j.value AS TEXT) WHERE t.name LIKE ?))")
-            args += [f"%{q}%", f"%{q}%", f"%{q}%"]
-        if tag:
-            # One tag, by its name as the site shows it
-            ids = [r["id"] for r in db.q("SELECT id FROM tags WHERE name = ? COLLATE NOCASE", (tag,))]
-            if ids:
-                where.append("EXISTS (SELECT 1 FROM json_each(posts.tag_ids) WHERE CAST(value AS TEXT) IN (%s))"
-                             % ",".join("?" * len(ids)))
-                args += ids
-            else:
-                where.append("0")
-        direction = order.upper()
-        rows_sql = f"SELECT * FROM posts WHERE {' AND '.join(where)} ORDER BY published {direction}, id {direction}"
+        rows_sql, args = item_query(q=q, tag=tag, order=order, include_locked=locked, separate=True)
         total = db.one(f"SELECT COUNT(*) AS n FROM ({rows_sql})", args)["n"]
         rows = db.q(f"{rows_sql} LIMIT 20 OFFSET ?", args + [(max(1, page) - 1) * 20])
         posts = []
         for r in rows:
             p = ser.post_full(r)
             # The site's feed shows each post's top comments, with more on request
-            top = sorted_comments(r) if r["comment_count"] or r["comments_fetched"] else []
-            p["top_comments"], p["more_comments"] = top[:2], len(top) > 2
+            p["top_comments"], p["more_comments"] = top_comments(r)
             if p["audio"]:
                 prog = api_progress(p["audio"]["post_id"])
                 p["progress_start"] = prog.get("position") if prog and not prog.get("finished") else 0
@@ -595,9 +656,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     CONTINUE_MIN = 10.0   # seconds in before an episode counts as started
 
-    def continue_watching(limit: int = 12) -> list[dict]:
-        """Episodes (video or audio) that were started and not finished, most recently played first. Each opens the
-        version that was played last, which resumes where it was left."""
+    def continue_entries(limit: int = 12) -> list[dict]:
+        """Episodes (video or audio) that were started and not finished, most recently played first, each with its
+        progress in the version that was played last. The web app's row and /api/continue both come from here."""
         out, seen = [], set()
         for row in db.q("SELECT * FROM progress WHERE NOT finished AND position >= ? ORDER BY updated_at DESC LIMIT 200",
                         (CONTINUE_MIN,)):
@@ -605,7 +666,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             if not primary or primary["id"] in seen or primary["status"] == "locked":
                 continue
             seen.add(primary["id"])
-            item = ser.summary(primary)
+            members = ser.members(primary)
+            item = ser.summary(primary, members)
             played = "audio" if row["timeline"] == "audio" else "video"
             part = item[played] or item["video"] or item["audio"]
             if not part:
@@ -614,14 +676,30 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             duration = at.get("duration") or part.get("duration")
             if not duration or at["position"] >= duration:
                 continue
-            show = db.one("SELECT name FROM shows WHERE id=?", (item["show"],))
-            out.append({**item, "played": played if item[played] else ("video" if item["video"] else "audio"),
-                        "href": f"/items/{part['post_id']}", "position": at["position"], "length": duration,
-                        "fraction": max(0.0, min(1.0, at["position"] / duration)), "left": duration - at["position"],
-                        "show_name": show["name"] if show else "", "played_at": row["updated_at"]})
+            out.append({"primary": primary, "members": members, "item": item, "part": part, "at": at,
+                        "played": played if item[played] else ("video" if item["video"] else "audio"),
+                        "duration": duration, "played_at": row["updated_at"]})
             if len(out) >= limit:
                 break
         return out
+
+    def continue_watching(limit: int = 12) -> list[dict]:
+        """The web app's Continue watching row. Each card opens the version that was played last, which resumes
+        where it was left."""
+        out = []
+        for e in continue_entries(limit):
+            item, at, duration = e["item"], e["at"], e["duration"]
+            show = db.one("SELECT name FROM shows WHERE id=?", (item["show"],))
+            out.append({**item, "played": e["played"], "href": f"/items/{e['part']['post_id']}",
+                        "position": at["position"], "length": duration,
+                        "fraction": max(0.0, min(1.0, at["position"] / duration)), "left": duration - at["position"],
+                        "show_name": show["name"] if show else "", "played_at": e["played_at"]})
+        return out
+
+    def top_comments(post: dict) -> tuple[list[dict], bool]:
+        """The two comments the feed shows under a post (pinned, then the most liked), and whether it has more."""
+        top = sorted_comments(post) if post["comment_count"] or post["comments_fetched"] else []
+        return top[:2], len(top) > 2
 
     def sorted_comments(post: dict, csort: str = "top") -> list[dict]:
         """A post's own comments. 'top' (most relevant, as on the site): pinned first, then the most liked.
@@ -678,11 +756,13 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         titles = {m["id"]: m["title"] for m in ser.members(primary)}
         return render(request, "files.html", post=post, own=own, others=others, titles=titles, pick=f)
 
+    def archived_posts() -> list[dict]:
+        return db.q("SELECT id, media, embeds, handover, documents, attachments, images, thumbnail, links "
+                    "FROM posts WHERE status IN ('complete', 'partial', 'gone')")
+
     @app.get("/admin/files", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def admin_files(request: Request):
-        posts = db.q("SELECT id, media, embeds, handover, documents, attachments, images, thumbnail, links "
-                     "FROM posts WHERE status IN ('complete', 'partial', 'gone')")
-        return render(request, "admin_files.html", rows=files_mod.summary(paths, posts),
+        return render(request, "admin_files.html", rows=files_mod.summary(paths, archived_posts()),
                       previewable=files_mod.PREVIEWABLE)
 
     @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])

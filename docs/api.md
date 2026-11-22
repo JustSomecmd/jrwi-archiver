@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.16)
+# JRWI archiver API (contract v0.17)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.3.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.7.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -17,7 +17,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.14:** items in a show's own Just Rolled With It have a `season` too, and the show's `episodes` and `aftershow` tabs each list their `seasons`, so `?tab=aftershow&season=2` gives a season's Just Rolled With It. In the service since 0.7.1.
 - **v0.15:** `GET /api/items/{postId}/files`, `GET /api/posts/{postId}/files` and `GET /api/preview/<path>` (see Files and previews). A YouTube `video` gains `handed_over` when the item's archived video was deleted because TubeArchivist has it; posts gain `handed_over` and `removed_from_site`, and item `versions` gain `removed_from_site`. The event `video_handed_over`. `sync` on YouTube-only items can now be checked. A post whose video was handed over still takes video progress. Offline downloads keep the post's files. In the service since 0.9.0.
 - **v0.16:** the status gains `step`, a stable name for what a check is doing, and `progress.unit`, what its count counts. `phase` and `detail` are now worded for people and can change between versions. In the service since 0.9.3.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before.
+- **v0.17:** the Tubedroid chat's suggestions 3 to 9. `GET /api/ping` gains `contract` and `features` (see Ping). Posts gain `progress` (see Post). `GET /api/tags`, and `tag` on `GET /api/posts` and `GET /api/items`, whose `q` now also finds the names of a post's tags. `GET /api/feed` (see Feed), `GET /api/continue` (see Continue watching), `POST /api/stop` and `GET /api/stats` (see Stats). In the service since 0.9.7.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -30,19 +31,24 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.3"}`. Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.7", "contract": "0.17", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
+| `POST /api/stop` | (v0.17) Stops the check, or the re-read of saved pages, that's running, as the admin page's Stop does: `202` with `{"stopping": true}`, or `409` when nothing is running. The status shows it running until it has stopped, then `last_result` is `stopped`. |
+| `GET /api/stats` | (v0.17) The archive's own numbers: its last checks, its files by type, and its comments (Stats, below) |
 | `GET /api/shows` | Shows that have items, in the site's menu order, then shows from the site's tags or added on the admin page, `other` last. `?include_empty=true` lists all of them. |
 | `GET /api/shows/{showId}` | One show, with `tabs` and `seasons` |
-| `GET /api/shows/{showId}/items?tab=episodes&season=2&order=desc` | Paged items in one tab: every item the show's tags place in it (v0.12, v0.13). `season` keeps one season of the show's own episodes (v0.13) or Just Rolled With It (v0.14). In `episodes`, items are ordered by season, then episode number, then upload date. |
-| `GET /api/items?q=&show=&tab=&kind=&youtube_id=&order=desc` | Paged search across everything. `kind` is `video`, `audio` or `post`. `youtube_id` (v0.10) gives the items that embed that YouTube video (below). `show` includes items placed in that show from another. |
+| `GET /api/shows/{showId}/items?tab=episodes&season=2&order=desc` | Paged items in one tab: every item the show's tags place in it (v0.12, v0.13). `season` keeps one season of the show's own episodes (v0.13) or Just Rolled With It (v0.14). In `episodes`, items are ordered by season, then episode number, then upload date. Since 0.9.5 an item without a number sits after the numbered episode of its season that came out last before it. |
+| `GET /api/items?q=&show=&tab=&kind=&tag=&youtube_id=&order=desc` | Paged search across everything. `q` looks in the title, the text and, since v0.17, the names of the tags. `kind` is `video`, `audio` or `post`. `tag` (v0.17) keeps one tag (Tags, below). `youtube_id` (v0.10) gives the items that embed that YouTube video (below). `show` includes items placed in that show from another. |
 | `GET /api/latest?limit=20` | Newest items, for a home screen |
+| `GET /api/continue?limit=12` | (v0.17) Episodes started and not finished, most recently played first (Continue watching, below). `limit` up to 50. |
+| `GET /api/feed?q=&tag=&order=desc` | (v0.17) Paged posts as the web app's Home shows them, whole, with their first comments and progress (Feed, below). `page_size` 20 by default, up to 50. |
+| `GET /api/tags` | (v0.17) `[{"name": "RIPTIDE", "count": 312}, ...]`: the site's tags on posts in the user's tier, by name (Tags, below) |
 | `GET /api/items/{postId}` | Full item. Either post ID of a video/audio pair works. |
 | `GET /api/items/{postId}/comments?page=` | Threaded comments from every version of the item, paged by top-level comment. Each says which post it's on (`post_id`). |
 | `GET /api/items/{postId}/files` | (v0.15) `{"item_id": 300, "files": [...]}`: every file of all the item's versions (File, below) |
-| `GET /api/posts?q=&show=&tab=&order=desc` | (v0.7) Paged single posts, every version listed on its own. Same filters as items. |
-| `GET /api/posts/{postId}` | (v0.7) One post on its own: only its own text, likes, files and media |
+| `GET /api/posts?q=&show=&tab=&tag=&order=desc` | (v0.7) Paged single posts, every version listed on its own. Same filters as items. Since v0.17 each has its `progress`. |
+| `GET /api/posts/{postId}` | (v0.7) One post on its own: only its own text, likes, files, media and, since v0.17, progress |
 | `GET /api/posts/{postId}/comments?page=` | (v0.7) Only that post's comments |
 | `GET /api/posts/{postId}/files` | (v0.15) `{"post_id": 299, "files": [...]}`: only that post's files |
 | `GET /api/preview/<path>` | (v0.15) What's inside a file under `/files/<path>` (Preview, below). `?page=N` gives page N of a PDF as a PNG. |
@@ -56,6 +62,53 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /files/<path>` | Images, thumbnails, attachments, documents |
 
 Item lists leave out posts above the user's tier. Add `include_locked=true` to include them; they'll have `"locked": true` and no media.
+
+**Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
+
+```json
+{"name": "jrwi-archiver", "version": "0.9.7", "contract": "0.17",
+ "features": ["post_progress", "tags", "continue", "stop", "feed", "stats"]}
+```
+
+- **`contract`:** the version of this contract the archiver follows.
+- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`) and `stats` (`GET /api/stats`). Later optional parts get names of their own, and apps ignore names they don't know.
+
+**Tags (v0.17):**
+- **`GET /api/tags`:** the site's tags that archived posts in the user's tier carry, with how many such posts carry each, sorted by name whatever the capitals, as the web feed's tag picker lists them.
+- **`tag`** on `GET /api/posts`, `GET /api/items` and `GET /api/feed`: one tag by its name, capitals not minding (`?tag=riptide` is `RIPTIDE`). Posts carry it themselves; items by their main post's tags, so an item is found by the tags of its `id` post. A tag no post carries gives no posts.
+- **`q`** on the same three also finds posts by the names of their tags, as the web feed's search does, and can go with `tag`: `?tag=RIPTIDE&q=Blue` gives only Riptide posts with "Blue" somewhere.
+
+**Continue watching (v0.17):** `GET /api/continue?limit=12` gives the web app's Continue watching row, in its order and by its rules: episodes 10 seconds or more in, not finished and not at their end, the one played most recently first, each item once, locked items left out.
+
+```json
+{"items": [{"item": { /* Item (in lists) */ },
+            "progress": {"post_id": 288, "position": 1234.5, "duration": 11695, "finished": false,
+                         "updated_at": "2026-11-21T00:12:00+00:00"}}]}
+```
+
+- **`item`:** the item as in lists, with its own `progress` in its main post's timeline.
+- **`progress`:** in the timeline of the version played last; its `post_id` says which version that was. The web app's card opens that version, and resumes there.
+
+**Feed (v0.17):** `GET /api/feed` pages through the archive's posts as the web app's Home does: every post on its own (as `/api/posts`), newest first, or oldest first with `order=asc`, with `q`, `tag` and `include_locked` as on `/api/posts`. Each entry is the post as `GET /api/posts/{postId}` gives it (with `progress`), plus:
+- **`top_comments`:** its first two comments as the web feed shows them, pinned ones first, then the most liked, as Comment objects with their replies.
+- **`more_comments`:** `true` when it has more than those two; `/api/posts/{postId}/comments` gives them all.
+
+Locked posts are left out unless `include_locked=true`. A page holds up to 50 posts.
+
+**Stats (v0.17):** `GET /api/stats` gives what apps can't work out from posts and items:
+
+```json
+{"checks": [{"started": "2026-11-21T20:00:00+00:00", "finished": "2026-11-21T20:04:12+00:00",
+             "result": "ok", "message": null, "new_items": 3, "archived": 5}],
+ "files": [{"type": "pdf", "ext": ".pdf", "count": 312, "bytes": 1234567890}],
+ "comments": {"total": 18234, "replies": 4012, "commenters": 812,
+              "top": [{"name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
+                       "badges": [], "color": "rgb(247, 221, 210)", "count": 120, "likes": 3400}]}}
+```
+
+- **`checks`:** the last 15 runs, newest first, as the admin page lists them. A check that's running has `result` `running` and `finished` `null`; otherwise `result` is as `last_result` in the status. `new_items` counts the items archived for the first time, `archived` every post saved, new or changed.
+- **`files`:** the archive's files by type (as File `type`) and extension, as Admin > Files counts them: how many and how big. YouTube videos and Google links that couldn't be saved are counted with `ext` `YouTube` or `link`, and `bytes` 0.
+- **`comments`:** every comment and reply in the archive (`total`), how many of them are replies, how many members commented, and the ten who commented most, with how many comments and the likes on them. The site shows no member IDs, so members are told apart by name. `name`, `avatar`, `badges` and `color` are as on their newest comment, in the shape of a Comment's `author`.
 
 **Finding an item by YouTube ID (v0.10):** `GET /api/items?youtube_id=CzZ13VPQOcw` lists the items with a post, of any version, that embeds that YouTube video: usually one item, or none. For a YouTube-only episode, that item's `video.youtube_id` is the ID asked for. An item whose members-only video is archived and that also embeds the YouTube version is listed too, with `video` being the archived file; apps that only want YouTube-only items can check `video.youtube_id`. `/api/posts` takes `youtube_id` the same way, listing the posts themselves.
 
@@ -164,7 +217,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 - **`null`** only when the item has just one version, and on single posts (`/api/posts`).
 - **Apps** keep a carried-over position between 0 and the other version's `duration`.
 
-**`progress` (v0.10):** the same object `GET /api/progress/{id}` returns for the item's `id`, so `position` is in the main post's timeline (the video's when there is one), or `null` when the item was never played. On items in `/api/shows/{showId}/items`, `/api/items` and `/api/latest`, and on the full item. Single posts (`/api/posts`) don't have it; use `/api/progress/{postId}` for those.
+**`progress` (v0.10):** the same object `GET /api/progress/{id}` returns for the item's `id`, so `position` is in the main post's timeline (the video's when there is one), or `null` when the item was never played. On items in `/api/shows/{showId}/items`, `/api/items` and `/api/latest`, and on the full item. Since v0.17 single posts have their own (see Post).
 
 ### Item (full)
 
@@ -198,7 +251,9 @@ A single post, never merged with its other versions. It has the same fields as a
 
 ```json
 {"id": 298, "version": "audio", "item_id": 300, "paired": true,
- "removed_from_site": null, "handed_over": null}
+ "removed_from_site": null, "handed_over": null,
+ "progress": {"post_id": 298, "position": 1217.3, "duration": 11695, "finished": false,
+              "updated_at": "2026-11-21T00:12:00+00:00"}}
 ```
 
 - **`version`:** which version of its episode this post is: `video`, `audio`, `youtube`, or `null`.
@@ -206,6 +261,7 @@ A single post, never merged with its other versions. It has the same fields as a
 - **`paired`:** `true` when the item has other versions.
 - **`removed_from_site` (v0.15):** when the archiver noticed that the site's feed no longer shows the post, such as a members-only episode taken down once its YouTube version is up, or `null`. The archive keeps the post.
 - **`handed_over` (v0.15):** for a members-only post whose video was deleted because TubeArchivist has it: `{"at": "...", "youtube_id": "...", "youtube_url": "...", "post_id": 286882}`, where `post_id` is the post with the YouTube version. Its `video` is then `null`. Otherwise `null`.
+- **`progress` (v0.17):** on a post with a video or audio, and on a handed-over one: the same object `GET /api/progress/{postId}` gives for the post's own `id`, so `position` is in this post's timeline, or `null` when the episode was never played. The archive keeps one record per episode (decisions 8 and 9), so every version shows the same moment, each in its own timeline. `null` on posts without either. In `/api/posts`, `/api/posts/{postId}` and `/api/feed`.
 
 ### File (v0.15)
 
