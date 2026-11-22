@@ -43,6 +43,15 @@
     </div>
   {% endif %}
 
+  {% if item.transcript and ((v and v.url) or a) %}
+    <div class="transcript-bar"><button class="ghost" data-transcript-toggle aria-expanded="false">Transcript</button></div>
+    <div class="transcript" data-transcript hidden>
+      <div class="tnote small muted" data-tnote></div>
+      <div class="tlines" data-tlines></div>
+      <button class="tfollow" data-tfollow hidden>Back to the line being spoken</button>
+    </div>
+  {% endif %}
+
   <div class="post-info">
     <div class="pmeta">
       <span>{{ nice_date(item.date) }}{% if item.published_at %} · <span data-time-of-day="{{ item.published_at }}" title="The time the podcast feed gives"></span>{% endif %}</span>

@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS feed_items (
     tries INTEGER DEFAULT 0, last_try TEXT, gone TEXT
 );
 
+-- Timed transcripts (contract v0.23): one per item, its lines in archive/transcripts/<item_id>.json.gz
+CREATE TABLE IF NOT EXISTS transcripts (
+    item_id INTEGER PRIMARY KEY, document TEXT, doc_size INTEGER, lines INTEGER, aligned INTEGER DEFAULT 0,
+    timing TEXT, updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, started TEXT, finished TEXT, result TEXT, message TEXT,
     new_items INTEGER DEFAULT 0, archived INTEGER DEFAULT 0
@@ -81,7 +87,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 JSON_FIELDS = {"tag_ids", "links", "images", "attachments", "documents", "embeds", "media", "files",
                "problems", "skipped", "aliases", "author_badges", "sync", "tabs", "art_options", "places", "seasons",
-               "handover", "feed_fields"}
+               "handover", "feed_fields", "timing"}
 
 
 def now() -> str:

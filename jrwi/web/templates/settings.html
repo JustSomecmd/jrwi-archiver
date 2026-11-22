@@ -121,6 +121,34 @@
     </div>
   </div>
 </div>
+<div class="panel" id="transcripts">
+  <h2>Transcripts</h2>
+  <p class="muted small">Many episodes link a transcript (a Google Doc saved as a PDF). The archive reads it into
+    lines, speaker by speaker, so the web app and the apps can show it. Timing it hears the episode once with a
+    speech recognizer (faster-whisper) and matches the transcript's words to what it heard, so the line being spoken
+    can be shown as it plays. That takes a while and a fair amount of memory, so it runs between checks, one episode
+    at a time, at a low priority, and a check always goes first. Try one episode from the Admin page before turning
+    it on for all of them.</p>
+  <div class="cols">
+    <div>
+      <label class="check"><input type="checkbox" name="transcripts_read" {% if s.transcripts_read %}checked{% endif %}> Read transcripts into lines</label>
+      <label class="check"><input type="checkbox" name="transcripts_time" {% if s.transcripts_time %}checked{% endif %}> Time them in the background</label>
+      <div class="hint">The speech model is downloaded once, the first time (to the data folder's <code>models</code>).
+        The Admin page shows how long the last episode took and the most memory it used.</div>
+    </div>
+    <div>
+      <label for="txmodel">Speech model</label>
+      <select id="txmodel" name="transcript_model">
+        {% for m, what in [('base.en', 'base.en: quicker and lighter, hears less well'), ('small.en', 'small.en: the default'), ('medium.en', 'medium.en: slower and heavier, hears best')] %}
+          <option value="{{ m }}" {% if s.transcript_model == m %}selected{% endif %}>{{ what }}</option>
+        {% endfor %}
+      </select>
+      <label for="txthreads">Processor threads</label>
+      <input id="txthreads" type="number" min="0" max="64" name="transcript_threads" value="{{ s.transcript_threads }}">
+      <div class="hint">0 uses half of them, at most 8, leaving the rest for Jellyfin and the others.</div>
+    </div>
+  </div>
+</div>
 <p><button type="submit">Save settings</button></p>
 </form>
 <form id="test-login" method="post" action="/admin/test-login"></form>

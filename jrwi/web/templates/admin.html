@@ -167,4 +167,34 @@
   <form method="post" action="/admin/feed/read"><button class="ghost">Read it now</button></form>
   {% endif %}
 </div>
+<div class="panel" id="transcripts">
+  <h3>Transcripts</h3>
+  {% if not tx.count %}
+  <p class="muted small">No episode's transcript has been read yet.{% if not tx.read %} Reading them is off in
+    <a href="/admin/settings#transcripts">Settings</a>.{% else %} They're read between checks, from the PDFs posts
+    link to.{% endif %}</p>
+  {% else %}
+  <p class="small">{{ tx.count }} episode{{ '' if tx.count == 1 else 's' }} with a transcript, {{ tx.aligned }} timed{% if tx.failed %},
+    {{ tx.failed }} that couldn't be{% endif %}. Timing in the background is
+    <b>{{ 'on' if tx.time else 'off' }}</b> ({{ tx.model }}, {{ tx.threads }} thread{{ '' if tx.threads == 1 else 's' }};
+    <a href="/admin/settings#transcripts">Settings</a>).</p>
+  {% endif %}
+  {% if tx.problem %}<p class="small bad">{{ tx.problem }}. It's tried again after the next check.</p>{% endif %}
+  <p class="small" data-bg data-had="{{ '1' if tx.bg else '0' }}">{% if tx.bg %}<b>{{ tx.bg.phase }}:</b> {{ tx.bg.detail }}{% elif tx.paused %}Paused until the next check.{% endif %}</p>
+  {% if tx.last %}
+  <p class="small">Last timed: <a href="/items/{{ tx.last.item_id }}">{{ tx.last.title }}</a>
+    {% if tx.last.error %}<span class="bad">{{ tx.last.error }}</span>{% else %}
+    ({{ human_duration(tx.last.duration) }} of sound) took <b>{{ human_duration(tx.last.took) }}</b>{% if tx.last.load %}
+    plus {{ tx.last.load | round(0) | int }} s to load the model{% endif %}, using at most <b>{{ tx.last.peak_mb }} MB</b>
+    of memory, with {{ tx.last.model }} on {{ tx.last.threads }} thread{{ '' if tx.last.threads == 1 else 's' }}.
+    {{ tx.last.placed }} of {{ tx.last.placed + tx.last.unplaced }} lines placed; {{ (tx.last.found * 100) | round(0) | int }}%
+    of the transcript's words were heard.{% endif %}</p>
+  {% endif %}
+  <div class="actions">
+    <form method="post" action="/admin/transcripts/time"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('refresh') }}<b>Time one episode now</b>
+      <span>The newest episode whose transcript isn't timed yet, to see how long it takes on this server. A check goes first.</span></button></form>
+    {% if tx.bg %}<form method="post" action="/admin/transcripts/pause"><button class="action">{{ icon('stop') }}<b>Pause</b>
+      <span>Stop working on transcripts until the next check. What was heard so far is kept.</span></button></form>{% endif %}
+  </div>
+</div>
 {% endblock %}

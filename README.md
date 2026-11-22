@@ -79,6 +79,20 @@ The site gives each member a private podcast feed for podcast apps. Enter its ad
 
 The address holds a key that's yours, so it's never shown again once saved, and it isn't logged. The Admin page shows what the feed holds and which of its episodes the archive doesn't have.
 
+### Transcripts
+
+Many episodes link a transcript: a Google Doc, saved as a PDF, with each speaker's name in bold on a line of its own and no times. The archiver reads it into lines, and a **Transcript** button under the episode's player shows them, with the line being spoken lit up as it plays; clicking a line plays from there. The apps get the same lines from the API.
+
+To time the lines, the archiver hears the episode once with a speech recognizer ([faster-whisper](https://github.com/SYSTRAN/faster-whisper), on the processor) and matches the transcript's words to the words it heard. Mishearing some words doesn't matter much, as a line only needs a few of its words found; a line none of whose words were heard goes right after the line before it, or is shown without a time next to a long pause. A transcript that turns out to be another episode's (under 30% of its words heard) isn't timed.
+
+Hearing a three-hour episode takes a while and needs about 1.5 GB of memory with the default model (small.en), so it's off until you turn it on:
+
+1. On the **Admin** page, press **Time one episode now**. It times the newest episode with a transcript, between checks. The first time, the speech model is downloaded to the data folder's `models` folder.
+2. When it's done, the Admin page says how long it took, the most memory it used, and how many lines it placed. Open the episode and try the Transcript button.
+3. If that suits your server, turn on **Settings > Transcripts > Time them in the background**. Episodes are then timed one at a time, newest first, at a low priority, using half the processor's threads (a setting).
+
+A check, the podcast feed and Re-read always go first: the episode being heard stops and carries on later from where it was, as what's been heard is saved every ten minutes of sound. **Pause** on the Admin page stops it until the next check.
+
 ## What you'll find in the folders
 
 ```
@@ -123,6 +137,8 @@ On the site, an episode's members-only video, its YouTube embed and its "(AUDIO 
 | Re-read comments on posts newer than | 30 days | Picks up comments that arrive after a post goes up |
 | Notification URL | none | An ntfy topic URL or a Discord webhook. It gets new posts and problems such as a failed login. |
 | Podcast feed | none | The site's private podcast feed, read every 15 minutes (a setting) to start checks for new episodes |
+| Mark an episode watched with this many minutes left | 2 | For the web app, and apps that leave it to the archive. Shorter videos are marked in their last 5%. |
+| Transcripts | read: on; time: off | Read linked transcripts into lines; time them in the background with a speech model (small.en, half the threads) |
 
 You can also set these environment variables:
 

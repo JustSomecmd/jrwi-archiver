@@ -571,3 +571,19 @@ button.action:disabled:hover { background: var(--card); border-color: var(--line
   button.action, a.action { padding: .9rem .6rem .8rem; }
   .action .icon { width: 28px; height: 28px; }
 }
+
+/* A post's transcript under its player (contract v0.23) */
+.transcript-bar { margin: .6rem 0 0; }
+.transcript { position: relative; margin: .5rem 0 1rem; border: 1px solid var(--line); border-radius: var(--radius);
+  background: rgba(0, 0, 0, .18); }
+.transcript .tnote { padding: .5rem .8rem 0; }
+.transcript .tlines { max-height: 55vh; overflow-y: auto; padding: .4rem .8rem .8rem; scroll-behavior: smooth; }
+.transcript .tl { margin: .45rem 0; padding: .15rem .4rem; border-radius: var(--radius); white-space: pre-line;
+  line-height: 1.45; }
+.transcript .tl b { color: var(--accent); margin-right: .2rem; }
+.transcript .tl[data-start] { cursor: pointer; }
+.transcript .tl[data-start]:hover { background: rgba(255, 255, 255, .05); }
+.transcript .tl.note { color: var(--muted); font-style: italic; }
+.transcript .tl.untimed { opacity: .65; }
+.transcript .tl.now { background: rgba(244, 228, 52, .14); box-shadow: inset 3px 0 0 var(--accent); }
+.transcript .tfollow { position: absolute; right: .8rem; bottom: .8rem; }

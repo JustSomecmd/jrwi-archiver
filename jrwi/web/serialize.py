@@ -180,7 +180,12 @@ class Serializer:
             "comment_count": primary["comment_count"], "like_count": primary["like_count"],
             "locked": bool(primary["locked"]) or primary["status"] == "locked",
             "archived": primary["status"] in ("complete", "partial"),
+            "transcript": self.has_transcript(primary["id"]),
         }
+
+    def has_transcript(self, item_id: int) -> bool:
+        """Whether GET /api/transcript has lines for the item (contract v0.23)."""
+        return self.db.one("SELECT 1 FROM transcripts WHERE item_id=?", (item_id,)) is not None
 
     def local_images(self, members: list[dict]) -> dict[str, str]:
         out = {}
@@ -232,6 +237,7 @@ class Serializer:
         others = self.db.one("SELECT COUNT(*) AS n FROM posts WHERE (pair_id=? OR id=?) AND id != ?",
                              (item_id, item_id, post["id"]))["n"]
         return {"version": self.version_of(post), "item_id": item_id, "paired": bool(others),
+                "transcript": self.has_transcript(item_id),
                 "removed_from_site": post.get("site_gone"), "handed_over": self.handed_over(post)}
 
     def post_summary(self, post: dict) -> dict:

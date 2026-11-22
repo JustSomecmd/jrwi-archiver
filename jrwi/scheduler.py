@@ -9,9 +9,10 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from . import memory, podcast
-from .crawler import Archiver
+from .crawler import Archiver, Status
+from .transcripts import ModelProblem, Transcripts, Yielded
 from .site.parse import PARSER_VERSION
-from .db import Db
+from .db import Db, now as now_iso
 
 log = logging.getLogger("jrwi.scheduler")
 FIRST_CHECK_DELAY = timedelta(minutes=2)
@@ -35,6 +36,14 @@ class Scheduler:
         self.last_start: datetime | None = None
         self.feed_read: datetime | None = None
         self.feed_lock = threading.Lock()
+        # Work in the background between checks, which anything else takes over from (timing transcripts, v0.23)
+        self.bg = Status()
+        self.bg_stop = threading.Event()
+        self.transcripts = Transcripts(db, archiver.paths, self.bg)
+        self.ser = None                      # the web app's Serializer, which finds an item's posts
+        self.transcript_requested = None     # an item to time now, from the admin page
+        self.transcripts_idle = False        # nothing left to do in the background until the next check
+        self.transcripts_paused = False      # paused by hand until the next check
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
 
     def start(self) -> None:
@@ -92,6 +101,69 @@ class Scheduler:
     def stop(self) -> None:
         self.archiver.stop_event.set()
 
+    # ------------------------------------------------------------------ transcripts, in the background
+
+    def transcript_now(self, item_id: int | None) -> bool:
+        """Time one episode's transcript next (the newest not timed yet when None). False while a check runs."""
+        if self.running:
+            return False
+        self.transcript_requested = item_id if item_id is not None else 0
+        self.transcripts_paused = False
+        self.wake.set()   # what runs in the background gives way to it
+        return True
+
+    def pause_transcripts(self) -> None:
+        self.transcripts_paused = True
+        self.bg_stop.set()
+
+    def _transcripts_due(self) -> bool:
+        if self.ser is None or self.transcripts_idle or self.transcripts_paused or self.wake.is_set():
+            return False
+        if not (self.db.setting("transcripts_read") or self.db.setting("transcripts_time")):
+            return False
+        if self.feed_due():
+            return False
+        now = datetime.now(timezone.utc)
+        return not (self.next_check and now >= self.next_check - timedelta(minutes=1))
+
+    def _background_yield(self) -> bool:
+        now = datetime.now(timezone.utc)
+        return (self.wake.is_set() or self.bg_stop.is_set() or self.feed_due()
+                or bool(self.next_check and now >= self.next_check))
+
+    def _transcripts(self, one: int | None = None) -> None:
+        """Read new transcripts and time them, until something else needs the scheduler. one: an item asked for
+        on the admin page (0 for the newest not timed yet), which only a check or Pause interrupts."""
+        if self.ser is None:
+            return
+        self.bg_stop.clear()
+        self.bg.set(running=True, started=now_iso())
+        should_yield = (lambda: self.wake.is_set() or self.bg_stop.is_set()) if one is not None else self._background_yield
+        try:
+            if one == 0:
+                one = self.transcripts.newest_untimed(self.transcripts.items(self.ser))
+                if one is None:
+                    return
+            done = self.transcripts.run(self.ser, should_yield, one=one,
+                                        read_on=bool(self.db.setting("transcripts_read")) or one is not None,
+                                        timing_on=bool(self.db.setting("transcripts_time")))
+            if one is None:
+                self.transcripts_idle = True
+            if done["read"] or done["timed"]:
+                log.info("transcripts: read %s, timed %s", done["read"], done["timed"])
+        except Yielded:
+            log.info("transcripts: giving way; what was heard so far is kept")
+        except ModelProblem as e:
+            log.warning("transcripts: %s", e)
+            self.db.set_setting("transcripts_problem", str(e)[:300])
+            self.transcripts_idle = True   # tried again after the next check
+        except Exception:
+            log.exception("transcripts failed")
+            self.transcripts_idle = True
+        finally:
+            self.bg.set(running=False, step="idle", phase="idle", detail="", done=0, total=0, current=None, unit=None)
+            memory.release()
+
     def feed_due(self) -> bool:
         minutes = float(self.db.setting("feed_minutes") or 0)
         if minutes <= 0 or not (self.db.setting("podcast_feed") or "").strip():
@@ -140,6 +212,8 @@ class Scheduler:
             self.next_check = start + FIRST_CHECK_DELAY if self._interval() else None
             self.planned_with = self._interval()
         while True:
+            if self._transcripts_due():
+                self._transcripts()
             timeout = None
             if self.next_check:
                 timeout = max(0.0, (self.next_check - datetime.now(timezone.utc)).total_seconds())
@@ -159,9 +233,14 @@ class Scheduler:
                 log.info("the podcast feed has a new episode; checking the site")
             manual = woke or self.wake.is_set() or from_feed
             self.wake.clear()
+            if self.transcript_requested is not None:
+                one, self.transcript_requested = self.transcript_requested, None
+                self._transcripts(one=one)
+                continue
             if self.reparse_requested:
                 self.reparse_requested = False
                 self._reparse()
+                self.transcripts_idle = False
                 if self.check_requested:
                     self.wake.set()   # Check now was pressed while the re-read was being started: it's next
                 continue
@@ -183,6 +262,7 @@ class Scheduler:
             except Exception:
                 log.exception("matching the podcast feed failed")
             memory.release()
+            self.transcripts_idle = self.transcripts_paused = False   # new posts may have transcripts
             # A check that ran past the next one's time: the next comes a whole interval after this one ended
             now = datetime.now(timezone.utc)
             if self.next_check and self.next_check < now + timedelta(minutes=10):

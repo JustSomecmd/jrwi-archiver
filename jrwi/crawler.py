@@ -76,6 +76,7 @@ STEPS = {
     "line_up": ("Lining up the video and audio of episodes", "episode"),
     "finishing": ("Sorting posts and updating the Jellyfin folder", None),
     "reparse": ("Re-reading saved pages", "post"),
+    "transcripts": ("Timing transcripts", "episode"),
 }
 
 

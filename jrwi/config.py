@@ -59,6 +59,10 @@ DEFAULTS: dict = {
     "podcast_feed": "",            # the members' private podcast feed (RSS); its address holds a key, like a password
     "feed_minutes": 15,            # how often to read it; 0 = never
     "watched_minutes_left": 2,     # an episode counts as watched with this little left (contract v0.22)
+    "transcripts_read": True,      # read transcripts attached to episodes into lines (contract v0.23)
+    "transcripts_time": False,     # and time them in the background by hearing the episode (needs ~1.5 GB RAM)
+    "transcript_model": "small.en",  # faster-whisper model: base.en, small.en or medium.en
+    "transcript_threads": 0,       # processor threads for it; 0 = half of them, at most 8
     "api_token": "",
     "web_password_hash": "",
     "session_secret": "",

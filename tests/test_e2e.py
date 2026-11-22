@@ -899,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.22" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.23" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1010,9 +1010,11 @@ def test_podcast_feed(app, client, monkeypatch):
     s = db.settings()   # the form sends every setting: keep the tests' own
     form = {"podcast_feed": f"http://127.0.0.1:{PORT}/supporters/podcast/{key}/rss", "feed_minutes": "15",
             **{k: str(s[k]) for k in ("check_interval_hours", "max_height", "comment_refresh_days", "request_delay",
-                                      "recheck_days", "site_email", "public_url", "ta_url", "notify_url")},
+                                      "recheck_days", "site_email", "public_url", "ta_url", "notify_url",
+                                      "watched_minutes_left", "transcript_threads", "transcript_model")},
             **{k: "on" for k in ("video", "audio", "images", "attachments", "comments", "google_docs",
-                                 "public_pages", "youtube_embeds", "handover") if s[k]}}
+                                 "public_pages", "youtube_embeds", "handover", "transcripts_read",
+                                 "transcripts_time") if s[k]}}
     web.post("/admin/settings", data=form)
     assert db.settings() == {**s, "podcast_feed": form["podcast_feed"], "feed_state": {}}
     assert db.setting("podcast_feed").endswith(f"/{key}/rss") and scheduler.feed_due()
@@ -1228,3 +1230,71 @@ def test_security(app, client):
     assert 'src="data:image/png;base64,AAAA"' in clean_html('<img src="data:image/png;base64,AAAA">')
     # A wrong token with odd characters is just wrong
     assert TestClient(app).get("/api/status", params={"token": "ünïcode"}).status_code == 401
+
+
+def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_path):
+    from transcript_pdf import write
+    db, scheduler, paths = app.state.db, app.state.scheduler, app.state.archiver.paths
+    name = "Episode transcription here. [1RkmhusZ].pdf"
+    write(paths.archive / "google-docs" / name, [
+        ("Zach", "There is something wrong with this town"), ("Charlie", "What?"), (None, "[laughter]"),
+        ("Zach", "And no one seems to notice at all"), ("Nate", "Okay then let us go")])
+    before = db.post(298)["documents"]
+    db.update("posts", "id", 298, {"documents": list(before or []) + [
+        {"name": name, "url": "google-docs/" + name, "source": "https://docs.google.com/document/d/1RkmhusZ/edit"}]})
+    # What the speech recogniser hears in the 20-second test file, in its place for the test
+    heard = [[1.0, 1.3, "There"], [1.3, 1.5, "is"], [1.5, 2.0, "something"], [2.0, 2.3, "wrong"], [2.3, 2.5, "with"],
+             [2.5, 2.8, "this"], [2.8, 3.2, "town."], [4.0, 4.4, "What?"], [8.0, 8.3, "And"], [8.3, 8.5, "no"],
+             [8.5, 8.8, "one"], [8.8, 9.2, "seems"], [9.2, 9.4, "to"], [9.4, 9.9, "notice"], [9.9, 10.1, "at"],
+             [10.1, 10.4, "all."], [12.0, 12.3, "Okay,"], [12.3, 12.6, "then"], [12.6, 12.8, "let's"], [12.8, 13.0, "us"],
+             [13.0, 13.3, "go."]]
+    (tmp_path / "heard.json").write_text(json.dumps(heard))
+    monkeypatch.setenv("JRWI_FAKE_HEARING", str(tmp_path / "heard.json"))
+    try:
+        scheduler._transcripts(one=300)   # as the admin page's "Time it now" does
+        row = db.one("SELECT * FROM transcripts WHERE item_id=300")
+        assert row["aligned"] and row["lines"] == 5 and row["timing"]["placed"] == 5, row
+        assert row["timing"]["took"] is not None and row["timing"]["error"] is None
+        assert client.get("/api/items/300").json()["transcript"] is True
+        assert client.get("/api/posts/298").json()["transcript"] is True
+        assert "transcript" in client.get("/api/ping").json()["features"]
+        audio = client.get("/api/transcript/298").json()
+        assert audio["aligned"] and audio["document"].startswith("/files/google-docs/")
+        assert audio["lines"][0] == {"start": 1.0, "end": 3.2, "speaker": "Zach",
+                                     "text": "There is something wrong with this town"}
+        assert audio["lines"][3]["start"] == 8.0 and audio["lines"][4]["start"] == 12.0
+        note = audio["lines"][2]
+        assert note["speaker"] is None and audio["lines"][1]["start"] <= note["start"] <= 8.0
+        # The video's lines are in the video's timeline: audio = video + offset
+        offset = client.get("/api/items/300").json()["sync"]["offset"]
+        video = client.get("/api/transcript/300").json()
+        assert abs(video["lines"][3]["start"] - max(0.0, 8.0 - offset)) < 0.01
+        # Without a transcript: 404
+        other = next(r["id"] for r in db.q("SELECT id FROM posts WHERE id NOT IN (298, 300) LIMIT 1"))
+        assert client.get(f"/api/transcript/{other}").status_code == 404
+        # The pages show it
+        web = TestClient(app)
+        web.post("/login", data={"password": "test-password"})
+        assert "data-transcript" in web.get("/items/298").text
+        admin = web.get("/admin").text
+        assert "Time one episode now" in admin and "lines placed" in admin
+        assert "Time it again" in web.get("/admin/items/298").text
+        assert 'name="transcript_model"' in web.get("/admin/settings").text
+        # Timing it again with nothing changed only matches again: nothing is heard twice
+        monkeypatch.setenv("JRWI_FAKE_HEARING", str(tmp_path / "missing.json"))
+        scheduler._transcripts(one=300)
+        assert db.one("SELECT aligned FROM transcripts WHERE item_id=300")["aligned"] == 1
+        # Another model has to hear it again; one that can't be loaded stops the job, rather than every episode
+        # in line being marked as failed, and what was timed before stays
+        monkeypatch.delenv("JRWI_FAKE_HEARING")
+        db.set_setting("transcript_model", "base.en")
+        scheduler._transcripts(one=300)
+        assert "couldn't be loaded" in db.setting("transcripts_problem")
+        row = db.one("SELECT * FROM transcripts WHERE item_id=300")
+        assert row["aligned"] == 1 and not row["timing"].get("error")
+        assert "be loaded" in web.get("/admin").text   # an apostrophe is escaped in HTML
+    finally:
+        db.set_setting("transcript_model", "small.en")
+        db.set_setting("transcripts_problem", "")
+        db.update("posts", "id", 298, {"documents": before})
+        db.x("DELETE FROM transcripts")

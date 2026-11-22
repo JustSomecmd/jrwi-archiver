@@ -154,6 +154,19 @@ if (live) {
       set("free_bytes", humanSize(s.disk.free_bytes));
       // The last check's problem is old news once a new check is running
       if (s.running) document.querySelectorAll("[data-last-problem]").forEach((el) => { el.hidden = true; });
+      // Work between checks, such as timing transcripts (contract v0.23)
+      const bg = document.querySelector("[data-bg]");
+      if (bg) {
+        if (s.background) {
+          bg.textContent = "";
+          const b = document.createElement("b");
+          b.textContent = `${s.background.phase}: `;
+          bg.append(b, s.background.detail || "");
+        } else if (bg.dataset.had === "1") {
+          location.reload();   // it finished: show what it found
+        }
+        bg.dataset.had = s.background ? "1" : "0";
+      }
       // A check started or ended: reload, so the buttons (Check now or Stop), counts and tables are current
       if ((live.dataset.wasRunning === "1") !== s.running) location.reload();
       live.dataset.wasRunning = s.running ? "1" : "0";
@@ -437,3 +450,103 @@ document.addEventListener("click", (e) => {
 
 // A select that applies itself as soon as it's changed, such as Home's tag picker
 document.querySelectorAll("select[data-autosubmit]").forEach((s) => s.addEventListener("change", () => s.form.submit()));
+
+// A post's transcript under its player, with the line being spoken lit up (contract v0.23). Times are in the
+// timeline of the post whose player shows, so the video and the audio each get their own.
+const tBox = document.querySelector("[data-transcript]");
+const tToggle = document.querySelector("[data-transcript-toggle]");
+if (tBox && tToggle) {
+  const linesEl = tBox.querySelector("[data-tlines]");
+  const noteEl = tBox.querySelector("[data-tnote]");
+  const followBtn = tBox.querySelector("[data-tfollow]");
+  const cache = {};
+  let shown = null, media = null, starts = [], rows = [], current = -1, follow = true;
+  const activeMedia = () => {
+    const panes = [...document.querySelectorAll("[data-pane]")].filter((p) => !p.hidden);
+    for (const p of panes) { const m = p.querySelector("[data-progress]"); if (m) return m; }
+    return document.querySelector("audio[data-progress], video[data-progress]");
+  };
+  const render = (data) => {
+    linesEl.textContent = "";
+    starts = []; rows = []; current = -1;
+    noteEl.textContent = data.aligned ? "" : "Not timed yet: the lines don't follow the sound.";
+    noteEl.hidden = data.aligned;
+    for (const l of data.lines) {
+      const row = document.createElement("p");
+      row.className = "tl" + (l.speaker ? "" : " note") + (data.aligned && l.start === null ? " untimed" : "");
+      if (l.speaker) { const b = document.createElement("b"); b.textContent = l.speaker; row.append(b, " "); }
+      row.append(l.text);
+      if (data.aligned && l.start !== null) {
+        row.dataset.start = l.start;
+        row.title = "Play from here";
+        starts.push(l.start); rows.push(row);
+      }
+      linesEl.append(row);
+    }
+  };
+  const lineAt = (t) => {   // the last line that has started
+    let lo = 0, hi = starts.length - 1, at = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (starts[mid] <= t + 0.15) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+    return at;
+  };
+  const scrollTo = (row) => {
+    linesEl.scrollTop = row.offsetTop - linesEl.offsetTop - linesEl.clientHeight / 3;
+  };
+  const tick = () => {
+    if (!media || tBox.hidden || !starts.length) return;
+    const i = lineAt(media.currentTime);
+    if (i === current) return;
+    if (current >= 0) rows[current].classList.remove("now");
+    current = i;
+    if (i >= 0) { rows[i].classList.add("now"); if (follow) scrollTo(rows[i]); }
+  };
+  const load = async () => {
+    const m = activeMedia();
+    if (!m) return;
+    if (media !== m) {
+      if (media) media.removeEventListener("timeupdate", tick);
+      media = m;
+      media.addEventListener("timeupdate", tick);
+    }
+    const id = m.dataset.progress;
+    if (shown === id) return tick();
+    noteEl.hidden = false;
+    noteEl.textContent = "Loading the transcript…";
+    try {
+      if (!cache[id]) {
+        const r = await fetch(`/api/transcript/${id}`, { cache: "no-store" });
+        if (!r.ok) throw new Error(String(r.status));
+        cache[id] = await r.json();
+      }
+      render(cache[id]);
+      shown = id;
+      follow = true; followBtn.hidden = true;
+      tick();
+    } catch (e) {
+      noteEl.textContent = "The transcript couldn't be loaded.";
+    }
+  };
+  tToggle.addEventListener("click", () => {
+    tBox.hidden = !tBox.hidden;
+    tToggle.setAttribute("aria-expanded", String(!tBox.hidden));
+    if (!tBox.hidden) load();
+  });
+  // Switching between the video and the audio: their lines are timed in their own timelines
+  document.querySelectorAll("[data-switch] button").forEach((b) => b.addEventListener("click", () => {
+    if (!tBox.hidden) setTimeout(load, 0);
+  }));
+  linesEl.addEventListener("click", (e) => {
+    const row = e.target.closest(".tl[data-start]");
+    if (!row || !media) return;
+    media.currentTime = Number(row.dataset.start);
+    media.play().catch(() => {});
+    follow = true; followBtn.hidden = true;
+  });
+  // Scrolling the lines yourself stops them following along, until asked to again
+  const stopFollowing = () => { if (follow && starts.length) { follow = false; followBtn.hidden = false; } };
+  ["wheel", "touchmove", "keydown"].forEach((ev) => linesEl.addEventListener(ev, stopFollowing, { passive: true }));
+  followBtn.addEventListener("click", () => {
+    follow = true; followBtn.hidden = true;
+    if (current >= 0) scrollTo(rows[current]);
+  });
+}

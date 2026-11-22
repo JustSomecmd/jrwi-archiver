@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.22)
+# JRWI archiver API (contract v0.23)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.11.0.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.12.0.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -23,7 +23,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.20:** the Tubedroid chat's suggestions 10 and 11. `POST /api/reparse` starts a re-read of saved pages, and `GET /api/podcast` and `POST /api/podcast/read` give the podcast feed's state and read it now (see Podcast feed). Feature names `reparse` and `podcast`. In the service since 0.10.1.
 - **v0.21:** a change (`POST`, `PUT`, `PATCH`, `DELETE`) that a browser sends from a page on another site, as its `Origin` or `Referer` says, is refused with `403` (see General rules). Apps that send neither header, as Tubedroid's do, aren't affected. A reply's `date_text` is no longer the site's text twice over ("2d 2d"), and its `date` is worked out from it. In the service since 0.10.3.
 - **v0.22:** when to mark an episode watched is a setting in the archiver (asked for by the user on 2026-11-22): a progress save may leave out `finished`, and the archiver then marks the episode watched itself once the save's position is close enough to the end of that version, by the setting (see Progress). The ping gains `watched_left`, the setting in seconds, and lists `watched`. Saves with `finished` work as before. In the service since 0.11.0.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there. A ping without `watched` (before 0.11.0) means a save without `finished` counts as `finished: false`, so apps keep their own rule there.
+- **v0.23:** timed transcripts (the Tubedroid chat's suggestion 12): `GET /api/transcript/{postId}` gives the episode's transcript as lines, each with its speaker and, once the archiver has timed it, when it's said, in that post's timeline (see Transcripts). Items and posts gain `transcript`, and the ping lists `transcript`. The status gains `background`, for timing transcripts between checks. In the service since 0.12.0.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there. A ping without `watched` (before 0.11.0) means a save without `finished` counts as `finished: false`, so apps keep their own rule there. A missing `transcript` means no transcript; a missing `background` means nothing runs in the background.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -37,7 +38,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.11.0", "contract": "0.22", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.12.0", "contract": "0.23", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/reparse` | (v0.20) Re-reads the saved pages with the current parsers, as the admin page's Re-read saved pages does: `202` with `{"started": true}`, or `409` when a check or a re-read is running. It runs as its own job, with `step` `reparse` in the status, and `POST /api/stop` stops it. |
@@ -65,6 +66,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/video/{postId}` | The video file, with HTTP range support. This is a fallback; Jellyfin is the main way to play video. |
 | `GET /api/progress/{postId}` | `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`, in the timeline of the post in the address (see Progress) |
 | `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`, plus `updated_at` for progress sent later (v0.11). Since v0.22 `finished` can be left out, for the archiver to decide (see Progress). Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`: what the archive holds after the save. |
+| `GET /api/transcript/{postId}` | (v0.23) The episode's transcript as lines, timed in this post's timeline once the archiver has timed it (Transcripts, below). `404` when it has none. |
 | `GET /api/events?since=<time>` | New items, hand-overs and failures since a time (default: the last 24 hours) |
 | `GET /api/problems` | Posts that couldn't be fully saved |
 | `GET /api/feed.xml?token=<key>` | Private podcast RSS of all audio |
@@ -75,13 +77,14 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.11.0", "contract": "0.22",
- "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast", "watched"],
+{"name": "jrwi-archiver", "version": "0.12.0", "contract": "0.23",
+ "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast", "watched",
+              "transcript"],
  "watched_left": 120.0}
 ```
 
 - **`contract`:** the version of this contract the archiver follows.
-- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`), `stats` (`GET /api/stats`), since v0.20 `reparse` (`POST /api/reparse`) and `podcast` (`GET /api/podcast` and `POST /api/podcast/read`), and since v0.22 `watched` (the archiver marks episodes watched, below). Later optional parts get names of their own, and apps ignore names they don't know.
+- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`), `stats` (`GET /api/stats`), since v0.20 `reparse` (`POST /api/reparse`) and `podcast` (`GET /api/podcast` and `POST /api/podcast/read`), since v0.22 `watched` (the archiver marks episodes watched, below), and since v0.23 `transcript` (`GET /api/transcript`). Later optional parts get names of their own, and apps ignore names they don't know.
 - **`watched_left` (v0.22):** how many seconds before the end of a version an episode counts as watched, from the archiver's Settings (2 minutes unless changed; 0 means at the very end). See Progress.
 
 **Tags (v0.17):**
@@ -144,6 +147,24 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`fields`:** the fields its episodes carry, such as `itunes:duration`, with how many carry each, most common first, so it shows what the real feed holds.
 - **`POST /api/podcast/read`:** reads the feed at once, even when it said nothing changed last time, and starts a check when a new episode in it isn't in the archive, as Read it now does. It answers `202` straight away and reads in the background, so `GET /api/podcast` a few seconds later shows the result.
 
+**Transcripts (v0.23):** many episodes link a transcript, a Google Doc saved as a PDF, with each speaker's name on a line of its own and no times. The archiver reads it into lines, and times them by hearing the episode once with a speech recognizer and matching the transcript's words to what it heard (see "Timed transcripts").
+
+```json
+{"post_id": 298, "aligned": true, "document": "/files/google-docs/Episode%20transcription%20here.%20%5B1RkmhusZ%5D.pdf",
+ "lines": [{"start": 12.4, "end": 41.9, "speaker": "Zach", "text": "There's something wrong with this town and no one seems to notice. ..."},
+           {"start": 42.1, "end": 42.6, "speaker": "Charlie", "text": "What?"},
+           {"start": 43.0, "end": 43.0, "speaker": null, "text": "[laughter]"},
+           {"start": null, "end": null, "speaker": "Condi", "text": "Okay."}]}
+```
+
+- **Which transcript:** a PDF, linked or attached, of any post of the item whose name says "transcript" or "transcription", the audio post's first. Any post of the item gives the same lines.
+- **`lines`:** in the transcript's order, one per speaker's turn, as written, notes in brackets included. `speaker` is as the transcript writes it, player or character ("Lui", "Troy (Slimecicle)"), or `null` for a line that's a note of its own ("[laughter]") or a group's ("[all the players] Whoa!"). A turn of several paragraphs has them in `text` with a line break between.
+- **`start` and `end`:** seconds in the timeline of the post in the address, as Progress is: the audio's as heard, and the video's moved by `sync.offset` (or the other way round when it was the video's sound that was heard). The line being said at a moment is the last one whose `start` has passed. A note gets the end of the line before it. A line none of whose words were heard sits right after the line before it, or, next to a gap longer than 10 seconds, where it can't be told which side it's on, gets `null` times; it's still shown, untimed.
+- **`aligned`:** `false` until the episode is timed, while timing is off in the archiver's Settings, or when the transcript turned out not to be this episode's (under 30% of its words heard); all times are `null` then, and the text can still be shown.
+- **`document`:** the PDF it was read from.
+- **`transcript`** on items, posts and feed entries: `true` when this endpoint has lines for the item, so a player can show a transcript button without asking.
+- **Size:** a three-hour episode's lines are about 250 KB of JSON, and much less compressed. Apps keep them with an offline download as they keep the post's other files.
+
 **Finding an item by YouTube ID (v0.10):** `GET /api/items?youtube_id=CzZ13VPQOcw` lists the items with a post, of any version, that embeds that YouTube video: usually one item, or none. For a YouTube-only episode, that item's `video.youtube_id` is the ID asked for. An item whose members-only video is archived and that also embeds the YouTube version is listed too, with `video` being the archived file; apps that only want YouTube-only items can check `video.youtube_id`. `/api/posts` takes `youtube_id` the same way, listing the posts themselves.
 
 **Progress (v0.3 and v0.9):** the archive keeps one position and one watched state per item (decisions 8 and 9).
@@ -191,6 +212,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`phase` and `detail`:** the same in words, for showing as they are; the wording can change between versions. `phase` says what the check is doing, such as "Saving new and changed posts" or "Reading the whole members feed" on a full check. `detail` says which post or page, and what part of it: "Page 3: 60 posts read, 2 new", "Through the Fire | Riptide #136 · reading the post", "· downloading the video, 42% of ~4.1 GB", "· saving its comments". Since v0.16; before, they were shorter, such as "archiving posts".
 - **`progress` (`current` since v0.6, `unit` since v0.16):** `done` of `total` in the current step. `unit` says what's counted: `post`, `episode` or `page`, or `null`. The one being worked on is number `done + 1`, so the web app shows "post 3 of 12". `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the step has no known length yet, such as while reading the feed.
 - **Re-reading saved pages** (`step` `reparse`) runs on its own, not as part of a check: by itself after an update that reads pages differently, before the next check, from the admin page, or since v0.20 with `POST /api/reparse`.
+- **`background` (v0.23):** work the archiver does between checks, now timing transcripts: `{"step": "transcripts", "phase": "Timing transcripts", "detail": "Paid In Blood | Riptide #134 · hearing, 42%", "progress": {...}}`, or `null`. It isn't a check: `running` stays `false`, Check now and `POST /api/check` work as ever, and a check takes over from it (it carries on later from where it was). `POST /api/stop` doesn't stop it; the admin page's Pause does, until the next check.
 
 ### Show
 
@@ -239,6 +261,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`season` (v0.11):** the season of an episode in its own show's `episodes` tab: named in the title or a tag, or since v0.13 worked out (see "Episode numbers and seasons"). Since v0.14 also the season of a post in its own show's `aftershow` tab. `null` for other posts, episodes without a number, and Just Rolled With It of a show without episodes. Seasons can each start again at episode 1, so apps show both, as the web app does with "S2 #1" for seasons after the first.
 - **`date`:** the site only shows a date, so the time is midnight UTC.
 - **`published_at` (v0.19):** when it came out, to the second, from the site's private podcast feed once it's set up in the archiver's Settings, or `null`. The feed only lists audio posts, so an item has its audio version's time when its main post has none of its own. `date` stays the site's date, and lists stay in the site's order; apps can show the time of day next to the date.
+- **`transcript` (v0.23):** whether `GET /api/transcript/{id}` has lines for the item (see Transcripts).
 
 **`video` takes one of two shapes, or is `null`:**
 - **Archived file:** `{post_id, jellyfin_path, url, height, size, duration}`. `jellyfin_path` is the path as the archiver sees it. Match Jellyfin items on the `[jrwi-<post id>]` tag in the file name, not on the full path.
@@ -302,6 +325,7 @@ A single post, never merged with its other versions. It has the same fields as a
 - **`removed_from_site` (v0.15):** when the archiver noticed that the site's feed no longer shows the post, such as a members-only episode taken down once its YouTube version is up, or `null`. The archive keeps the post.
 - **`handed_over` (v0.15):** for a members-only post whose video was deleted because TubeArchivist has it: `{"at": "...", "youtube_id": "...", "youtube_url": "...", "post_id": 286882}`, where `post_id` is the post with the YouTube version. Its `video` is then `null`. Otherwise `null`.
 - **`progress` (v0.17):** on a post with a video or audio, and on a handed-over one: the same object `GET /api/progress/{postId}` gives for the post's own `id`, so `position` is in this post's timeline, or `null` when the episode was never played. The archive keeps one record per episode (decisions 8 and 9), so every version shows the same moment, each in its own timeline. `null` on posts without either. In `/api/posts`, `/api/posts/{postId}` and `/api/feed`.
+- **`transcript` (v0.23):** as on items: whether the item this post is in has a transcript.
 
 ### File (v0.15)
 

@@ -128,6 +128,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     archiver = Archiver(db, paths)
     scheduler = Scheduler(archiver, db)
     ser = Serializer(db, paths)
+    scheduler.ser = ser
+    transcripts = scheduler.transcripts
     progress = Progress(db, ser)
 
     @asynccontextmanager
@@ -231,7 +233,16 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             "login_ok": (last["result"] != "login_failed") if last else None,
             "counts": {k: int(counts[k] or 0) for k in ("items", "archived", "locked", "problems")},
             "disk": scheduler.disk(),
+            "background": background_obj(),
         }
+
+    def background_obj() -> dict | None:
+        """Work between checks that a check takes over from: timing transcripts (contract v0.23), or None."""
+        b = scheduler.bg.snapshot()
+        if not b["running"] or b["step"] == "idle":
+            return None
+        return {"step": b["step"], "phase": b["phase"], "detail": b["detail"],
+                "progress": {"done": b["done"], "total": b["total"], "current": b["current"], "unit": b["unit"]}}
 
     def item_out(primary: dict, full: bool = False) -> dict:
         """An item with its progress, in its main post's timeline (contract v0.10)."""
@@ -569,6 +580,25 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             return FileResponse(png, media_type="image/png")
         return files_mod.preview(paths, rel, f)
 
+    @app.get("/api/transcript/{post_id}", dependencies=[Depends(api_auth)])
+    def api_transcript(post_id: int):
+        """The item's transcript as lines, timed in this post's timeline when it's been timed (contract v0.23)."""
+        p = db.post(post_id)
+        if not p:
+            raise HTTPException(404, "no such post")
+        primary = ser.primary_of(post_id) or p
+        members = ser.members(primary)
+        video, audio = ser._video(members), ser._audio(members)
+        timeline = progress._timeline(post_id, video, audio, members) or \
+            progress._timeline(primary["id"], video, audio, members) or ("video" if video else "audio")
+        sync = ser.sync_of(primary, video, audio)
+        out = transcripts.lines_for(primary["id"], timeline, sync["offset"] if sync else 0.0)
+        if out is None:
+            raise HTTPException(404, "no transcript")
+        return JSONResponse({"post_id": post_id, "aligned": out["aligned"],
+                             "document": files_url(out["document"]) if out["document"] else None,
+                             "lines": out["lines"]}, headers={"Cache-Control": "no-store"})
+
     @app.get("/api/progress/{post_id}", dependencies=[Depends(api_auth)])
     def api_progress(post_id: int):
         """Where you are in the episode, in the timeline of this post's video or audio (contract v0.9)."""
@@ -905,8 +935,18 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                       comment_days=settings["comment_refresh_days"],
                       last_reparse=db.setting("last_reparse"),
                       feed_set=bool((settings.get("podcast_feed") or "").strip()), feed=podcast.summary(db),
-                      feed_every=settings["feed_minutes"],
+                      feed_every=settings["feed_minutes"], tx=transcripts_panel(settings),
                       configured=bool(db.setting("site_email") or os.environ.get("JRWI_EMAIL")))
+
+    def transcripts_panel(settings: dict) -> dict:
+        s = transcripts.summary()
+        last = s.get("last")
+        if last:
+            row = db.post(last["item_id"])
+            last["title"] = row["title"] if row else str(last["item_id"])
+        return dict(s, read=settings["transcripts_read"], time=settings["transcripts_time"],
+                    model=transcripts.model(), threads=transcripts.threads(), bg=background_obj(),
+                    paused=scheduler.transcripts_paused)
 
     @app.post("/admin/check", dependencies=[Depends(web_auth)])
     def admin_check(full: str = Form("")):
@@ -961,7 +1001,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             archiver.client.clear_cookies()
         for key, cast in (("check_interval_hours", float), ("max_height", int), ("comment_refresh_days", int),
                           ("request_delay", float), ("recheck_days", int), ("feed_minutes", int),
-                          ("watched_minutes_left", float)):
+                          ("watched_minutes_left", float), ("transcript_threads", int)):
             try:
                 value = cast(form.get(key) or s[key])
                 if key == "watched_minutes_left":
@@ -970,8 +1010,11 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             except ValueError:
                 pass
         for key in ("video", "audio", "images", "attachments", "comments", "google_docs", "public_pages",
-                    "youtube_embeds", "handover"):
+                    "youtube_embeds", "handover", "transcripts_read", "transcripts_time"):
             db.set_setting(key, form.get(key) == "on")
+        if form.get("transcript_model") in ("base.en", "small.en", "medium.en"):
+            db.set_setting("transcript_model", form["transcript_model"])
+        scheduler.transcripts_idle = scheduler.transcripts_paused = False   # what's on may have changed
         if form.get("new_web_password"):
             if len(form["new_web_password"]) >= 8:
                 db.set_setting("web_password_hash", hash_password(form["new_web_password"]))
@@ -1156,7 +1199,16 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if not p:
             raise HTTPException(404, "No such post")
         return render(request, "admin_item.html", p=p, shows=db.q("SELECT id, name FROM shows ORDER BY sort"),
-                      tabs=TABS, queued=queued, st=status_obj(), ho=handover_of(p), error=error)
+                      tabs=TABS, queued=queued, st=status_obj(), ho=handover_of(p), error=error, tx=transcript_of(p))
+
+    def transcript_of(p: dict) -> dict | None:
+        """The transcript of the episode this post is in, for its admin page, or None."""
+        primary = ser.primary_of(p["id"]) or p
+        row = transcripts.row(primary["id"])
+        if not row:
+            return None
+        return {"item_id": primary["id"], "document": row["document"], "lines": row["lines"],
+                "aligned": bool(row["aligned"]), "timing": row["timing"] or {}, "bg": background_obj()}
 
     def handover_of(p: dict) -> dict | None:
         """The hand-over to TubeArchivist of the episode this post is in: which post has (or had) the archived video,
@@ -1218,6 +1270,22 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         db.x("UPDATE posts SET refetch='page' WHERE status IN ('complete', 'partial') AND refetch IS NULL")
         scheduler.check_now()
         return RedirectResponse("/admin", 303)
+
+    @app.post("/admin/transcripts/time", dependencies=[Depends(web_auth)])
+    def admin_transcripts_time(item: str = Form("")):
+        """Time one episode's transcript now: the one given, or the newest not timed yet (the try-it button)."""
+        target = int(item) if item.strip().isdigit() else None
+        if target is not None:
+            primary = ser.primary_of(target)
+            target = primary["id"] if primary else None
+        scheduler.transcript_now(target)
+        back = f"/admin/items/{item}" if item.strip().isdigit() else "/admin"
+        return RedirectResponse(back + "#transcripts", 303)
+
+    @app.post("/admin/transcripts/pause", dependencies=[Depends(web_auth)])
+    def admin_transcripts_pause():
+        scheduler.pause_transcripts()
+        return RedirectResponse("/admin#transcripts", 303)
 
     @app.post("/admin/reparse", dependencies=[Depends(web_auth)])
     def admin_reparse():

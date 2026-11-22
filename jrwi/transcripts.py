@@ -1,0 +1,715 @@
+"""Timed transcripts (contract v0.23).
+
+A transcript is a PDF of a post whose name says it's one: a linked Google Doc or Drive file ("Episode transcription
+here. [1RkmhusZ].pdf") or an attachment. The ones JRWI posts are Word files opened in Google Docs, laid out the same
+way: each speaker's name in bold on a line of its own, then what they said; notes in brackets ("[laughter]") inside a
+speech or on a line of their own. They give no times.
+
+Reading turns the PDF into lines by that layout. Timing hears the episode once with faster-whisper, which gives the
+words it heard with their times, and matches the transcript's words to them: runs of words that agree pin the lines
+down, and a line whose words weren't heard goes right after the line before it, or gets no time when it sits by a long
+gap, where there's no telling which side it belongs on. Mishearing a word costs little, as lines only need some of
+their words found, so a small, quick model does.
+
+Reading and timing run in a child process (python -m jrwi.transcripts), one episode at a time, so the speech model's
+memory (about 1.5 GB for small.en) goes back to the system the moment it's done and the service itself never loads it.
+Hearing goes in ten-minute pieces, each saved as it's done, so a check, the podcast feed or Stop can take over at any
+time and the episode carries on from there later.
+"""
+
+from __future__ import annotations
+
+import bisect
+import gzip
+import json
+import logging
+import os
+import queue
+import re
+import resource
+import subprocess
+import sys
+import threading
+import time
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Callable
+from urllib.parse import unquote
+
+log = logging.getLogger("jrwi.transcripts")
+
+NAMED = re.compile(r"transcri(?:pt|ption)", re.I)
+NOTE = re.compile(r"\[[^\]]*\]")
+NOTE_ONLY = re.compile(r"^\s*(\[[^\]]*\]\s*)+$")
+LEADING_NOTE = re.compile(r"^\s*\[[^\]]*\]")
+COLON_NAME = re.compile(r"^([A-Z][\w .'’()&-]{0,40}?):\s+(\S.*)$")
+SPLIT = re.compile(r"[\s\-‐-―/]+")
+
+CHUNK = 600.0        # seconds of sound heard at a time
+OVERLAP = 10.0       # heard twice where two pieces meet, so no word is cut in half
+PACE = 0.3           # seconds a word usually takes, to go from a heard word back to its line's first
+LONG_GAP = 10.0      # a line with nothing heard, next to a longer gap, gets no time
+MODELS = ("base.en", "small.en", "medium.en")
+VERSION = 1          # of how lines are read and matched: a change re-reads, and re-matches what was heard
+
+
+# ------------------------------------------------------------------ finding
+
+def find(members: list[dict], archive: Path) -> dict | None:
+    """The item's transcript: a PDF whose name says transcript, from its audio post first, then its main post,
+    then its other posts. None when it has none, or it isn't saved."""
+    def rank(i_m):
+        i, m = i_m
+        return (0 if (m.get("media") or {}).get("audio") else 1 if i == 0 else 2, i)
+    for _, m in sorted(enumerate(members), key=rank):
+        for entry in list(m.get("documents") or []) + list(m.get("attachments") or []):
+            name, rel = entry.get("name") or "", entry.get("url") or ""
+            if not rel or not NAMED.search(name) or not name.lower().endswith(".pdf"):
+                continue
+            rel = unquote(rel.removeprefix("/files/"))
+            path = archive / rel
+            if path.is_file():
+                return {"post_id": m["id"], "path": rel, "name": name, "size": path.stat().st_size}
+    return None
+
+
+# ------------------------------------------------------------------ reading (in the child)
+
+def _physical_lines(pdf):
+    for pno, page in enumerate(pdf.pages, 1):
+        lines = []
+        for w in page.extract_words(extra_attrs=["fontname"], use_text_flow=True):
+            bold = "bold" in (w.get("fontname") or "").lower()
+            if lines and abs(w["top"] - lines[-1]["top"]) <= 2:
+                line = lines[-1]
+                line["text"] += " " + w["text"]
+                line["x1"] = w["x1"]
+                line["bold"] = line["bold"] and bold
+            else:
+                lines.append({"top": w["top"], "bottom": w["bottom"], "x1": w["x1"], "text": w["text"],
+                              "bold": bold, "page": pno})
+        page.close()   # pdfplumber keeps every page otherwise: 470 MB for 359 pages rather than 55
+        yield from lines
+
+
+def _paragraphs(pdf):
+    """Lines joined into paragraphs: wrapped lines sit closer together than paragraphs do, and a name is bold."""
+    para, prev = None, None
+    for line in _physical_lines(pdf):
+        if para is None or line["bold"] != para["bold"]:
+            starts = True
+        elif line["page"] != prev["page"]:
+            # Over a page break the paragraph goes on, unless the last line ended short and this one opens with a note
+            starts = prev["x1"] < 480 and bool(LEADING_NOTE.match(line["text"]))
+        else:
+            starts = line["top"] - prev["bottom"] > 8
+        if starts:
+            if para:
+                yield para
+            para = {"text": line["text"], "bold": line["bold"]}
+        else:
+            para["text"] += " " + line["text"]
+        prev = line
+    if para:
+        yield para
+
+
+def read_pdf(path: Path) -> list[dict]:
+    """A transcript's lines: {"speaker", "text"}, a note or a group's line ("[all the players] Whoa!") of its own
+    with speaker None. A transcript without bold names is read as "Name: what they said", or else line by line."""
+    import pdfplumber
+    with pdfplumber.open(path) as pdf:
+        paras = list(_paragraphs(pdf))
+    out, speaker, turn = [], None, None
+    if any(p["bold"] for p in paras):
+        for p in paras:
+            text = p["text"].strip()
+            if p["bold"]:
+                speaker, turn = text, None
+            elif NOTE_ONLY.match(text) or (turn is not None and LEADING_NOTE.match(text)):
+                out.append({"speaker": None, "text": text})
+                turn = None
+            elif turn is None:
+                turn = {"speaker": speaker, "text": text}
+                out.append(turn)
+            else:
+                turn["text"] += "\n" + text
+        return out
+    for p in paras:
+        text = p["text"].strip()
+        m = COLON_NAME.match(text)
+        out.append({"speaker": m.group(1).strip(), "text": m.group(2).strip()} if m else {"speaker": None, "text": text})
+    return out
+
+
+# ------------------------------------------------------------------ matching
+
+def norm(word: str) -> str:
+    w = word.lower().replace("’", "'").replace("‘", "'")
+    return re.sub(r"[^a-z0-9']", "", w).strip("'")
+
+
+def tokens(text: str) -> list[str]:
+    """The words of a line as they'd be heard: notes in brackets aren't spoken."""
+    return [t for t in (norm(w) for w in SPLIT.split(NOTE.sub(" ", text))) if t]
+
+
+def heard_tokens(words: list) -> list[tuple[str, float, float]]:
+    """Heard words as [start, end, word], split the way the transcript's are, each part with its share of the time."""
+    out = []
+    for start, end, word in words:
+        parts = [t for t in (norm(w) for w in SPLIT.split(word)) if t]
+        for k, t in enumerate(parts):
+            step = (end - start) / len(parts)
+            out.append((t, start + k * step, start + (k + 1) * step))
+    return out
+
+
+def _lis(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The longest run of pairs (sorted by their first) whose seconds go up too."""
+    tails: list[int] = []
+    at: list[int] = []
+    prev: list[int | None] = [None] * len(pairs)
+    for k, (_, j) in enumerate(pairs):
+        pos = bisect.bisect_left(tails, j)
+        if pos == len(tails):
+            tails.append(j)
+            at.append(k)
+        else:
+            tails[pos], at[pos] = j, k
+        prev[k] = at[pos - 1] if pos else None
+    out, k = [], (at[-1] if at else None)
+    while k is not None:
+        out.append(pairs[k])
+        k = prev[k]
+    return out[::-1]
+
+
+def _blocks(a: list[str], b: list[str]) -> list[tuple[int, int, int]]:
+    """Runs of words two long word lists share, in order, as (i, j, n). Three words in a row that occur once in each
+    pin the lists to each other, as patience diff does, so a phrase said many times ("okay", "I think") can't pull
+    a stretch out of place; the stretches between are matched as difflib does."""
+    def unique_triples(seq: list[str], lo: int, hi: int) -> dict:
+        seen: dict = {}
+        for k in range(lo, hi - 2):
+            g = (seq[k], seq[k + 1], seq[k + 2])
+            seen[g] = None if g in seen else k
+        return {g: k for g, k in seen.items() if k is not None}
+
+    out: list[tuple[int, int, int]] = []
+
+    def fill(alo: int, ahi: int, blo: int, bhi: int, depth: int) -> None:
+        if alo >= ahi or blo >= bhi:
+            return
+        if (ahi - alo) * (bhi - blo) > 4_000_000 and depth < 4:
+            ua, ub = unique_triples(a, alo, ahi), unique_triples(b, blo, bhi)
+            anchors = _lis(sorted((ua[g], ub[g]) for g in ua.keys() & ub.keys()))
+            if anchors:
+                ca, cb = alo, blo
+                for i, j in anchors:
+                    if i < ca or j < cb:
+                        continue
+                    fill(ca, i, cb, j, depth + 1)
+                    out.append((i, j, 3))
+                    ca, cb = i + 3, j + 3
+                fill(ca, ahi, cb, bhi, depth + 1)
+                return
+        for i, j, n in SequenceMatcher(None, a[alo:ahi], b[blo:bhi], autojunk=False).get_matching_blocks():
+            if n:
+                out.append((alo + i, blo + j, n))
+
+    fill(0, len(a), 0, len(b), 0)
+    merged: list[tuple[int, int, int]] = []
+    for i, j, n in sorted(out):
+        if merged and merged[-1][0] + merged[-1][2] == i and merged[-1][1] + merged[-1][2] == j:
+            merged[-1] = (merged[-1][0], merged[-1][1], merged[-1][2] + n)
+        else:
+            merged.append((i, j, n))
+    return merged
+
+
+def match(lines: list[dict], words: list) -> dict:
+    """Each line's start and end from the words heard. Returns {"lines": [...], "placed", "unplaced", "found"}:
+    "found" is the share of the transcript's words that were heard, which says whether it's this episode's."""
+    ref = [(t, i) for i, line in enumerate(lines) for t in tokens(line["text"])]
+    hyp = heard_tokens(words)
+    out = [dict(line, start=None, end=None) for line in lines]
+    if not ref or not hyp:
+        return {"lines": out, "placed": 0, "unplaced": len(lines), "found": 0.0}
+    blocks = _blocks([t for t, _ in ref], [t for t, *_ in hyp])
+    at: list[tuple[float, float] | None] = [None] * len(ref)
+    for a, b, n in blocks:
+        if n >= 2:   # two words or more in a row agree: an anchor
+            for k in range(n):
+                at[a + k] = hyp[b + k][1:]
+    anchored = [k for k in range(len(ref)) if at[k] is not None]
+    for a, b, n in blocks:
+        if n == 1 and at[a] is None:
+            # One word alone counts only where it falls between the anchors around it, at a likely pace
+            j = bisect.bisect(anchored, a)
+            lo = at[anchored[j - 1]][0] if j > 0 else float("-inf")
+            hi = at[anchored[j]][0] if j < len(anchored) else float("inf")
+            span = anchored[j] - anchored[j - 1] if 0 < j < len(anchored) else 50
+            if lo <= hyp[b][1] <= hi and hi - lo < span * 1.5 + 30:
+                at[a] = hyp[b][1:]
+    found = sum(1 for x in at if x is not None) / len(ref)
+    first_ref: dict[int, int] = {}
+    last_ref: dict[int, int] = {}
+    for k, (_, i) in enumerate(ref):
+        first_ref.setdefault(i, k)
+        last_ref[i] = k
+    first: dict[int, float] = {}
+    last: dict[int, float] = {}
+    for k, (_, i) in enumerate(ref):
+        if at[k] is not None:
+            if i not in first:
+                first[i] = max(0.0, at[k][0] - (k - first_ref[i]) * PACE)
+            last[i] = at[k][1] + (last_ref[i] - k) * PACE
+    n = len(out)
+    starts: list[float | None] = [None] * n
+    ends: list[float | None] = [None] * n
+    prev = 0.0
+    for i in range(n):   # starts in order: a line can't begin before the one above it
+        if i in first:
+            starts[i] = max(first[i], prev)
+            ends[i] = max(starts[i], last[i])
+            prev = starts[i]
+    next_known: list[float | None] = [None] * n
+    upcoming = None
+    for i in range(n - 1, -1, -1):
+        next_known[i] = upcoming
+        if starts[i] is not None:
+            upcoming = starts[i]
+    prev_end = 0.0
+    for i in range(n):
+        if starts[i] is None:
+            # Nothing of it heard: right after the line before, unless a long gap follows, where it can't be told
+            # which side it's on, so it's shown without a time
+            at = prev_end + 0.3 if i else 0.0
+            nxt = next_known[i]
+            if nxt is not None and nxt - at > LONG_GAP:
+                continue
+            if nxt is not None:
+                at = min(at, nxt)
+            starts[i] = ends[i] = at
+        prev_end = ends[i]
+    for i in range(n):
+        if starts[i] is not None:
+            nxt = next_known[i]
+            end = ends[i] if nxt is None else min(ends[i], max(starts[i], nxt))
+            out[i]["start"], out[i]["end"] = round(starts[i], 2), round(end, 2)
+    placed = sum(1 for x in out if x["start"] is not None)
+    return {"lines": out, "placed": placed, "unplaced": len(out) - placed, "found": round(found, 3)}
+
+
+# ------------------------------------------------------------------ hearing (in the child)
+
+def _decode(audio: Path, start: float, length: float):
+    """A piece of the sound as 16 kHz mono floats, as Whisper takes it: about 38 MB for ten minutes."""
+    import numpy as np
+    from .site.download import ffmpeg_exe
+    exe = ffmpeg_exe() or "ffmpeg"
+    raw = subprocess.run([exe, "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(audio),
+                          "-ac", "1", "-ar", "16000", "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def _emit(msg: dict) -> None:
+    msg["rss_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def hear(audio: Path, total: float, start_at: float, model_name: str, threads: int, models_dir: Path,
+         hotwords: str | None) -> None:
+    """Hear the sound from start_at to the end, a piece at a time, writing each piece's words as a line of JSON."""
+    fake = os.environ.get("JRWI_FAKE_HEARING")
+    if fake:   # tests: the words come from a file, in the pieces they'd come in
+        words = json.loads(Path(fake).read_text())
+        t = start_at
+        while t < total:
+            _emit({"from": t, "to": min(t + CHUNK, total),
+                   "words": [w for w in words if t <= w[0] < t + CHUNK]})
+            t += CHUNK
+        return
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    from faster_whisper import WhisperModel
+    _emit({"loading": model_name})
+    began = time.monotonic()
+    model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=threads,
+                         download_root=str(models_dir))
+    _emit({"ready": round(time.monotonic() - began, 1)})
+    t = start_at
+    while t < total - 0.5:
+        length = min(CHUNK + OVERLAP, total - t)
+        lo = t + OVERLAP / 2 if t > 0 else 0.0
+        hi = t + CHUNK + OVERLAP / 2 if t + CHUNK < total else float("inf")
+        segments, _ = model.transcribe(_decode(audio, t, length), language="en", beam_size=1, word_timestamps=True,
+                                       vad_filter=True, condition_on_previous_text=False, hotwords=hotwords or None)
+        words = []
+        for seg in segments:
+            for w in seg.words or []:
+                s = t + w.start
+                if lo <= s < hi and w.word.strip():
+                    words.append([round(s, 2), round(t + w.end, 2), w.word.strip()])
+        _emit({"from": t, "to": min(t + CHUNK, total), "words": words})
+        t += CHUNK
+
+
+def _main(argv: list[str]) -> int:
+    cmd = argv[0]
+    if cmd == "read":
+        lines = read_pdf(Path(argv[1]))
+        Path(argv[2]).write_text(json.dumps(lines, ensure_ascii=False))
+        _emit({"lines": len(lines)})
+    elif cmd == "match":
+        lines = json.loads(Path(argv[1]).read_text())
+        words = json.loads(gzip.decompress(Path(argv[2]).read_bytes()))["words"]
+        result = match(lines, words)
+        Path(argv[3]).write_text(json.dumps(result, ensure_ascii=False))
+        _emit({k: result[k] for k in ("placed", "unplaced", "found")})
+    elif cmd == "hear":
+        audio, total, start_at, model_name, threads, models_dir = argv[1:7]
+        hear(Path(audio), float(total), float(start_at), model_name, int(threads), Path(models_dir),
+             argv[7] if len(argv) > 7 else None)
+    return 0
+
+
+# ------------------------------------------------------------------ the job (in the service)
+
+class Yielded(Exception):
+    """Something else needs the scheduler: what was heard so far is kept, and the episode carries on later."""
+
+
+class ModelProblem(Exception):
+    """The speech model couldn't be downloaded or loaded: no episode is to blame, so the job stops."""
+
+
+class Transcripts:
+    def __init__(self, db, paths, status) -> None:
+        self.db = db
+        self.paths = paths
+        self.status = status
+        self.dir = paths.archive / "transcripts"
+
+    # files
+    def lines_file(self, item_id: int) -> Path:
+        return self.dir / f"{item_id}.json.gz"
+
+    def heard_file(self, item_id: int) -> Path:
+        return self.dir / f"{item_id}.heard.json.gz"
+
+    @staticmethod
+    def _write(path: Path, data) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_bytes(gzip.compress(json.dumps(data, ensure_ascii=False).encode(), 6))
+        tmp.replace(path)
+
+    @staticmethod
+    def _load(path: Path):
+        try:
+            return json.loads(gzip.decompress(path.read_bytes()))
+        except (OSError, ValueError):
+            return None
+
+    def has(self, item_id: int) -> bool:
+        return self.db.one("SELECT 1 FROM transcripts WHERE item_id=?", (item_id,)) is not None
+
+    def row(self, item_id: int) -> dict | None:
+        return self.db.one("SELECT * FROM transcripts WHERE item_id=?", (item_id,))
+
+    def threads(self) -> int:
+        try:
+            n = int(self.db.setting("transcript_threads") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        return n if n > 0 else max(1, min(8, (os.cpu_count() or 2) // 2))
+
+    def model(self) -> str:
+        m = self.db.setting("transcript_model") or "small.en"
+        return m if m in MODELS else "small.en"
+
+    # the sound to hear
+    def sound(self, members: list[dict]) -> dict | None:
+        """The archived audio, or else the archived video's sound: {path, timeline, post_id, size, duration}."""
+        for part, root in (("audio", self.paths.archive), ("video", self.paths.media)):
+            for m in members:
+                media = (m.get("media") or {}).get(part)
+                if media and media.get("path") and (root / media["path"]).is_file():
+                    f = root / media["path"]
+                    return {"path": str(f), "timeline": part, "post_id": m["id"], "size": f.stat().st_size,
+                            "duration": media.get("duration")}
+        return None
+
+    def items(self, ser) -> list[tuple[dict, list[dict], dict]]:
+        """Every item with a transcript, newest first."""
+        out = []
+        for primary in self.db.q("SELECT * FROM posts WHERE pair_id IS NULL AND status IN ('complete', 'partial') "
+                                 "ORDER BY published DESC, id DESC"):
+            members = ser.members(primary)
+            doc = find(members, self.paths.archive)
+            if doc:
+                out.append((primary, members, doc))
+        return out
+
+    # children
+    def _child(self, args: list[str], on_line: Callable[[dict], None] | None, should_yield: Callable[[], bool]) -> dict:
+        """Run python -m jrwi.transcripts with args at a low priority, handing each line it writes to on_line.
+        Stops it when should_yield() says so (Yielded). Returns the last line."""
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", OMP_NUM_THREADS=str(self.threads()),
+                   HF_HOME=str(self.paths.data / "models" / "hf"), HF_HUB_DISABLE_TELEMETRY="1")
+        proc = subprocess.Popen([sys.executable, "-m", "jrwi.transcripts", *args], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=env,
+                                preexec_fn=lambda: os.nice(10))
+        lines: queue.Queue = queue.Queue()
+        reader = threading.Thread(target=lambda: [lines.put(x) for x in proc.stdout] and None, daemon=True)
+        reader.start()
+        errors: list[str] = []
+        err_reader = threading.Thread(target=lambda: errors.extend(proc.stderr), daemon=True)
+        err_reader.start()
+        last: dict = {}
+        try:
+            while True:
+                try:
+                    line = lines.get(timeout=1)
+                except queue.Empty:
+                    if proc.poll() is not None and not reader.is_alive():
+                        break
+                    if should_yield():
+                        raise Yielded()
+                    continue
+                try:
+                    last = json.loads(line)
+                except ValueError:
+                    continue
+                if on_line:
+                    on_line(last)
+                if should_yield():
+                    raise Yielded()
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        proc.wait()
+        err_reader.join(timeout=2)
+        if proc.returncode:
+            tail = "".join(errors).strip().splitlines()[-1:] or [f"exit {proc.returncode}"]
+            raise RuntimeError(tail[0][:300])
+        return last
+
+    # reading
+    def read(self, primary: dict, doc: dict, should_yield) -> dict:
+        tmp = self.dir / f"{primary['id']}.lines.tmp"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self._child(["read", str(self.paths.archive / doc["path"]), str(tmp)], None, should_yield)
+        lines = json.loads(tmp.read_text())
+        tmp.unlink(missing_ok=True)
+        self._write(self.lines_file(primary["id"]), {"version": VERSION, "document": doc, "aligned": False,
+                                                     "timeline": None, "lines": [dict(l, start=None, end=None)
+                                                                                 for l in lines]})
+        self.db.upsert("transcripts", "item_id", {
+            "item_id": primary["id"], "document": doc["path"], "doc_size": doc["size"], "lines": len(lines),
+            "aligned": 0, "timing": {}, "updated_at": _now()})
+        return {"lines": len(lines)}
+
+    # timing
+    def time(self, primary: dict, members: list[dict], should_yield, progress=None) -> dict:
+        """Hear the item's sound (carrying on from what was heard before) and time its lines."""
+        item_id = primary["id"]
+        stored = self._load(self.lines_file(item_id)) or {}
+        lines = [{"speaker": l["speaker"], "text": l["text"]} for l in stored.get("lines") or []]
+        sound = self.sound(members)
+        if not lines or not sound:
+            raise RuntimeError("no transcript lines" if not lines else "no archived audio or video to hear")
+        total = float(sound["duration"] or 0)
+        if not total:
+            from .sync import probe_duration
+            total = float(probe_duration(Path(sound["path"])) or 0)
+        if not total:
+            raise RuntimeError("the sound's length isn't known")
+        model = self.model()
+        key = {"path": sound["path"], "size": sound["size"], "model": model}
+        heard = self._load(self.heard_file(item_id)) or {}
+        if heard.get("key") != key:
+            heard = {"key": key, "until": 0.0, "words": [], "took": 0.0, "peak_mb": 0}
+        names = sorted({l["speaker"] for l in lines if l["speaker"]})[:40]
+        hot = " ".join(names)[:400] or None
+        if heard["until"] < total - 0.5:
+            began = time.monotonic()
+
+            def piece(msg: dict) -> None:
+                heard["peak_mb"] = max(heard.get("peak_mb") or 0, int(msg.get("rss_mb") or 0))
+                if "words" in msg:
+                    heard["words"].extend(msg["words"])
+                    heard["until"] = msg["to"]
+                    heard["took"] = round(heard.get("took", 0.0) + (time.monotonic() - piece.since), 1)
+                    piece.since = time.monotonic()
+                    self._write(self.heard_file(item_id), heard)
+                    if progress:
+                        progress(heard["until"] / total, "hearing")
+                elif "loading" in msg and progress:
+                    progress(heard["until"] / total, "loading the speech model (downloaded once, the first time)")
+                elif "ready" in msg:
+                    heard["load"] = msg["ready"]
+                    piece.ready = True
+                    piece.since = time.monotonic()
+            piece.since = began
+            piece.ready = bool(os.environ.get("JRWI_FAKE_HEARING"))
+            if progress:
+                progress(heard["until"] / total, "hearing")
+            try:
+                self._child(["hear", sound["path"], str(total), str(heard["until"]), model, str(self.threads()),
+                             str(self.paths.data / "models"), *([hot] if hot else [])], piece, should_yield)
+            except RuntimeError as e:
+                if not piece.ready:
+                    raise ModelProblem(f"the speech model {model} couldn't be loaded: {e}") from None
+                raise
+        if progress:
+            progress(1.0, "matching the lines to what was heard")
+        src = self.dir / f"{item_id}.match-in.json"
+        dest = self.dir / f"{item_id}.match-out.json"
+        src.write_text(json.dumps(lines, ensure_ascii=False))
+        try:
+            self._child(["match", str(src), str(self.heard_file(item_id)), str(dest)], None, should_yield)
+            result = json.loads(dest.read_text())
+        finally:
+            src.unlink(missing_ok=True)
+            dest.unlink(missing_ok=True)
+        # A transcript that isn't this episode's (a link to another one) matches next to nothing
+        aligned = result["found"] >= 0.3 and result["placed"] >= 0.5 * max(1, len(lines))
+        timing = {"timeline": sound["timeline"], "sound_post": sound["post_id"], "duration": round(total, 1),
+                  "sound_size": sound["size"], "model": model, "threads": self.threads(), "took": heard["took"],
+                  "load": heard.get("load"), "peak_mb": heard["peak_mb"],
+                  "heard": len(heard["words"]), "found": result["found"], "placed": result["placed"],
+                  "unplaced": result["unplaced"], "at": _now(),
+                  "error": None if aligned else (f"only {round(result['found'] * 100)}% of the transcript's words "
+                                                 "were heard, so it doesn't seem to be this episode's")}
+        self._write(self.lines_file(item_id), {"version": VERSION, "document": stored.get("document"),
+                                               "aligned": aligned, "timeline": sound["timeline"],
+                                               "lines": result["lines"] if aligned else
+                                               [dict(l, start=None, end=None) for l in lines]})
+        self.db.update("transcripts", "item_id", item_id, {"aligned": int(aligned), "timing": timing,
+                                                           "updated_at": _now()})
+        return timing
+
+    # what needs doing
+    def to_read(self, found: list) -> list:
+        out = []
+        for primary, members, doc in found:
+            row = self.row(primary["id"])
+            stored = self._load(self.lines_file(primary["id"])) if row else None
+            if not row or row["document"] != doc["path"] or row["doc_size"] != doc["size"] or not stored \
+                    or stored.get("version") != VERSION:
+                out.append((primary, members, doc))
+        return out
+
+    def to_time(self, found: list) -> list:
+        out = []
+        for primary, members, doc in found:
+            row = self.row(primary["id"])
+            sound = self.sound(members)
+            if not row or not sound:
+                continue
+            timing = row["timing"] or {}
+            if timing.get("at") and timing.get("sound_size", sound["size"]) == sound["size"]:
+                continue   # done, or tried: a mismatch stays as it is until the transcript or the sound changes
+            out.append((primary, members, doc))
+        return out
+
+    def newest_untimed(self, found: list) -> int | None:
+        """The newest item with a transcript that has sound to hear and hasn't been timed or tried, read or not."""
+        for primary, members, doc in found:
+            row = self.row(primary["id"])
+            if self.sound(members) and (not row or (not row["aligned"] and not (row["timing"] or {}).get("at"))):
+                return primary["id"]
+        return None
+
+    def forget_gone(self, found: list) -> None:
+        keep = {p["id"] for p, _, _ in found}
+        for row in self.db.q("SELECT item_id FROM transcripts"):
+            if row["item_id"] not in keep:
+                self.db.x("DELETE FROM transcripts WHERE item_id=?", (row["item_id"],))
+                self.lines_file(row["item_id"]).unlink(missing_ok=True)
+                self.heard_file(row["item_id"]).unlink(missing_ok=True)
+
+    def run(self, ser, should_yield, one: int | None = None, read_on: bool = True, timing_on: bool = False) -> dict:
+        """Read new and changed transcripts, then time them (newest first) when timing is on, or the one asked for.
+        Returns what was done; raises Yielded when something else needs the scheduler."""
+        found = self.items(ser)
+        self.forget_gone(found)
+        done = {"read": 0, "timed": 0}
+        pending = self.to_read(found) if read_on else []
+        if one is not None:
+            pending = [x for x in pending if x[0]["id"] == one]
+        if pending:
+            self.status.begin("transcripts", total=len(pending), phase="Reading transcripts")
+            for i, (primary, members, doc) in enumerate(pending):
+                self.status.set(done=i, detail=primary["title"] or str(primary["id"]))
+                try:
+                    self.read(primary, doc, should_yield)
+                    done["read"] += 1
+                except Yielded:
+                    raise
+                except Exception as e:
+                    log.warning("reading the transcript of %s failed: %s", primary["id"], e)
+        if one is not None:
+            work = [x for x in found if x[0]["id"] == one]
+        else:
+            work = self.to_time(found) if timing_on else []
+        if work:
+            self.status.begin("transcripts", total=len(work), phase="Timing transcripts")
+            for i, (primary, members, doc) in enumerate(work):
+                title = primary["title"] or str(primary["id"])
+
+                def progress(share: float, what: str, i=i, title=title) -> None:
+                    self.status.set(done=i, current=round(min(1.0, share), 3),
+                                    detail=f"{title} · {what}, {round(share * 100)}%")
+                try:
+                    self.time(primary, members, should_yield, progress)
+                    done["timed"] += 1
+                    self.db.set_setting("transcripts_problem", "")
+                except (Yielded, ModelProblem):
+                    raise
+                except Exception as e:
+                    log.warning("timing the transcript of %s failed: %s", primary["id"], e)
+                    self.db.update("transcripts", "item_id", primary["id"], {
+                        "timing": {"error": str(e)[:300], "at": _now()}, "updated_at": _now()})
+        return done
+
+    # for the API
+    def lines_for(self, item_id: int, timeline: str | None, offset: float) -> dict | None:
+        """The lines, with times moved to the timeline asked for (audio = video + offset, as sync says)."""
+        stored = self._load(self.lines_file(item_id))
+        if not stored:
+            return None
+        shift = 0.0
+        if stored.get("aligned") and timeline and stored.get("timeline") and timeline != stored["timeline"]:
+            shift = -offset if stored["timeline"] == "audio" else offset
+        lines = []
+        for l in stored["lines"]:
+            s, e = l.get("start"), l.get("end")
+            if s is not None and stored.get("aligned"):
+                s, e = round(max(0.0, s + shift), 2), round(max(0.0, (e if e is not None else s) + shift), 2)
+            else:
+                s = e = None
+            lines.append({"start": s, "end": e, "speaker": l.get("speaker"), "text": l.get("text")})
+        return {"aligned": bool(stored.get("aligned")), "lines": lines, "document": (stored.get("document") or {}).get("path")}
+
+    def summary(self) -> dict:
+        rows = self.db.q("SELECT * FROM transcripts")
+        timed = [r for r in rows if (r["timing"] or {}).get("at") and (r["timing"] or {}).get("took") is not None]
+        last = max(timed, key=lambda r: r["timing"]["at"], default=None)
+        return {"count": len(rows), "aligned": sum(1 for r in rows if r["aligned"]),
+                "problem": self.db.setting("transcripts_problem") or None,
+                "failed": sum(1 for r in rows if (r["timing"] or {}).get("error")),
+                "last": dict(last["timing"], item_id=last["item_id"]) if last else None}
+
+
+def _now() -> str:
+    from .db import now
+    return now()
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))
