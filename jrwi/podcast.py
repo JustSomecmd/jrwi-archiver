@@ -309,4 +309,4 @@ def summary(db: Db) -> dict:
             "times_used": db.one("SELECT COUNT(*) AS n FROM posts WHERE published_at IS NOT NULL")["n"],
             "fields": sorted(fields.items(), key=lambda kv: (-kv[1], kv[0])),
             "unmatched": [r for r in listed if not r["post_id"]][:20],
-            "latest": listed[:8]}
+            "latest": listed[:10]}

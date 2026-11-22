@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.19)
+# JRWI archiver API (contract v0.20)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.10.0.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.10.1.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -20,7 +20,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.17:** the Tubedroid chat's suggestions 3 to 9. `GET /api/ping` gains `contract` and `features` (see Ping). Posts gain `progress` (see Post). `GET /api/tags`, and `tag` on `GET /api/posts` and `GET /api/items`, whose `q` now also finds the names of a post's tags. `GET /api/feed` (see Feed), `GET /api/continue` (see Continue watching), `POST /api/stop` and `GET /api/stats` (see Stats). In the service since 0.9.7.
 - **v0.18:** comment authors gain `id`, the member's ID on the site (see Comment), and `GET /api/stats` counts commenters by it, with `id` on each of the top ten. In the service since 0.9.8.
 - **v0.19:** items, posts and item `versions` gain `published_at`, the time of day they came out, from the site's private podcast feed (see Item). Files in a shared Google Drive folder a post links to are saved, and files and `documents` gain `folder`, where in that folder each is (see File). In the service since 0.10.0.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`.
+- **v0.20:** the Tubedroid chat's suggestions 10 and 11. `POST /api/reparse` starts a re-read of saved pages, and `GET /api/podcast` and `POST /api/podcast/read` give the podcast feed's state and read it now (see Podcast feed). Feature names `reparse` and `podcast`. In the service since 0.10.1.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -33,10 +34,13 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.0", "contract": "0.19", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.1", "contract": "0.20", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
+| `POST /api/reparse` | (v0.20) Re-reads the saved pages with the current parsers, as the admin page's Re-read saved pages does: `202` with `{"started": true}`, or `409` when a check or a re-read is running. It runs as its own job, with `step` `reparse` in the status, and `POST /api/stop` stops it. |
 | `POST /api/stop` | (v0.17) Stops the check, or the re-read of saved pages, that's running, as the admin page's Stop does: `202` with `{"stopping": true}`, or `409` when nothing is running. The status shows it running until it has stopped, then `last_result` is `stopped`. |
+| `GET /api/podcast` | (v0.20) The site's podcast feed as the admin page's panel shows it, never with its address (Podcast feed, below) |
+| `POST /api/podcast/read` | (v0.20) Reads the podcast feed now, as the panel's Read it now does: `202` with `{"reading": true}`, or `409` when no feed is set up. It reads in the background; `GET /api/podcast` shows the result a moment later. |
 | `GET /api/stats` | (v0.17) The archive's own numbers: its last checks, its files by type, and its comments (Stats, below) |
 | `GET /api/shows` | Shows that have items, in the site's menu order, then shows from the site's tags or added on the admin page, `other` last. `?include_empty=true` lists all of them. |
 | `GET /api/shows/{showId}` | One show, with `tabs` and `seasons` |
@@ -68,12 +72,12 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.10.0", "contract": "0.19",
- "features": ["post_progress", "tags", "continue", "stop", "feed", "stats"]}
+{"name": "jrwi-archiver", "version": "0.10.1", "contract": "0.20",
+ "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast"]}
 ```
 
 - **`contract`:** the version of this contract the archiver follows.
-- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`) and `stats` (`GET /api/stats`). Later optional parts get names of their own, and apps ignore names they don't know.
+- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`), `stats` (`GET /api/stats`), and since v0.20 `reparse` (`POST /api/reparse`) and `podcast` (`GET /api/podcast` and `POST /api/podcast/read`). Later optional parts get names of their own, and apps ignore names they don't know.
 
 **Tags (v0.17):**
 - **`GET /api/tags`:** the site's tags that archived posts in the user's tier carry, with how many such posts carry each, sorted by name whatever the capitals, as the web feed's tag picker lists them.
@@ -112,6 +116,28 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`files`:** the archive's files by type (as File `type`) and extension, as Admin > Files counts them: how many and how big. YouTube videos and Google links that couldn't be saved are counted with `ext` `YouTube` or `link`, and `bytes` 0.
 - **`comments`:** every comment and reply in the archive (`total`), how many of them are replies, how many members commented, and the ten who commented most, with how many comments and the likes on them, in the shape of a Comment's `author`.
   - **Members (v0.18):** told apart by `author.id`, so a member who changed their name counts once. `name`, `avatar`, `badges` and `color` are as on their newest comment, so the name is the one they use now. A comment without an `id` (the user's own) goes with the member last seen with that name, or else counts by name, with `id` `null`. Before v0.18, members were told apart by name.
+
+**Podcast feed (v0.20):** `GET /api/podcast` gives the state of the site's private podcast feed (see "The site's podcast feed"), as the admin page's Podcast feed panel shows it. The feed's address is never given, nor anything that could hold its key.
+
+```json
+{"set_up": true, "last_read": "2026-11-22T13:45:00+00:00", "ok": true, "error": null, "title": "JRWI Members",
+ "count": 412, "matched": 398, "with_time": 398, "times_used": 398, "gone": 0, "every_minutes": 15,
+ "last_trigger": {"at": "2026-11-22T11:02:00+00:00", "titles": ["Through the Fire | Riptide #136 (AUDIO ONLY)"]},
+ "latest": [{"title": "Through the Fire | Riptide #136 (AUDIO ONLY)", "published": "2026-11-22T11:00:00+00:00",
+             "post_id": 298, "duration": 11695}],
+ "unmatched": [{"title": "Bonus: Tavern Talk", "published": "2026-11-01T16:00:00+00:00"}],
+ "fields": [{"name": "enclosure", "count": 412}, {"name": "itunes:duration", "count": 412}]}
+```
+
+- **`set_up`:** whether the feed's address is in the archiver's Settings. When it's `false`, nothing else is given: `{"set_up": false}`.
+- **`last_read`, `ok`, `error` and `title`:** when it was last read, whether that worked, the error if not (naming only the host), and the feed's title. All `null` before the first read.
+- **`count`, `matched` and `with_time`:** the episodes in the feed, those that are posts in the archive, and those that say their time of day. `gone` counts episodes the feed listed once and no longer does; `times_used` the posts in the archive that have a `published_at` from it.
+- **`every_minutes`:** how often it's read between checks, or `null` when reading it between checks is off (the setting is 0).
+- **`last_trigger`:** the last check a new episode in it started, with the episodes' titles, or `null`.
+- **`latest`:** its newest episodes, up to 10, newest first: `post_id` when it's matched to a post in the archive, else `null`, and `duration` in seconds when the feed gives one.
+- **`unmatched`:** up to 20 episodes that aren't posts in the archive, newest first.
+- **`fields`:** the fields its episodes carry, such as `itunes:duration`, with how many carry each, most common first, so it shows what the real feed holds.
+- **`POST /api/podcast/read`:** reads the feed at once, even when it said nothing changed last time, and starts a check when a new episode in it isn't in the archive, as Read it now does. It answers `202` straight away and reads in the background, so `GET /api/podcast` a few seconds later shows the result.
 
 **Finding an item by YouTube ID (v0.10):** `GET /api/items?youtube_id=CzZ13VPQOcw` lists the items with a post, of any version, that embeds that YouTube video: usually one item, or none. For a YouTube-only episode, that item's `video.youtube_id` is the ID asked for. An item whose members-only video is archived and that also embeds the YouTube version is listed too, with `video` being the archived file; apps that only want YouTube-only items can check `video.youtube_id`. `/api/posts` takes `youtube_id` the same way, listing the posts themselves.
 
@@ -158,7 +184,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`step` (v0.16):** what the check is doing, as a stable name for apps to act on: `starting`, `login`, `feed` (reading the members feed), `pages` (the site's own pages), `posts` (saving new and changed posts), `comments` (new comments on recent posts), `tubearchivist` (asking TubeArchivist about episodes now on YouTube), `line_up` (lining up video and audio), `finishing` (sorting posts and updating the Jellyfin folder), `reparse` (re-reading saved pages, its own job) or `idle`.
 - **`phase` and `detail`:** the same in words, for showing as they are; the wording can change between versions. `phase` says what the check is doing, such as "Saving new and changed posts" or "Reading the whole members feed" on a full check. `detail` says which post or page, and what part of it: "Page 3: 60 posts read, 2 new", "Through the Fire | Riptide #136 · reading the post", "· downloading the video, 42% of ~4.1 GB", "· saving its comments". Since v0.16; before, they were shorter, such as "archiving posts".
 - **`progress` (`current` since v0.6, `unit` since v0.16):** `done` of `total` in the current step. `unit` says what's counted: `post`, `episode` or `page`, or `null`. The one being worked on is number `done + 1`, so the web app shows "post 3 of 12". `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the step has no known length yet, such as while reading the feed.
-- **Re-reading saved pages** (`step` `reparse`) runs on its own, not as part of a check: by itself after an update that reads pages differently, before the next check, or from the admin page.
+- **Re-reading saved pages** (`step` `reparse`) runs on its own, not as part of a check: by itself after an update that reads pages differently, before the next check, from the admin page, or since v0.20 with `POST /api/reparse`.
 
 ### Show
 

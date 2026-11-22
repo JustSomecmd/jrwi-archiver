@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -300,6 +301,46 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if scheduler.check_now(full=full):
             return JSONResponse({"started": True}, status_code=202)
         return JSONResponse({"error": "a check is already running"}, status_code=409)
+
+    @app.post("/api/reparse", dependencies=[Depends(api_auth)])
+    def api_reparse():
+        """Re-reads the saved pages, as the admin page's Re-read saved pages does (contract v0.20)."""
+        if scheduler.reparse_now():
+            return JSONResponse({"started": True}, status_code=202)
+        return JSONResponse({"error": "a check or a re-read is running"}, status_code=409)
+
+    def podcast_out() -> dict:
+        """The podcast feed's state, as the admin page's panel shows it, never with its address (contract v0.20)."""
+        settings = db.settings()
+        if not (settings.get("podcast_feed") or "").strip():
+            return {"set_up": False}
+        f = podcast.summary(db)
+        st = f["state"]
+        minutes = int(settings.get("feed_minutes") or 0)
+        return {"set_up": True, "last_read": st.get("last_read"), "ok": st.get("ok"), "error": st.get("error"),
+                "title": st.get("title"), "count": f["count"], "matched": f["matched"], "with_time": f["with_time"],
+                "times_used": f["times_used"], "gone": f["gone"], "every_minutes": minutes if minutes > 0 else None,
+                "last_trigger": st.get("last_trigger"),
+                "latest": [{"title": r["title"], "published": r["published"], "post_id": r["post_id"],
+                            "duration": r["duration"]} for r in f["latest"]],
+                "unmatched": [{"title": r["title"], "published": r["published"]} for r in f["unmatched"]],
+                "fields": [{"name": n, "count": c} for n, c in f["fields"]]}
+
+    @app.get("/api/podcast", dependencies=[Depends(api_auth)])
+    def api_podcast():
+        return podcast_out()
+
+    @app.post("/api/podcast/read", dependencies=[Depends(api_auth)])
+    def api_podcast_read():
+        """Reads the feed now, as Read it now does, in the background: GET /api/podcast shows the result."""
+        if not (db.setting("podcast_feed") or "").strip():
+            return JSONResponse({"error": "no podcast feed in Settings"}, status_code=409)
+
+        def read():
+            if scheduler.read_feed(force=True).get("start_check"):
+                scheduler.check_now()
+        threading.Thread(target=read, name="read-feed", daemon=True).start()
+        return JSONResponse({"reading": True}, status_code=202)
 
     @app.post("/api/stop", dependencies=[Depends(api_auth)])
     def api_stop():

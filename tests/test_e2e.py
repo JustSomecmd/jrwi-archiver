@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -851,7 +852,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.19" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.20" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -906,6 +907,26 @@ def test_api_for_the_apps(app, client):
         archiver.status.set(running=False)
         archiver.stop_event.clear()
     assert TestClient(app).post("/api/stop").status_code == 401
+
+    # Re-read saved pages: started in the scheduler's thread, 409 while a check or a re-read runs
+    scheduler = app.state.scheduler
+    archiver.status.set(running=True)
+    try:
+        r = client.post("/api/reparse")
+        assert r.status_code == 409 and r.json()["error"] and not scheduler.reparse_requested
+    finally:
+        archiver.status.set(running=False)
+    r = client.post("/api/reparse")
+    assert r.status_code == 202 and r.json() == {"started": True} and scheduler.reparse_requested
+    scheduler.reparse_requested = False
+    scheduler.wake.clear()
+    assert TestClient(app).post("/api/reparse").status_code == 401
+
+    # The podcast feed, before it's set up
+    assert client.get("/api/podcast").json() == {"set_up": False}
+    r = client.post("/api/podcast/read")
+    assert r.status_code == 409 and r.json()["error"]
+    assert TestClient(app).get("/api/podcast").status_code == 401
 
     # Stats: the checks, the files by type, and who comments most
     stats = client.get("/api/stats").json()
@@ -976,6 +997,19 @@ def test_podcast_feed(app, client, monkeypatch):
     assert "<code>itunes:duration</code>" in admin and "2 say the time of day" not in admin
     assert "3 say the time of day they came out, which 2 posts now show" in admin
     assert 'data-time-of-day="2026-10-17T18:04:00+00:00"' in web.get("/items/288").text
+    # The same in the API, without the address
+    api = client.get("/api/podcast")
+    assert key not in api.text and "127.0.0.1" not in api.text
+    p = api.json()
+    assert p["set_up"] and p["ok"] and p["error"] is None and p["last_read"] and p["title"]
+    assert (p["count"], p["matched"], p["with_time"], p["every_minutes"]) == (3, 2, 3, 15)
+    assert p["last_trigger"] is None and p["times_used"] == 2
+    assert [e["post_id"] for e in p["latest"]] == [r["post_id"] for r in podcast.summary(db)["latest"]]
+    assert set(p["latest"][0]) == {"title", "published", "post_id", "duration"}
+    bonus = next(e for e in p["latest"] if e["title"] == "Bonus: Tavern Talk")
+    assert bonus["post_id"] is None and bonus["duration"] == 3723
+    assert [u["title"] for u in p["unmatched"]] == ["Bonus: Tavern Talk"]
+    assert any(f["name"] == "itunes:duration" and f["count"] >= 1 for f in p["fields"])
 
     # Nothing new: the feed answers 304 and nothing starts
     again = scheduler.read_feed()
@@ -990,12 +1024,18 @@ def test_podcast_feed(app, client, monkeypatch):
         assert scheduler.read_feed(force=True)["start_check"]
         web.post("/admin/feed/read")                                  # "Read it now" starts the check itself
         db.x("UPDATE feed_items SET last_try = '2000-01-01T00:00:00+00:00' WHERE guid = 'fresh-episode-1'")
-        web.post("/admin/feed/read")
+        r = client.post("/api/podcast/read")                         # the API's Read it now, in the background
+        assert r.status_code == 202 and r.json() == {"reading": True}
+        for t in threading.enumerate():
+            if t.name == "read-feed":
+                t.join(10)
         assert started == [False]
         assert db.one("SELECT tries FROM feed_items WHERE guid = 'fresh-episode-1'")["tries"] == 3
         db.x("UPDATE feed_items SET last_try = '2000-01-01T00:00:00+00:00' WHERE guid = 'fresh-episode-1'")
         assert not scheduler.read_feed(force=True)["start_check"]   # three tries are enough
         assert "Last started a check" in web.get("/admin").text
+        trigger = client.get("/api/podcast").json()["last_trigger"]
+        assert trigger["at"] and trigger["titles"] == ["Something New | Riptide #137 (AUDIO ONLY)"]
     finally:
         rq.get(f"http://127.0.0.1:{PORT}/_test/feed?n=0", timeout=5)
     # A wrong address: the error names the host, never the key
