@@ -57,6 +57,12 @@ const humanSize = (n) => {
   return i === 0 ? `${Math.round(n)} B` : `${n.toFixed(1)} ${units[i]}`;
 };
 // A time in the browser's own time zone: "today at 16:29", "tomorrow at 02:15", "Sun 23 Nov at 16:29"
+// Just the time of day, on the 24-hour clock, in the browser's own time zone
+const timeOfDay = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
 const whenAt = (iso) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -70,6 +76,7 @@ const whenAt = (iso) => {
 };
 // Times written by the server in UTC, shown in the browser's own time zone
 document.querySelectorAll("[data-when-at]").forEach((el) => { el.textContent = whenAt(el.dataset.whenAt); });
+document.querySelectorAll("[data-clock]").forEach((el) => { el.textContent = timeOfDay(el.dataset.clock); });
 document.querySelectorAll("[data-time-of-day]").forEach((el) => {
   const d = new Date(el.dataset.timeOfDay);
   if (!Number.isNaN(d.getTime())) el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -102,9 +109,9 @@ if (live) {
       if (s.running) {
         phase.textContent = s.phase;
         sched.textContent = [s.last_check_started ? `Started ${whenAt(s.last_check_started)}` : "",
-                             s.next_check ? `next check ${whenAt(s.next_check)}` : ""].filter(Boolean).join(" · ");
+                             s.next_check ? `next check ${timeOfDay(s.next_check)}` : ""].filter(Boolean).join(" · ");
       } else if (s.next_check) {
-        phase.textContent = `Next check ${whenAt(s.next_check)}`;
+        phase.textContent = `Next check ${timeOfDay(s.next_check)}`;
         sched.textContent = [whenIn(s.next_check), everyText, last].filter(Boolean).join(" · ");
       } else {
         phase.textContent = "No checks scheduled";

@@ -14,7 +14,7 @@
   <div class="status-line">
     <span class="status-icon {% if st.running %}on{% endif %}">{{ icon('refresh' if st.running else 'clock') }}</span>
     <div class="status-text">
-      <b data-phase>{% if st.running %}{{ st.phase }}{% elif st.next_check %}Next check: {{ st.next_check[:16].replace('T', ' ') }} UTC{% else %}No checks scheduled{% endif %}</b>
+      <b data-phase>{% if st.running %}{{ st.phase }}{% elif st.next_check %}Next check <span data-clock="{{ st.next_check }}">{{ st.next_check[11:16] }} UTC</span>{% else %}No checks scheduled{% endif %}</b>
       <span class="muted small" data-count></span>
       <div class="small" data-detail>{{ st.detail if st.running else '' }}</div>
       <div class="muted small" data-schedule>{% if not st.next_check and not st.running %}Checks only run when you press Check now. Set a schedule in Settings.{% endif %}</div>
