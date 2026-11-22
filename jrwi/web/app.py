@@ -238,7 +238,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         }
 
     def background_obj() -> dict | None:
-        """Work between checks that a check takes over from: timing transcripts (contract v0.23), or None."""
+        """Work in the background, alongside checks since 0.13.0: timing transcripts (contract v0.23), or None."""
         b = scheduler.bg.snapshot()
         if not b["running"] or b["step"] == "idle":
             return None
@@ -1022,7 +1022,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         for key in ("transcripts_from", "transcripts_until"):
             if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", form.get(key) or ""):
                 db.set_setting(key, form[key])
-        scheduler.transcripts_idle = scheduler.transcripts_paused = False   # what's on may have changed
+        scheduler.transcripts_paused = False
+        scheduler.kick_background()   # what's on may have changed
         if form.get("new_web_password"):
             if len(form["new_web_password"]) >= 8:
                 db.set_setting("web_password_hash", hash_password(form["new_web_password"]))

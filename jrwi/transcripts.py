@@ -378,7 +378,14 @@ def _main(argv: list[str]) -> int:
 # ------------------------------------------------------------------ the job (in the service)
 
 class Yielded(Exception):
-    """Something else needs the scheduler: what was heard so far is kept, and the episode carries on later."""
+    """Told to give way (Pause, another episode asked for, the end of the hours set): what was heard so far is
+    kept, and the episode carries on later."""
+
+
+class SoundChanged(Exception):
+    """The file being heard changed or went while it was heard, as a check running alongside can do (downloading
+    it again, moving it in the Jellyfin folder, handing the video over to TubeArchivist). Not the episode's fault:
+    nothing is recorded, and it's tried again with what's there next time."""
 
 
 class ModelProblem(Exception):
@@ -562,9 +569,13 @@ class Transcripts:
                 self._child(["hear", sound["path"], str(total), str(heard["until"]), model, str(self.threads()),
                              str(self.paths.data / "models"), *([hot] if hot else [])], piece, should_yield)
             except RuntimeError as e:
+                if not _same_file(sound):
+                    raise SoundChanged(sound["path"]) from None
                 if not piece.ready:
                     raise ModelProblem(f"the speech model {model} couldn't be loaded: {e}") from None
                 raise
+        if not _same_file(sound):
+            raise SoundChanged(sound["path"])
         if progress:
             progress(1.0, "matching the lines to what was heard")
         src = self.dir / f"{item_id}.match-in.json"
@@ -671,6 +682,8 @@ class Transcripts:
                     self.db.set_setting("transcripts_problem", "")
                 except (Yielded, ModelProblem):
                     raise
+                except SoundChanged:
+                    log.info("the sound of %s changed while it was heard; it's heard again next time", primary["id"])
                 except Exception as e:
                     log.warning("timing the transcript of %s failed: %s", primary["id"], e)
                     self.db.update("transcripts", "item_id", primary["id"], {
@@ -704,6 +717,14 @@ class Transcripts:
                 "problem": self.db.setting("transcripts_problem") or None,
                 "failed": sum(1 for r in rows if (r["timing"] or {}).get("error")),
                 "last": dict(last["timing"], item_id=last["item_id"]) if last else None}
+
+
+def _same_file(sound: dict) -> bool:
+    """Whether the sound being heard is still there as it was when hearing began."""
+    try:
+        return os.stat(sound["path"]).st_size == sound["size"]
+    except OSError:
+        return False
 
 
 def _now() -> str:

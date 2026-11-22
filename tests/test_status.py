@@ -241,10 +241,10 @@ def test_transcripts_are_timed_when_the_schedule_says(archiver, monkeypatch):
     db.set_setting("transcripts_when", "off")
     assert not sched.timing_now()
     sched.transcripts_all_now()   # the admin page's Time transcripts now
-    assert sched.transcripts_manual and sched.timing_now() and sched.wake.is_set()
+    assert sched.transcripts_manual and sched.timing_now() and sched.bg_wake.is_set()
     sched.pause_transcripts()
     assert not sched.transcripts_manual and sched.transcripts_paused
-    sched.wake.clear()
+    sched.bg_wake.clear()
     sched.bg_stop.clear()   # as the next run does
     sched.transcripts_paused = False
 
@@ -261,3 +261,60 @@ def test_transcripts_are_timed_when_the_schedule_says(archiver, monkeypatch):
     # Run out of things to do while timing: nothing more until the next check finds something new
     sched.idle_timing = True
     assert not sched._transcripts_due()
+
+
+def test_background_work_runs_alongside_a_check(archiver, monkeypatch):
+    import time
+
+    from jrwi.scheduler import Scheduler
+    sched = Scheduler(archiver, archiver.db)
+    sched.ser = object()
+    calls = []
+
+    def run(ser, should_yield, one=None, read_on=True, timing_on=False):
+        calls.append({"one": one, "timing": timing_on, "check_running": archiver.status.running,
+                      "gives_way": should_yield()})
+        return {"read": 0, "timed": 0}
+    monkeypatch.setattr(sched.transcripts, "run", run)
+
+    def wait_for(n):
+        for _ in range(100):
+            if len(calls) >= n:
+                return
+            time.sleep(0.02)
+        raise AssertionError(calls)
+
+    archiver.status.set(running=True)   # a check is running
+    sched.next_check = None
+    assert sched.transcripts_all_now() and sched.transcript_now(7)   # neither waits for the check
+    sched.bg_thread.start()
+    wait_for(2)
+    # The episode asked for goes first, then everything else, both while the check runs, and nothing gives way
+    assert calls[0] == {"one": 7, "timing": True, "check_running": True, "gives_way": False}
+    assert calls[1] == {"one": None, "timing": True, "check_running": True, "gives_way": False}
+    for _ in range(100):
+        if sched.transcripts_idle:
+            break
+        time.sleep(0.02)
+    assert sched.transcripts_idle and not sched.transcripts_manual
+    # The check finishes with new posts: the background looks again at once
+    sched.kick_background()
+    wait_for(3)
+    archiver.status.set(running=False)
+
+
+def test_work_found_while_the_background_runs_isnt_marked_done(archiver, monkeypatch):
+    from jrwi.scheduler import Scheduler
+    sched = Scheduler(archiver, archiver.db)
+    sched.ser = object()
+
+    def run(ser, should_yield, one=None, read_on=True, timing_on=False):
+        sched.kick_background()   # a check running alongside saved new posts meanwhile
+        return {"read": 0, "timed": 0}
+    monkeypatch.setattr(sched.transcripts, "run", run)
+    sched.transcripts_all_now()
+    sched._transcripts()
+    assert not sched.transcripts_idle and sched.transcripts_manual and sched._transcripts_due()
+    monkeypatch.setattr(sched.transcripts, "run", lambda *a, **kw: {"read": 0, "timed": 0})
+    sched._transcripts()
+    assert sched.transcripts_idle and not sched.transcripts_manual and not sched._transcripts_due()

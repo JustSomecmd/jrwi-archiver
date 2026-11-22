@@ -87,7 +87,7 @@ To time the lines, the archiver hears the episode once with a speech recognizer 
 
 Hearing an episode takes a while and a fair amount of memory: on one 4-thread server, an episode took about 27 minutes with the default model (small.en) and used at most about 1.7 GB. So it's off until you start it or choose when it runs:
 
-1. On the **Admin** page, press **Time one episode now**. It times the newest episode with a transcript, between checks. The first time, the speech model is downloaded to the data folder's `models` folder.
+1. On the **Admin** page, press **Time one episode now**. It times the newest episode with a transcript, in the background. The first time, the speech model is downloaded to the data folder's `models` folder.
 2. When it's done, the Admin page says how long it took, the most memory it used, and how many lines it placed. Open the episode and try the Transcript button.
 3. If that suits your server, either press **Time transcripts now** on the Admin page, which times every episode not timed yet and then stops, or choose when it runs in **Settings > Transcripts > Time them**:
    - **Only when started on the Admin page** (the default).
@@ -96,7 +96,7 @@ Hearing an episode takes a while and a fair amount of memory: on one 4-thread se
 
    Episodes are timed one at a time, newest first, at a low priority, using half the processor's threads (a setting).
 
-A check, the podcast feed and Re-read always go first: the episode being heard stops and carries on later from where it was, as what's been heard is saved every ten minutes of sound. **Pause transcripts** on the Admin page (in place of Time transcripts now while it runs) stops it until the next check.
+Since 0.13.0 it runs in a thread of its own, alongside checks, the podcast feed and Re-read, so neither waits for the other; when both want the processor, the check gets it first, as timing runs at a low priority. The two together use more memory than either alone. If a check downloads, moves or hands over the file being heard, that episode is left for the next round, without an error. **Pause transcripts** on the Admin page (in place of Time transcripts now while it runs) stops it until the next check; what's been heard is saved every ten minutes of sound, and it carries on from there.
 
 ## What you'll find in the folders
 

@@ -1251,6 +1251,15 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
     (tmp_path / "heard.json").write_text(json.dumps(heard))
     monkeypatch.setenv("JRWI_FAKE_HEARING", str(tmp_path / "heard.json"))
     try:
+        # A check running alongside can download the file again, move it or hand it over while it's heard:
+        # nothing is recorded against the episode, and it's heard again next time
+        import jrwi.transcripts as tr
+        monkeypatch.setattr(tr, "_same_file", lambda sound: False)
+        scheduler._transcripts(one=300)
+        row = db.one("SELECT * FROM transcripts WHERE item_id=300")
+        assert row["lines"] == 5 and not row["aligned"] and not (row["timing"] or {}).get("at"), row
+        monkeypatch.undo()
+        monkeypatch.setenv("JRWI_FAKE_HEARING", str(tmp_path / "heard.json"))
         scheduler._transcripts(one=300)   # as the admin page's "Time it now" does
         row = db.one("SELECT * FROM transcripts WHERE item_id=300")
         assert row["aligned"] and row["lines"] == 5 and row["timing"]["placed"] == 5, row
@@ -1293,7 +1302,6 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         assert "from 23:15 to 07:00" in web.get("/admin").text
         db.set_setting("transcripts_when", "off")
         # Time transcripts now: the tile becomes Pause until it's done or paused
-        monkeypatch.setattr(scheduler.wake, "set", lambda: None)   # keep the scheduler's thread out of it
         web.post("/admin/transcripts/all")
         assert scheduler.transcripts_manual and "Pause transcripts" in web.get("/admin").text
         web.post("/admin/transcripts/pause")

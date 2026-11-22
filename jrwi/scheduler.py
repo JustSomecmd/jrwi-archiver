@@ -1,4 +1,5 @@
-"""Runs a check every few hours, and whenever someone presses "Check now"."""
+"""Runs a check every few hours, and whenever someone presses "Check now". Work on the server's own files
+(timing transcripts) runs in a thread of its own alongside, so it neither waits for a check nor holds one up."""
 
 from __future__ import annotations
 
@@ -36,9 +37,12 @@ class Scheduler:
         self.last_start: datetime | None = None
         self.feed_read: datetime | None = None
         self.feed_lock = threading.Lock()
-        # Work in the background between checks, which anything else takes over from (timing transcripts, v0.23)
+        # Work in the background, alongside checks (timing transcripts, v0.23; in its own thread since 0.13.0)
         self.bg = Status()
-        self.bg_stop = threading.Event()
+        self.bg_stop = threading.Event()     # Pause transcripts
+        self.bg_wake = threading.Event()     # something for the background to look at
+        self.bg_gen = 0                      # raised whenever there may be new work, so a run that ends doesn't
+                                             # mark as done what turned up while it ran
         self.transcripts = Transcripts(db, archiver.paths, self.bg)
         self.ser = None                      # the web app's Serializer, which finds an item's posts
         self.transcript_requested = None     # an item to time now, from the admin page
@@ -48,6 +52,7 @@ class Scheduler:
         self.transcripts_manual = False      # "Time transcripts now": until all are done, whatever the schedule
         self._carry_over_switch()
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
+        self.bg_thread = threading.Thread(target=self._bg_loop, name="jrwi-background", daemon=True)
 
     def start(self) -> None:
         # No check can be running yet, so one without an end was cut short when the archiver last stopped
@@ -55,6 +60,7 @@ class Scheduler:
         if self.db.close_unfinished_runs(RESTARTED):
             log.info("a check was cut short when the archiver last stopped; it's recorded as stopped")
         self.thread.start()
+        self.bg_thread.start()
 
     def shut_down(self) -> None:
         """The archiver is stopping (an update, or the container stopping): a check that's running can't finish,
@@ -107,28 +113,32 @@ class Scheduler:
     # ------------------------------------------------------------------ transcripts, in the background
 
     def transcript_now(self, item_id: int | None) -> bool:
-        """Time one episode's transcript next (the newest not timed yet when None). False while a check runs."""
-        if self.running:
-            return False
+        """Time one episode's transcript next (the newest not timed yet when None), checks or not. What runs in
+        the background gives way to it, and carries on afterwards."""
         self.transcript_requested = item_id if item_id is not None else 0
         self.transcripts_paused = False
-        self.wake.set()   # what runs in the background gives way to it
+        self.bg_wake.set()
         return True
 
     def transcripts_all_now(self) -> bool:
-        """Time every episode not timed yet, newest first, until all are done, whatever the schedule. False while a
-        check runs. A check still goes first, and it carries on afterwards."""
-        if self.running:
-            return False
+        """Time every episode not timed yet, newest first, until all are done, whatever the schedule and whether
+        or not a check runs."""
         self.transcripts_manual = True
-        self.transcripts_idle = self.transcripts_paused = False
-        self.wake.set()
+        self.transcripts_paused = False
+        self.kick_background()
         return True
 
     def pause_transcripts(self) -> None:
         self.transcripts_paused = True
         self.transcripts_manual = False
+        self.transcript_requested = None
         self.bg_stop.set()
+
+    def kick_background(self) -> None:
+        """There may be new work for the background: new posts, changed settings or pages re-read."""
+        self.bg_gen += 1
+        self.transcripts_idle = False
+        self.bg_wake.set()
 
     def _carry_over_switch(self) -> None:
         """Before 0.12.1 timing was on or off; on carries over as "as soon as there's something new"."""
@@ -163,36 +173,30 @@ class Scheduler:
         return self.transcripts_manual or mode == "always" or (mode == "hours" and self.in_window())
 
     def _transcripts_due(self) -> bool:
-        if self.ser is None or self.transcripts_paused or self.wake.is_set():
+        if self.ser is None or self.transcripts_paused:
             return False
         timing = self.timing_now()
         if self.transcripts_idle and not (timing and not self.idle_timing):
             return False   # nothing left, unless timing has come on since (its hours have begun)
-        if not (self.db.setting("transcripts_read") or timing):
-            return False
-        if self.feed_due():
-            return False
-        now = datetime.now(timezone.utc)
-        return not (self.next_check and now >= self.next_check - timedelta(minutes=1))
+        return bool(self.db.setting("transcripts_read") or timing)
 
     def _background_yield(self, timing: bool = False) -> bool:
-        """Whether work between checks gives way: to a check, the feed, a button, or (when it's timing
-        transcripts) the end of the hours set for it."""
-        now = datetime.now(timezone.utc)
-        return (self.wake.is_set() or self.bg_stop.is_set() or self.feed_due()
-                or bool(self.next_check and now >= self.next_check)
+        """Whether the background's run gives way: to Pause, to an episode asked for on the admin page, or (when
+        it's timing transcripts) to the end of the hours set for it. Not to checks: they run alongside."""
+        return (self.bg_stop.is_set() or self.transcript_requested is not None
                 or (timing and not self.timing_now()))
 
     def _transcripts(self, one: int | None = None) -> None:
-        """Read new transcripts and time them, until something else needs the scheduler. one: an item asked for
-        on the admin page (0 for the newest not timed yet), which only a check or Pause interrupts."""
+        """Read new transcripts and time them, until all are done or it's told to give way. one: an item asked
+        for on the admin page (0 for the newest not timed yet), which only Pause interrupts."""
         if self.ser is None:
             return
         self.bg_stop.clear()
         self.bg.set(running=True, started=now_iso())
         timing = self.timing_now()
+        gen = self.bg_gen
         if one is not None:
-            should_yield = lambda: self.wake.is_set() or self.bg_stop.is_set()
+            should_yield = self.bg_stop.is_set
         else:
             should_yield = lambda: self._background_yield(timing)
         try:
@@ -203,7 +207,7 @@ class Scheduler:
             done = self.transcripts.run(self.ser, should_yield, one=one,
                                         read_on=bool(self.db.setting("transcripts_read")) or one is not None or timing,
                                         timing_on=timing)
-            if one is None:
+            if one is None and gen == self.bg_gen:   # nothing new turned up while it ran
                 self.transcripts_idle, self.idle_timing = True, timing
                 self.transcripts_manual = False   # all done
             if done["read"] or done["timed"]:
@@ -225,6 +229,24 @@ class Scheduler:
         self.transcripts_idle = self.idle_timing = True
         self.transcripts_manual = False
 
+    def _bg_loop(self) -> None:
+        """The background's own thread: an episode asked for first, then whatever is due, then wait."""
+        while True:
+            try:
+                self.bg_wake.clear()
+                if self.transcript_requested is not None:
+                    one, self.transcript_requested = self.transcript_requested, None
+                    self._transcripts(one=one)
+                    continue
+                if self._transcripts_due():
+                    self._transcripts()
+                # Woken at once when something new came up while it ran (a check's new posts, a button), or else
+                # once a minute, to see whether timing's hours have begun
+                self.bg_wake.wait(60)
+            except Exception:
+                log.exception("the background work failed")
+                self.bg_wake.wait(60)
+
     def feed_due(self) -> bool:
         minutes = float(self.db.setting("feed_minutes") or 0)
         if minutes <= 0 or not (self.db.setting("podcast_feed") or "").strip():
@@ -232,7 +254,7 @@ class Scheduler:
         return self.feed_read is None or datetime.now(timezone.utc) - self.feed_read >= timedelta(minutes=minutes)
 
     def read_feed(self, force: bool = False) -> dict:
-        """Read the podcast feed now (never during a check, as the check reads the site anyway)."""
+        """Read the podcast feed now (not during a check, as the check reads the site anyway)."""
         with self.feed_lock:
             self.feed_read = datetime.now(timezone.utc)
             try:
@@ -273,8 +295,6 @@ class Scheduler:
             self.next_check = start + FIRST_CHECK_DELAY if self._interval() else None
             self.planned_with = self._interval()
         while True:
-            if self._transcripts_due():
-                self._transcripts()
             timeout = None
             if self.next_check:
                 timeout = max(0.0, (self.next_check - datetime.now(timezone.utc)).total_seconds())
@@ -294,14 +314,10 @@ class Scheduler:
                 log.info("the podcast feed has a new episode; checking the site")
             manual = woke or self.wake.is_set() or from_feed
             self.wake.clear()
-            if self.transcript_requested is not None:
-                one, self.transcript_requested = self.transcript_requested, None
-                self._transcripts(one=one)
-                continue
             if self.reparse_requested:
                 self.reparse_requested = False
                 self._reparse()
-                self.transcripts_idle = False
+                self.kick_background()
                 if self.check_requested:
                     self.wake.set()   # Check now was pressed while the re-read was being started: it's next
                 continue
@@ -323,7 +339,8 @@ class Scheduler:
             except Exception:
                 log.exception("matching the podcast feed failed")
             memory.release()
-            self.transcripts_idle = self.transcripts_paused = False   # new posts may have transcripts
+            self.transcripts_paused = False
+            self.kick_background()   # new posts may have transcripts
             # A check that ran past the next one's time: the next comes a whole interval after this one ended
             now = datetime.now(timezone.utc)
             if self.next_check and self.next_check < now + timedelta(minutes=10):

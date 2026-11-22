@@ -42,9 +42,9 @@
   <form method="post" action="/admin/transcripts/pause"><button class="action stop">{{ icon('pause') }}<b>Pause transcripts</b>
     <span>Stop timing transcripts until the next check. What was heard so far is kept.</span></button></form>
   {% else %}
-  <form method="post" action="/admin/transcripts/all"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('doc') }}<b>Time transcripts now</b>
+  <form method="post" action="/admin/transcripts/all"><button class="action">{{ icon('doc') }}<b>Time transcripts now</b>
     <span>Every episode's transcript not timed yet, newest first, until all are done{% if tx.when != 'always' %}, whatever the schedule{% endif %}</span></button></form>
-  <form method="post" action="/admin/transcripts/time"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('play') }}<b>Time one episode now</b>
+  <form method="post" action="/admin/transcripts/time"><button class="action">{{ icon('play') }}<b>Time one episode now</b>
     <span>The newest one not timed yet, to see how long it takes on this server</span></button></form>
   {% endif %}
   <a class="action" href="/admin/settings">{{ icon('sliders') }}<b>Settings</b><span>Login, schedule, downloads and TubeArchivist</span></a>
@@ -180,7 +180,7 @@
   <h3>Transcripts</h3>
   {% if not tx.count %}
   <p class="muted small">No episode's transcript has been read yet.{% if not tx.read %} Reading them is off in
-    <a href="/admin/settings#transcripts">Settings</a>.{% else %} They're read between checks, from the PDFs posts
+    <a href="/admin/settings#transcripts">Settings</a>.{% else %} They're read in the background, from the PDFs posts
     link to.{% endif %}</p>
   {% else %}
   <p class="small">{{ tx.count }} episode{{ '' if tx.count == 1 else 's' }} with a transcript, {{ tx.aligned }} timed{% if tx.failed %},
