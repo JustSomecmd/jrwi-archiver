@@ -100,6 +100,16 @@ class Progress:
         primary, members, video, audio = self._item(post)
         timeline = self._timeline(post["id"], video, audio, members)
         made = self.when(body.get("updated_at"))
+        position = max(0.0, float(body.get("position") or 0))
+        finished = body.get("finished")
+        if finished is None:
+            # Left to the archive (v0.22): watched once close enough to the end of the version played
+            part = {"video": video, "audio": audio}.get(timeline) or {}
+            length = body.get("duration") or part.get("duration")
+            if length:
+                finished = self.near_end(position, float(length))
+            else:
+                finished = bool((self.get(post) or {}).get("finished"))
         ids = [m["id"] for m in members if m["id"] != primary["id"]]
         with self.db.lock:
             if made:
@@ -111,7 +121,22 @@ class Progress:
             if ids:
                 self.db.x(f"DELETE FROM progress WHERE post_id IN ({','.join('?' * len(ids))})", ids)
             self.db.upsert("progress", "post_id", {
-                "post_id": primary["id"], "position": max(0.0, float(body.get("position") or 0)),
-                "duration": body.get("duration"), "finished": bool(body.get("finished")),
+                "post_id": primary["id"], "position": position,
+                "duration": body.get("duration"), "finished": bool(finished),
                 "timeline": timeline, "updated_at": made or now()})
         return self.get(post)
+
+    def watched_left(self) -> float:
+        """Seconds before the end at which an episode counts as watched (the setting is in minutes)."""
+        try:
+            minutes = float(self.db.setting("watched_minutes_left"))
+        except (TypeError, ValueError):
+            minutes = 2.0
+        return round(min(max(minutes, 0.0), 60.0) * 60, 1)
+
+    def near_end(self, position: float, length: float) -> bool:
+        """Close enough to the end to count as watched: within the setting, or in the last 5% of a video too
+        short for it, and at the very end (within a second) when the setting is 0."""
+        if length <= 0:
+            return False
+        return length - position <= max(1.0, min(self.watched_left(), length * 0.05))

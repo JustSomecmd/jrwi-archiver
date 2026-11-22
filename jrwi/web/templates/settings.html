@@ -61,6 +61,10 @@
     <label for="nu">Notification URL</label>
     <input id="nu" type="url" name="notify_url" value="{{ s.notify_url }}" placeholder="https://ntfy.sh/your-topic or a Discord webhook">
     <div class="hint">Gets a message for new posts and for problems such as a failed login.</div>
+    <label for="wl">Mark an episode watched with this many minutes left</label>
+    <input id="wl" type="number" step="0.5" min="0" max="60" name="watched_minutes_left" value="{{ s.watched_minutes_left }}">
+    <div class="hint">For the web app here, and for apps that leave it to the archive. Shorter videos are marked
+      in their last 5%, and 0 means at the very end.</div>
     <label for="wp">New password for this web app</label>
     <input id="wp" type="password" name="new_web_password" autocomplete="new-password" placeholder="Leave empty to keep it">
   </div>

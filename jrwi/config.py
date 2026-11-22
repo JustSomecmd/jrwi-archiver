@@ -58,6 +58,7 @@ DEFAULTS: dict = {
     "recheck_days": 60,            # each check reads the feed back this far, to catch posts added with an older date
     "podcast_feed": "",            # the members' private podcast feed (RSS); its address holds a key, like a password
     "feed_minutes": 15,            # how often to read it; 0 = never
+    "watched_minutes_left": 2,     # an episode counts as watched with this little left (contract v0.22)
     "api_token": "",
     "web_password_hash": "",
     "session_secret": "",

@@ -29,7 +29,8 @@ let saving = Promise.resolve();
 const save = (media, finished) => {
   saving = fetch(`/api/progress/${media.dataset.progress}`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ position: media.currentTime, duration: media.duration || null, finished: !!finished }),
+    // Left out, the archive marks it watched near the end by its setting (contract v0.22); true at the end
+    body: JSON.stringify({ position: media.currentTime, duration: media.duration || null, ...(finished ? { finished: true } : {}) }),
   }).catch(() => {});
   return saving;
 };

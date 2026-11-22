@@ -312,6 +312,32 @@ def test_video_and_audio_line_up(app, client):
     assert app.state.db.post(300)["sync"]["at"] == at
 
 
+def test_watched_near_the_end_is_the_archives_setting(app, client):
+    db = app.state.db
+    db.x("DELETE FROM progress WHERE post_id IN (298, 300)")
+    ping = client.get("/api/ping").json()
+    assert ping["watched_left"] == 120.0 and "watched" in ping["features"]
+    put = lambda body: client.put("/api/progress/300", json=body).json()["finished"]
+    # A three-hour version: watched with two minutes left, not before
+    assert put({"position": 10600, "duration": 10800}) is False
+    assert put({"position": 10690, "duration": 10800}) is True
+    # Going back to earlier unmarks it, as finished: false always has
+    assert put({"position": 600, "duration": 10800}) is False
+    # A short one is marked in its last 5%: 1 second of this 20-second test file, whose length the archive knows
+    assert put({"position": 18.5}) is False
+    assert put({"position": 19.5}) is True
+    # The app's own say still decides: a watched button, and apps written before v0.22
+    assert put({"position": 10790, "duration": 10800, "finished": False}) is False
+    assert put({"position": 5, "duration": 10800, "finished": True}) is True
+    # 0 means at the very end
+    db.set_setting("watched_minutes_left", 0)
+    assert client.get("/api/ping").json()["watched_left"] == 0.0
+    assert put({"position": 10790, "duration": 10800}) is False
+    assert put({"position": 10799.5, "duration": 10800}) is True
+    db.set_setting("watched_minutes_left", 2)
+    db.x("DELETE FROM progress WHERE post_id IN (298, 300)")
+
+
 def test_progress_is_shared_between_video_and_audio(app, client):
     db = app.state.db
     offset = client.get("/api/items/300").json()["sync"]["offset"]
@@ -873,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.21" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.22" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q

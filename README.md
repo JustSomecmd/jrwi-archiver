@@ -109,7 +109,7 @@ When the saved copy itself is wrong or out of date, posts can be **downloaded ag
 
 On the site, an episode's members-only video, its YouTube embed and its "(AUDIO ONLY)" post are separate posts, each with its own description, likes and comments. The archive keeps them separate: the web app shows each post on its own, labelled as the video, audio or YouTube version, with links to the others. The API groups them into one **item** for players such as Tubedroid, and also gives every **post** on its own (see [docs/api.md](docs/api.md)).
 
-- **Where you are is shared:** an episode has one saved place and one watched state, whichever version you play. The web app's video and audio players save it and pick it up again, and so can the apps.
+- **Where you are is shared:** an episode has one saved place and one watched state, whichever version you play. The web app's video and audio players save it and pick it up again, and so can the apps. An episode counts as watched with 2 minutes left (shorter videos in their last 5%), set under Settings > Apps and notifications; the web app follows it, and so do apps that leave it to the archive. Jellyfin has a rule of its own, under its Dashboard > Playback > Resume.
 - **Lining up:** the video and the audio version don't always start at the same moment. At the end of each check, the archiver compares how loud the two are over the first 10 minutes to find the gap, and checks it against a stretch from the middle. When it isn't sure, it assumes there's no gap.
 
 ## Settings

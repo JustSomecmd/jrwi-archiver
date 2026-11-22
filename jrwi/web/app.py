@@ -315,7 +315,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     @app.get("/api/ping")
     def api_ping():
         # What this archiver has, so apps needn't ask for each part to find out (contract v0.17)
-        return {"name": NAME, "version": VERSION, "contract": CONTRACT, "features": FEATURES}
+        return {"name": NAME, "version": VERSION, "contract": CONTRACT, "features": FEATURES,
+                "watched_left": progress.watched_left()}
 
     @app.get("/api/status", dependencies=[Depends(api_auth)])
     def api_status():
@@ -959,9 +960,13 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             db.set_setting("site_password", form["site_password"])
             archiver.client.clear_cookies()
         for key, cast in (("check_interval_hours", float), ("max_height", int), ("comment_refresh_days", int),
-                          ("request_delay", float), ("recheck_days", int), ("feed_minutes", int)):
+                          ("request_delay", float), ("recheck_days", int), ("feed_minutes", int),
+                          ("watched_minutes_left", float)):
             try:
-                db.set_setting(key, cast(form.get(key) or s[key]))
+                value = cast(form.get(key) or s[key])
+                if key == "watched_minutes_left":
+                    value = min(max(value, 0.0), 60.0)
+                db.set_setting(key, value)
             except ValueError:
                 pass
         for key in ("video", "audio", "images", "attachments", "comments", "google_docs", "public_pages",

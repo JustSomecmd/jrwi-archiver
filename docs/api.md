@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.21)
+# JRWI archiver API (contract v0.22)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.10.3.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.11.0.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -22,7 +22,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.19:** items, posts and item `versions` gain `published_at`, the time of day they came out, from the site's private podcast feed (see Item). Files in a shared Google Drive folder a post links to are saved, and files and `documents` gain `folder`, where in that folder each is (see File). In the service since 0.10.0.
 - **v0.20:** the Tubedroid chat's suggestions 10 and 11. `POST /api/reparse` starts a re-read of saved pages, and `GET /api/podcast` and `POST /api/podcast/read` give the podcast feed's state and read it now (see Podcast feed). Feature names `reparse` and `podcast`. In the service since 0.10.1.
 - **v0.21:** a change (`POST`, `PUT`, `PATCH`, `DELETE`) that a browser sends from a page on another site, as its `Origin` or `Referer` says, is refused with `403` (see General rules). Apps that send neither header, as Tubedroid's do, aren't affected. A reply's `date_text` is no longer the site's text twice over ("2d 2d"), and its `date` is worked out from it. In the service since 0.10.3.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there.
+- **v0.22:** when to mark an episode watched is a setting in the archiver (asked for by the user on 2026-11-22): a progress save may leave out `finished`, and the archiver then marks the episode watched itself once the save's position is close enough to the end of that version, by the setting (see Progress). The ping gains `watched_left`, the setting in seconds, and lists `watched`. Saves with `finished` work as before. In the service since 0.11.0.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there. A ping without `watched` (before 0.11.0) means a save without `finished` counts as `finished: false`, so apps keep their own rule there.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -36,7 +37,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.6", "contract": "0.21", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.11.0", "contract": "0.22", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/reparse` | (v0.20) Re-reads the saved pages with the current parsers, as the admin page's Re-read saved pages does: `202` with `{"started": true}`, or `409` when a check or a re-read is running. It runs as its own job, with `step` `reparse` in the status, and `POST /api/stop` stops it. |
@@ -63,7 +64,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/audio/{postId}` | The audio file, with HTTP range support |
 | `GET /api/video/{postId}` | The video file, with HTTP range support. This is a fallback; Jellyfin is the main way to play video. |
 | `GET /api/progress/{postId}` | `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`, in the timeline of the post in the address (see Progress) |
-| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`, plus `updated_at` for progress sent later (v0.11). Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`: what the archive holds after the save. |
+| `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`, plus `updated_at` for progress sent later (v0.11). Since v0.22 `finished` can be left out, for the archiver to decide (see Progress). Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`: what the archive holds after the save. |
 | `GET /api/events?since=<time>` | New items, hand-overs and failures since a time (default: the last 24 hours) |
 | `GET /api/problems` | Posts that couldn't be fully saved |
 | `GET /api/feed.xml?token=<key>` | Private podcast RSS of all audio |
@@ -74,12 +75,14 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.10.6", "contract": "0.21",
- "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast"]}
+{"name": "jrwi-archiver", "version": "0.11.0", "contract": "0.22",
+ "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast", "watched"],
+ "watched_left": 120.0}
 ```
 
 - **`contract`:** the version of this contract the archiver follows.
-- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`), `stats` (`GET /api/stats`), and since v0.20 `reparse` (`POST /api/reparse`) and `podcast` (`GET /api/podcast` and `POST /api/podcast/read`). Later optional parts get names of their own, and apps ignore names they don't know.
+- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`), `stats` (`GET /api/stats`), since v0.20 `reparse` (`POST /api/reparse`) and `podcast` (`GET /api/podcast` and `POST /api/podcast/read`), and since v0.22 `watched` (the archiver marks episodes watched, below). Later optional parts get names of their own, and apps ignore names they don't know.
+- **`watched_left` (v0.22):** how many seconds before the end of a version an episode counts as watched, from the archiver's Settings (2 minutes unless changed; 0 means at the very end). See Progress.
 
 **Tags (v0.17):**
 - **`GET /api/tags`:** the site's tags that archived posts in the user's tier carry, with how many such posts carry each, sorted by name whatever the capitals, as the web feed's tag picker lists them.
@@ -149,6 +152,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **The item's `id`** is its video post when it has one, so a position sent there is a video position.
 - **Still compatible:** apps that send the audio position to `audio.post_id`, as v0.3 described, work unchanged.
 - **`finished`** is shared by both versions. `finished: true` is also how the apps record that the episode was watched through the video, so the podcast feed and the web app show it as played.
+- **Watched near the end (v0.22):** a save that leaves out `finished` (or sends `null`) leaves it to the archiver: the episode is watched when the time left in that version, its `duration` less `position` (the save's `duration`, or the version's own), is at most `watched_left` seconds, or at most 5% of its length when that's shorter, so a ten-minute extra is marked in its last 30 seconds; and at most a second when `watched_left` is 0. Further back it's not watched, as with `finished: false`, so playing a watched episode again from earlier unmarks it, as it does now. Without a length to go by, the save keeps what the archive holds. The response's `finished` says what the archiver decided, so apps show that and pass it on (to Jellyfin, say), rather than marking it at a point of their own. `finished: true` or `false` in a save still decides it outright, for a watched button and for apps written before v0.22. Offline, apps can work it out the same way from the ping's `watched_left`, or leave `finished` out of the save sent later. The web app leaves it out since 0.11.0, and sends `true` when playback reaches the end.
 - **Older saves:** progress saved before 0.4.0 (audio only, under the audio post) is read in the audio's timeline and moved to the item's record on the next save.
 - **Responses** include `post_id`, the post whose timeline `position` is in.
 - **Progress sent later (v0.11):** progress made offline, or held back for any reason, is sent with `updated_at`: when it was made, with a UTC offset. The archiver keeps whichever of the two is newer, so a late save can't undo listening or watching done since on another device or in the web app; when the archive's is newer, nothing changes and the response shows what it holds. A time later than the server's clock counts as now. Without `updated_at`, a save counts as made when it arrives, as before. A malformed time, or one without an offset, gets `400`.
