@@ -60,7 +60,12 @@ DEFAULTS: dict = {
     "feed_minutes": 15,            # how often to read it; 0 = never
     "watched_minutes_left": 2,     # an episode counts as watched with this little left (contract v0.22)
     "transcripts_read": True,      # read transcripts attached to episodes into lines (contract v0.23)
-    "transcripts_time": False,     # and time them in the background by hearing the episode (needs ~1.5 GB RAM)
+    # When to time them by hearing the episode (about 1.7 GB of memory while it runs): "off" (only when started on
+    # the admin page), "hours" (between transcripts_from and transcripts_until each day, local time) or "always"
+    # (as soon as there's something new, until all are done)
+    "transcripts_when": "off",
+    "transcripts_from": "01:00",
+    "transcripts_until": "07:00",
     "transcript_model": "small.en",  # faster-whisper model: base.en, small.en or medium.en
     "transcript_threads": 0,       # processor threads for it; 0 = half of them, at most 8
     "api_token": "",

@@ -124,6 +124,7 @@ a.pill:hover { color: var(--text); border-color: var(--muted); text-decoration: 
   border-radius: 999px; padding: .1rem .6rem; font-size: .8rem; line-height: 1.5; }
 .tag.acc { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 input[type=text], input[type=email], input[type=password], input[type=number], input[type=url], input[type=search],
+input[type=time],
 select, textarea { background: var(--input); color: var(--text); border: 1px solid transparent; border-radius: var(--radius);
   padding: .65rem .8rem; font: 400 .95rem var(--font); width: 100%; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
@@ -587,3 +588,10 @@ button.action:disabled:hover { background: var(--card); border-color: var(--line
 .transcript .tl.untimed { opacity: .65; }
 .transcript .tl.now { background: rgba(244, 228, 52, .14); box-shadow: inset 3px 0 0 var(--accent); }
 .transcript .tfollow { position: absolute; right: .8rem; bottom: .8rem; }
+
+/* Settings > Transcripts: the hours, shown only when "Between set hours" is chosen */
+.inline-times .times { display: flex; align-items: center; gap: .5rem 1rem; flex-wrap: wrap; margin-top: .6rem; }
+.inline-times .times span { display: inline-flex; align-items: center; gap: .5rem; }
+.inline-times label { display: inline; margin: 0; }
+.inline-times input { width: auto; }
+#transcripts:has(#txwhen option[value=hours]:not(:checked)) .inline-times { display: none; }

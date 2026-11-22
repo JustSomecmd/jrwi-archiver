@@ -162,9 +162,9 @@ if (live) {
           const b = document.createElement("b");
           b.textContent = `${s.background.phase}: `;
           bg.append(b, s.background.detail || "");
-        } else if (bg.dataset.had === "1") {
-          location.reload();   // it finished: show what it found
         }
+        // It started (the tile becomes Pause) or finished (show what it found)
+        if ((bg.dataset.had === "1") !== Boolean(s.background)) location.reload();
         bg.dataset.had = s.background ? "1" : "0";
       }
       // A check started or ended: reload, so the buttons (Check now or Stop), counts and tables are current

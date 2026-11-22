@@ -209,3 +209,55 @@ def test_a_posts_other_versions_are_found_by_an_index(archiver):
                       ("SELECT COUNT(*) FROM posts WHERE (pair_id=? OR id=?) AND id != ?", (1, 1, 1))):
         plan = " ".join(r[3] for r in db.conn.execute("EXPLAIN QUERY PLAN " + sql, args))
         assert "posts_pair" in plan and "SCAN posts" not in plan
+
+
+def test_transcripts_are_timed_when_the_schedule_says(archiver, monkeypatch):
+    from datetime import datetime
+
+    from jrwi.scheduler import Scheduler
+    db = archiver.db
+    db.set_setting("transcripts_time", True)   # the switch before 0.12.1
+    sched = Scheduler(archiver, db)
+    assert sched.transcripts_mode() == "always" and db.setting("transcripts_when") == "always"
+    db.set_setting("transcripts_time", False)
+    assert Scheduler(archiver, db).transcripts_mode() == "always"   # carried over once, then left alone
+
+    def at(h, m=0):   # a local time
+        return datetime(2026, 11, 22, h, m)
+
+    db.set_setting("transcripts_from", "22:30")
+    db.set_setting("transcripts_until", "06:00")   # past midnight
+    assert [sched.in_window(at(h, m)) for h, m in ((22, 29), (22, 30), (2, 0), (5, 59), (6, 0), (12, 0))] == \
+        [False, True, True, True, False, False]
+    db.set_setting("transcripts_from", "01:00")
+    db.set_setting("transcripts_until", "07:00")
+    assert [sched.in_window(at(h)) for h in (0, 1, 6, 7)] == [False, True, True, False]
+    db.set_setting("transcripts_until", "01:00")   # the same time twice: all day
+    assert sched.in_window(at(12))
+    db.set_setting("transcripts_until", "07:00")
+
+    inside = {"now": False}
+    monkeypatch.setattr(sched, "in_window", lambda at=None: inside["now"])
+    db.set_setting("transcripts_when", "off")
+    assert not sched.timing_now()
+    sched.transcripts_all_now()   # the admin page's Time transcripts now
+    assert sched.transcripts_manual and sched.timing_now() and sched.wake.is_set()
+    sched.pause_transcripts()
+    assert not sched.transcripts_manual and sched.transcripts_paused
+    sched.wake.clear()
+    sched.bg_stop.clear()   # as the next run does
+    sched.transcripts_paused = False
+
+    db.set_setting("transcripts_when", "hours")
+    sched.ser = object()
+    assert not sched.timing_now()
+    # Reading goes on outside the hours; only timing gives way when they end
+    assert not sched._background_yield(timing=False) and sched._background_yield(timing=True)
+    # Run out of things to do outside the hours (only reading): it starts again when they begin
+    sched.transcripts_idle, sched.idle_timing = True, False
+    assert not sched._transcripts_due()
+    inside["now"] = True
+    assert sched.timing_now() and sched._transcripts_due() and not sched._background_yield(timing=True)
+    # Run out of things to do while timing: nothing more until the next check finds something new
+    sched.idle_timing = True
+    assert not sched._transcripts_due()

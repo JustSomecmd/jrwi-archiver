@@ -43,7 +43,10 @@ class Scheduler:
         self.ser = None                      # the web app's Serializer, which finds an item's posts
         self.transcript_requested = None     # an item to time now, from the admin page
         self.transcripts_idle = False        # nothing left to do in the background until the next check
+        self.idle_timing = False             # whether timing was on when it ran out of things to do
         self.transcripts_paused = False      # paused by hand until the next check
+        self.transcripts_manual = False      # "Time transcripts now": until all are done, whatever the schedule
+        self._carry_over_switch()
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
 
     def start(self) -> None:
@@ -112,24 +115,73 @@ class Scheduler:
         self.wake.set()   # what runs in the background gives way to it
         return True
 
+    def transcripts_all_now(self) -> bool:
+        """Time every episode not timed yet, newest first, until all are done, whatever the schedule. False while a
+        check runs. A check still goes first, and it carries on afterwards."""
+        if self.running:
+            return False
+        self.transcripts_manual = True
+        self.transcripts_idle = self.transcripts_paused = False
+        self.wake.set()
+        return True
+
     def pause_transcripts(self) -> None:
         self.transcripts_paused = True
+        self.transcripts_manual = False
         self.bg_stop.set()
 
+    def _carry_over_switch(self) -> None:
+        """Before 0.12.1 timing was on or off; on carries over as "as soon as there's something new"."""
+        if self.db.one("SELECT 1 FROM settings WHERE key='transcripts_when'") is None:
+            if self.db.one("SELECT 1 FROM settings WHERE key='transcripts_time' AND value IN ('true', '1')"):
+                self.db.set_setting("transcripts_when", "always")
+
+    def transcripts_mode(self) -> str:
+        mode = self.db.setting("transcripts_when")
+        return mode if mode in ("off", "hours", "always") else "off"
+
+    def in_window(self, at: datetime | None = None) -> bool:
+        """Whether a local time is within the hours set for timing transcripts. The hours can go past midnight
+        (22:00 to 06:00); the same time twice means all day."""
+        def minutes(value: str, default: int) -> int:
+            try:
+                h, m = str(value).split(":")
+                return (int(h) % 24) * 60 + int(m) % 60
+            except (ValueError, TypeError):
+                return default
+        start = minutes(self.db.setting("transcripts_from"), 60)
+        end = minutes(self.db.setting("transcripts_until"), 420)
+        local = (at or datetime.now(timezone.utc)).astimezone()
+        now = local.hour * 60 + local.minute
+        if start == end:
+            return True
+        return start <= now < end if start < end else (now >= start or now < end)
+
+    def timing_now(self) -> bool:
+        """Whether transcripts are to be timed now: started by hand, always, or within the hours set."""
+        mode = self.transcripts_mode()
+        return self.transcripts_manual or mode == "always" or (mode == "hours" and self.in_window())
+
     def _transcripts_due(self) -> bool:
-        if self.ser is None or self.transcripts_idle or self.transcripts_paused or self.wake.is_set():
+        if self.ser is None or self.transcripts_paused or self.wake.is_set():
             return False
-        if not (self.db.setting("transcripts_read") or self.db.setting("transcripts_time")):
+        timing = self.timing_now()
+        if self.transcripts_idle and not (timing and not self.idle_timing):
+            return False   # nothing left, unless timing has come on since (its hours have begun)
+        if not (self.db.setting("transcripts_read") or timing):
             return False
         if self.feed_due():
             return False
         now = datetime.now(timezone.utc)
         return not (self.next_check and now >= self.next_check - timedelta(minutes=1))
 
-    def _background_yield(self) -> bool:
+    def _background_yield(self, timing: bool = False) -> bool:
+        """Whether work between checks gives way: to a check, the feed, a button, or (when it's timing
+        transcripts) the end of the hours set for it."""
         now = datetime.now(timezone.utc)
         return (self.wake.is_set() or self.bg_stop.is_set() or self.feed_due()
-                or bool(self.next_check and now >= self.next_check))
+                or bool(self.next_check and now >= self.next_check)
+                or (timing and not self.timing_now()))
 
     def _transcripts(self, one: int | None = None) -> None:
         """Read new transcripts and time them, until something else needs the scheduler. one: an item asked for
@@ -138,17 +190,22 @@ class Scheduler:
             return
         self.bg_stop.clear()
         self.bg.set(running=True, started=now_iso())
-        should_yield = (lambda: self.wake.is_set() or self.bg_stop.is_set()) if one is not None else self._background_yield
+        timing = self.timing_now()
+        if one is not None:
+            should_yield = lambda: self.wake.is_set() or self.bg_stop.is_set()
+        else:
+            should_yield = lambda: self._background_yield(timing)
         try:
             if one == 0:
                 one = self.transcripts.newest_untimed(self.transcripts.items(self.ser))
                 if one is None:
                     return
             done = self.transcripts.run(self.ser, should_yield, one=one,
-                                        read_on=bool(self.db.setting("transcripts_read")) or one is not None,
-                                        timing_on=bool(self.db.setting("transcripts_time")))
+                                        read_on=bool(self.db.setting("transcripts_read")) or one is not None or timing,
+                                        timing_on=timing)
             if one is None:
-                self.transcripts_idle = True
+                self.transcripts_idle, self.idle_timing = True, timing
+                self.transcripts_manual = False   # all done
             if done["read"] or done["timed"]:
                 log.info("transcripts: read %s, timed %s", done["read"], done["timed"])
         except Yielded:
@@ -156,13 +213,17 @@ class Scheduler:
         except ModelProblem as e:
             log.warning("transcripts: %s", e)
             self.db.set_setting("transcripts_problem", str(e)[:300])
-            self.transcripts_idle = True   # tried again after the next check
+            self._give_up()   # tried again after the next check
         except Exception:
             log.exception("transcripts failed")
-            self.transcripts_idle = True
+            self._give_up()
         finally:
             self.bg.set(running=False, step="idle", phase="idle", detail="", done=0, total=0, current=None, unit=None)
             memory.release()
+
+    def _give_up(self) -> None:
+        self.transcripts_idle = self.idle_timing = True
+        self.transcripts_manual = False
 
     def feed_due(self) -> bool:
         minutes = float(self.db.setting("feed_minutes") or 0)

@@ -38,6 +38,15 @@
   <form method="post" action="/admin/refetch-all" data-confirm="Fetch every archived post's page and comments again? Files are kept.">
     <button class="action" {% if st.running %}disabled{% endif %}>{{ icon('download') }}<b>Fetch all posts again</b>
     <span>Download every post's page and comments again; files are kept</span></button></form>
+  {% if tx.bg or tx.manual %}
+  <form method="post" action="/admin/transcripts/pause"><button class="action stop">{{ icon('pause') }}<b>Pause transcripts</b>
+    <span>Stop timing transcripts until the next check. What was heard so far is kept.</span></button></form>
+  {% else %}
+  <form method="post" action="/admin/transcripts/all"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('doc') }}<b>Time transcripts now</b>
+    <span>Every episode's transcript not timed yet, newest first, until all are done{% if tx.when != 'always' %}, whatever the schedule{% endif %}</span></button></form>
+  <form method="post" action="/admin/transcripts/time"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('play') }}<b>Time one episode now</b>
+    <span>The newest one not timed yet, to see how long it takes on this server</span></button></form>
+  {% endif %}
   <a class="action" href="/admin/settings">{{ icon('sliders') }}<b>Settings</b><span>Login, schedule, downloads and TubeArchivist</span></a>
   <a class="action" href="/admin/shows">{{ icon('grid') }}<b>Shows</b><span>Which shows there are, their pictures and tags</span></a>
   <a class="action" href="/admin/problems">{{ icon('alert') }}<b>Problems (<span data-stat="problems">{{ st.counts.problems }}</span>)</b>
@@ -175,10 +184,11 @@
     link to.{% endif %}</p>
   {% else %}
   <p class="small">{{ tx.count }} episode{{ '' if tx.count == 1 else 's' }} with a transcript, {{ tx.aligned }} timed{% if tx.failed %},
-    {{ tx.failed }} that couldn't be{% endif %}. Timing in the background is
-    <b>{{ 'on' if tx.time else 'off' }}</b> ({{ tx.model }}, {{ tx.threads }} thread{{ '' if tx.threads == 1 else 's' }};
-    <a href="/admin/settings#transcripts">Settings</a>).</p>
+    {{ tx.failed }} that couldn't be{% endif %}.</p>
   {% endif %}
+  <p class="small">Timing runs <b>{% if tx.when == 'always' %}as soon as there's something new{% elif tx.when == 'hours' %}{% if tx.start == tx.until %}all day{% else %}from {{ tx.start }} to {{ tx.until }}{% endif %}{% else %}only when you start it{% endif %}</b>
+    ({{ tx.model }}, {{ tx.threads }} thread{{ '' if tx.threads == 1 else 's' }};
+    <a href="/admin/settings#transcripts">Settings</a>){% if tx.manual %}; started by hand, until all are done{% endif %}.</p>
   {% if tx.problem %}<p class="small bad">{{ tx.problem }}. It's tried again after the next check.</p>{% endif %}
   <p class="small" data-bg data-had="{{ '1' if tx.bg else '0' }}">{% if tx.bg %}<b>{{ tx.bg.phase }}:</b> {{ tx.bg.detail }}{% elif tx.paused %}Paused until the next check.{% endif %}</p>
   {% if tx.last %}
@@ -190,11 +200,5 @@
     {{ tx.last.placed }} of {{ tx.last.placed + tx.last.unplaced }} lines placed; {{ (tx.last.found * 100) | round(0) | int }}%
     of the transcript's words were heard.{% endif %}</p>
   {% endif %}
-  <div class="actions">
-    <form method="post" action="/admin/transcripts/time"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('refresh') }}<b>Time one episode now</b>
-      <span>The newest episode whose transcript isn't timed yet, to see how long it takes on this server. A check goes first.</span></button></form>
-    {% if tx.bg %}<form method="post" action="/admin/transcripts/pause"><button class="action">{{ icon('stop') }}<b>Pause</b>
-      <span>Stop working on transcripts until the next check. What was heard so far is kept.</span></button></form>{% endif %}
-  </div>
 </div>
 {% endblock %}

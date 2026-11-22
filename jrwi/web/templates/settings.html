@@ -127,12 +127,27 @@
     lines, speaker by speaker, so the web app and the apps can show it. Timing it hears the episode once with a
     speech recognizer (faster-whisper) and matches the transcript's words to what it heard, so the line being spoken
     can be shown as it plays. That takes a while and a fair amount of memory, so it runs between checks, one episode
-    at a time, at a low priority, and a check always goes first. Try one episode from the Admin page before turning
-    it on for all of them.</p>
+    at a time, at a low priority, and a check always goes first. Try one episode from the Admin page before setting
+    when it runs.</p>
   <div class="cols">
     <div>
       <label class="check"><input type="checkbox" name="transcripts_read" {% if s.transcripts_read %}checked{% endif %}> Read transcripts into lines</label>
-      <label class="check"><input type="checkbox" name="transcripts_time" {% if s.transcripts_time %}checked{% endif %}> Time them in the background</label>
+      <label for="txwhen">Time them</label>
+      <select id="txwhen" name="transcripts_when">
+        {% for m, what in [('off', 'Only when started on the Admin page'), ('hours', 'Between set hours'), ('always', "As soon as there's something new")] %}
+          <option value="{{ m }}" {% if s.transcripts_when == m %}selected{% endif %}>{{ what }}</option>
+        {% endfor %}
+      </select>
+      <div class="inline-times">
+        <div class="times">
+          <span><label for="txfrom">From</label> <input id="txfrom" type="time" name="transcripts_from" value="{{ s.transcripts_from }}"></span>
+          <span><label for="txuntil">until</label> <input id="txuntil" type="time" name="transcripts_until" value="{{ s.transcripts_until }}"></span>
+        </div>
+        <div class="hint">The server's local time (TZ in the compose file). The hours can go past midnight. An
+          episode that's half heard when they end is kept, and carries on the next day.</div>
+      </div>
+      <div class="hint">As soon as there's something new: after each check that finds new episodes, until every
+        transcript is timed. Time transcripts now on the Admin page does the same once, whatever is chosen here.</div>
       <div class="hint">The speech model is downloaded once, the first time (to the data folder's <code>models</code>).
         The Admin page shows how long the last episode took and the most memory it used.</div>
     </div>

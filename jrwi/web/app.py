@@ -7,6 +7,7 @@ import hmac
 import logging
 import math
 import os
+import re
 import secrets
 import threading
 import time
@@ -944,7 +945,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if last:
             row = db.post(last["item_id"])
             last["title"] = row["title"] if row else str(last["item_id"])
-        return dict(s, read=settings["transcripts_read"], time=settings["transcripts_time"],
+        return dict(s, read=settings["transcripts_read"], when=scheduler.transcripts_mode(),
+                    start=settings["transcripts_from"], until=settings["transcripts_until"],
+                    now_on=scheduler.timing_now(), manual=scheduler.transcripts_manual,
                     model=transcripts.model(), threads=transcripts.threads(), bg=background_obj(),
                     paused=scheduler.transcripts_paused)
 
@@ -1010,10 +1013,15 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             except ValueError:
                 pass
         for key in ("video", "audio", "images", "attachments", "comments", "google_docs", "public_pages",
-                    "youtube_embeds", "handover", "transcripts_read", "transcripts_time"):
+                    "youtube_embeds", "handover", "transcripts_read"):
             db.set_setting(key, form.get(key) == "on")
         if form.get("transcript_model") in ("base.en", "small.en", "medium.en"):
             db.set_setting("transcript_model", form["transcript_model"])
+        if form.get("transcripts_when") in ("off", "hours", "always"):
+            db.set_setting("transcripts_when", form["transcripts_when"])
+        for key in ("transcripts_from", "transcripts_until"):
+            if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", form.get(key) or ""):
+                db.set_setting(key, form[key])
         scheduler.transcripts_idle = scheduler.transcripts_paused = False   # what's on may have changed
         if form.get("new_web_password"):
             if len(form["new_web_password"]) >= 8:
@@ -1281,6 +1289,12 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         scheduler.transcript_now(target)
         back = f"/admin/items/{item}" if item.strip().isdigit() else "/admin"
         return RedirectResponse(back + "#transcripts", 303)
+
+    @app.post("/admin/transcripts/all", dependencies=[Depends(web_auth)])
+    def admin_transcripts_all():
+        """Time every transcript not timed yet, until all are done, whatever the schedule in Settings."""
+        scheduler.transcripts_all_now()
+        return RedirectResponse("/admin", 303)
 
     @app.post("/admin/transcripts/pause", dependencies=[Depends(web_auth)])
     def admin_transcripts_pause():

@@ -85,13 +85,18 @@ Many episodes link a transcript: a Google Doc, saved as a PDF, with each speaker
 
 To time the lines, the archiver hears the episode once with a speech recognizer ([faster-whisper](https://github.com/SYSTRAN/faster-whisper), on the processor) and matches the transcript's words to the words it heard. Mishearing some words doesn't matter much, as a line only needs a few of its words found; a line none of whose words were heard goes right after the line before it, or is shown without a time next to a long pause. A transcript that turns out to be another episode's (under 30% of its words heard) isn't timed.
 
-Hearing a three-hour episode takes a while and needs about 1.5 GB of memory with the default model (small.en), so it's off until you turn it on:
+Hearing an episode takes a while and a fair amount of memory: on one 4-thread server, an episode took about 27 minutes with the default model (small.en) and used at most about 1.7 GB. So it's off until you start it or choose when it runs:
 
 1. On the **Admin** page, press **Time one episode now**. It times the newest episode with a transcript, between checks. The first time, the speech model is downloaded to the data folder's `models` folder.
 2. When it's done, the Admin page says how long it took, the most memory it used, and how many lines it placed. Open the episode and try the Transcript button.
-3. If that suits your server, turn on **Settings > Transcripts > Time them in the background**. Episodes are then timed one at a time, newest first, at a low priority, using half the processor's threads (a setting).
+3. If that suits your server, either press **Time transcripts now** on the Admin page, which times every episode not timed yet and then stops, or choose when it runs in **Settings > Transcripts > Time them**:
+   - **Only when started on the Admin page** (the default).
+   - **Between set hours**, such as 01:00 to 07:00 in the server's local time (`TZ` in the compose file). The hours can go past midnight. An episode that's half heard when they end carries on the next day.
+   - **As soon as there's something new**: after each check that finds new episodes, until every transcript is timed.
 
-A check, the podcast feed and Re-read always go first: the episode being heard stops and carries on later from where it was, as what's been heard is saved every ten minutes of sound. **Pause** on the Admin page stops it until the next check.
+   Episodes are timed one at a time, newest first, at a low priority, using half the processor's threads (a setting).
+
+A check, the podcast feed and Re-read always go first: the episode being heard stops and carries on later from where it was, as what's been heard is saved every ten minutes of sound. **Pause transcripts** on the Admin page (in place of Time transcripts now while it runs) stops it until the next check.
 
 ## What you'll find in the folders
 
@@ -138,7 +143,7 @@ On the site, an episode's members-only video, its YouTube embed and its "(AUDIO 
 | Notification URL | none | An ntfy topic URL or a Discord webhook. It gets new posts and problems such as a failed login. |
 | Podcast feed | none | The site's private podcast feed, read every 15 minutes (a setting) to start checks for new episodes |
 | Mark an episode watched with this many minutes left | 2 | For the web app, and apps that leave it to the archive. Shorter videos are marked in their last 5%. |
-| Transcripts | read: on; time: off | Read linked transcripts into lines; time them in the background with a speech model (small.en, half the threads) |
+| Transcripts | read: on; time: only when started | Read linked transcripts into lines; when to time them with a speech model (off, between set hours, or as soon as there's something new), the model (small.en) and threads (half) |
 
 You can also set these environment variables:
 

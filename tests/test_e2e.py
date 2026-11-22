@@ -1011,10 +1011,10 @@ def test_podcast_feed(app, client, monkeypatch):
     form = {"podcast_feed": f"http://127.0.0.1:{PORT}/supporters/podcast/{key}/rss", "feed_minutes": "15",
             **{k: str(s[k]) for k in ("check_interval_hours", "max_height", "comment_refresh_days", "request_delay",
                                       "recheck_days", "site_email", "public_url", "ta_url", "notify_url",
-                                      "watched_minutes_left", "transcript_threads", "transcript_model")},
+                                      "watched_minutes_left", "transcript_threads", "transcript_model",
+                                      "transcripts_when", "transcripts_from", "transcripts_until")},
             **{k: "on" for k in ("video", "audio", "images", "attachments", "comments", "google_docs",
-                                 "public_pages", "youtube_embeds", "handover", "transcripts_read",
-                                 "transcripts_time") if s[k]}}
+                                 "public_pages", "youtube_embeds", "handover", "transcripts_read") if s[k]}}
     web.post("/admin/settings", data=form)
     assert db.settings() == {**s, "podcast_feed": form["podcast_feed"], "feed_state": {}}
     assert db.setting("podcast_feed").endswith(f"/{key}/rss") and scheduler.feed_due()
@@ -1277,9 +1277,28 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         web.post("/login", data={"password": "test-password"})
         assert "data-transcript" in web.get("/items/298").text
         admin = web.get("/admin").text
-        assert "Time one episode now" in admin and "lines placed" in admin
+        assert "Time one episode now" in admin and "Time transcripts now" in admin and "lines placed" in admin
+        assert "only when you start it" in admin
         assert "Time it again" in web.get("/admin/items/298").text
-        assert 'name="transcript_model"' in web.get("/admin/settings").text
+        settings = web.get("/admin/settings").text
+        assert 'name="transcript_model"' in settings and 'name="transcripts_when"' in settings
+        # The schedule: hours are kept only when they're times of day
+        form = {k: (str(v) if not isinstance(v, bool) else "on") for k, v in db.settings().items()
+                if isinstance(v, (str, int, float)) and (not isinstance(v, bool) or v)}
+        form.pop("site_password", None)
+        web.post("/admin/settings", data={**form, "transcripts_when": "hours", "transcripts_from": "23:15",
+                                          "transcripts_until": "25:00"})
+        assert db.setting("transcripts_when") == "hours" and db.setting("transcripts_from") == "23:15"
+        assert db.setting("transcripts_until") == "07:00"
+        assert "from 23:15 to 07:00" in web.get("/admin").text
+        db.set_setting("transcripts_when", "off")
+        # Time transcripts now: the tile becomes Pause until it's done or paused
+        monkeypatch.setattr(scheduler.wake, "set", lambda: None)   # keep the scheduler's thread out of it
+        web.post("/admin/transcripts/all")
+        assert scheduler.transcripts_manual and "Pause transcripts" in web.get("/admin").text
+        web.post("/admin/transcripts/pause")
+        assert not scheduler.transcripts_manual and "Time transcripts now" in web.get("/admin").text
+        scheduler.transcripts_paused = False
         # Timing it again with nothing changed only matches again: nothing is heard twice
         monkeypatch.setenv("JRWI_FAKE_HEARING", str(tmp_path / "missing.json"))
         scheduler._transcripts(one=300)
