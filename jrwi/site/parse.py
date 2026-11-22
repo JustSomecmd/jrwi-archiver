@@ -22,7 +22,7 @@ SameSite = Callable[[str], bool]
 
 # Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
 # it has saved, so fixes reach posts and comments that were archived before the update.
-PARSER_VERSION = 8
+PARSER_VERSION = 9
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
@@ -665,8 +665,47 @@ def extract_media(card, page_url: str, same_site: SameSite, post_id: int | None 
                     label="" if label.startswith("http") else label, url=t["href"])
             m = DRIVE_FOLDER_RE.search(t["href"])
             if m:
-                add("gdrive_folder", "gdrive_folder:" + m.group(1), folder_id=m.group(1), url=t["href"])
+                label = norm_space(t.get_text(" ", strip=True))
+                add("gdrive_folder", "gdrive_folder:" + m.group(1), folder_id=m.group(1), url=t["href"],
+                    resource_key=resource_key(t["href"]), label="" if label.startswith("http") else label)
     return items, unresolved
+
+
+def resource_key(url: str) -> str | None:
+    """Older links shared from Drive carry a resource key, which Drive wants with every request for the file."""
+    return (parse_qs(urlparse(url).query).get("resourcekey") or [None])[0]
+
+
+DRIVE_LIST_FILE_RE = re.compile(r"^https://drive\.google\.com/file/d/([\w-]{20,})")
+DRIVE_LIST_DOC_RE = re.compile(r"^https://docs\.google\.com/(\w+)/d/([\w-]{20,})")
+
+
+def parse_drive_folder(html_text: str) -> dict | None:
+    """What a shared Drive folder holds, from the page Google makes for showing a folder inside another site
+    (embeddedfolderview): its name, then its files, Google Docs and folders, each with its ID and name. None when
+    the page isn't a folder's (a sign-in page, say, when the folder isn't shared)."""
+    soup = BeautifulSoup(html_text, "html.parser")
+    title = soup.title.get_text(strip=True) if soup.title else ""
+    if not title or soup.find("input", attrs={"type": "password"}) is not None:
+        return None
+    entries, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        href, name = a["href"], norm_space(a.get_text(" ", strip=True))
+        rk = resource_key(href)
+        m = DRIVE_LIST_FILE_RE.match(href)
+        if m:
+            entry = {"kind": "file", "id": m.group(1)}
+        elif (m := DRIVE_LIST_DOC_RE.match(href)):
+            entry = {"kind": "gdoc", "id": m.group(2), "doc_type": m.group(1)}
+        elif (m := DRIVE_FOLDER_RE.match(href)):
+            entry = {"kind": "folder", "id": m.group(1)}
+        else:
+            continue
+        if entry["id"] in seen:
+            continue
+        seen.add(entry["id"])
+        entries.append({**entry, "name": name, "resource_key": rk})
+    return {"name": title, "entries": entries}
 
 
 def extract_body(card) -> tuple[str, str, list[dict]]:

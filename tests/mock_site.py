@@ -4,6 +4,7 @@ Run: python tests/mock_site.py 8765   (needs tests/media, made by tests/make_med
 Login: fan@example.com / hunter2
 """
 import json
+from datetime import datetime, timezone
 import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -142,7 +143,9 @@ P2 = [
     add(288, "/supporters/audio/blue-jay-riptide-135-audio-only", "Blue Jay | Riptide #135 (AUDIO ONLY)", "Oct 17, 2026",
         mux_audio(288), "<p>Audio.</p>", extra=dl_audio(288, "Blue%20Jay"), access="public", tags="tag_101"),
     add(287, "/supporters/videos/keeper-notes-unwitness", "Keeper Notes - Unwitness [Empty Graves]", "Oct 8, 2026",
-        mux_video(287), "<p>Notes.</p>"),
+        mux_video(287), '<p>Notes. Maps are in <a href="https://drive.google.com/drive/folders/1FolderCampaignMapsFolder0001'
+        '?usp=sharing">the campaign folder</a>, the rest in <a href="https://drive.google.com/drive/folders/'
+        '1PrivatePrivatePrivatePriv01">our own folder</a>.</p>'),
 ]
 
 TAGS = ('<div class="filters">'
@@ -255,6 +258,33 @@ TA_TOKEN = "ta-test-token"
 TA_VIDEOS = {"JRWI136ytAA": (23.0, "youtube.mp4"), "KEEPERytBB": (999.0, "youtube.mp4"), "CzZ13VPQOcw": (23.0, "youtube.mp4")}
 
 
+# The members' private podcast feed, as a podcast app reads it: its address holds the member's key, and so do
+# the audio files' addresses. Stage 1 (GET /_test/feed?n=1) adds an episode the site hasn't shown yet.
+FEED = {"n": 0}
+FEED_KEY = "feedkey123secret"
+
+
+def podcast_feed():
+    def item(guid, title, date, link=None, duration="00:00:20"):
+        return (f"<item><title>{title}</title><guid isPermaLink=\"false\">{guid}</guid><pubDate>{date}</pubDate>"
+                + (f"<link>{B}{link}</link>" if link else "")
+                + f"<description><![CDATA[<p>About {title}.</p>]]></description>"
+                f'<enclosure url="https://cdn.example.com/feeds/{FEED_KEY}/{guid}.m4a" length="123456" type="audio/mp4"/>'
+                f"<itunes:duration>{duration}</itunes:duration><itunes:episodeType>full</itunes:episodeType></item>")
+    items = [
+        item("fw-post-288", "Blue Jay | Riptide #135 (AUDIO ONLY)", "Fri, 17 Oct 2026 18:04:00 +0000",
+             "/supporters/audio/blue-jay-riptide-135-audio-only"),
+        item("8d3f9a1e-55c2", "Through the Fire | Riptide #136 (AUDIO ONLY)", "Sat, 07 Nov 2026 17:30:00 GMT"),
+        item("b0nu5-tavern", "Bonus: Tavern Talk", "Mon, 01 Jun 2026 12:00:00 +0000", duration="1:02:03"),
+    ]
+    if FEED["n"] >= 1:
+        when = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        items.insert(0, item("fresh-episode-1", "Something New | Riptide #137 (AUDIO ONLY)", when))
+    return ('<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" '
+            'xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>JRWI Supporters</title>'
+            f'<link>{B}/supporters</link><itunes:author>JRWI</itunes:author>{"".join(items)}</channel></rss>')
+
+
 def stage_posts(posts):
     if STAGE["n"] < 1:
         return posts
@@ -331,6 +361,14 @@ class H(BaseHTTPRequestHandler):
         if p == "/_test/stage":
             STAGE["n"] = int(q.get("n", ["0"])[0])
             return self.send(200, "ok")
+        if p == "/_test/feed":
+            FEED["n"] = int(q.get("n", ["0"])[0])
+            return self.send(200, "ok")
+        if p == f"/supporters/podcast/{FEED_KEY}/rss":
+            etag = f'"feed-{FEED["n"]}"'
+            if self.headers.get("If-None-Match") == etag:
+                return self.send(304, "")
+            return self.send(200, podcast_feed(), "application/rss+xml; charset=utf-8", {"ETag": etag})
         if p.startswith("/ta/"):
             return self.tubearchivist(p[3:])
         if STAGE["n"] >= 1 and p in GONE:
@@ -375,6 +413,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, '{"url": "' + B + '/signed/Zombie%20Character%20Sheets.pdf?sig=abc"}', "application/json")
         if p.startswith("/gdocs/") and p.endswith("/export"):
             return self.send(200, (MEDIA / "sheet.pdf").read_bytes(), "application/pdf")
+        if p == "/drive/folderview":
+            return self.drive_folder(q.get("id", [""])[0], q.get("resourcekey", [""])[0])
         if p == "/drive/download":
             fid = q.get("id", [""])[0]
             if fid.startswith("1Big") and q.get("confirm", [""])[0] != "t":
@@ -383,7 +423,7 @@ class H(BaseHTTPRequestHandler):
                                       f'<input type="submit" value="Download anyway"><input type="hidden" name="id" value="{fid}">'
                                       f'<input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t">'
                                       f'<input type="hidden" name="uuid" value="u-123"></form></body></html>')
-            name = {"1Small": "Map.pdf", "1BigMa": "Big Map.pdf"}.get(fid[:6])
+            name = {"1Small": "Map.pdf", "1BigMa": "Big Map.pdf", "1Folde": "Handout.pdf", "1OldMa": "Old Map.pdf"}.get(fid[:6])
             if not name:
                 return self.send(404, "<html>Not found</html>")
             return self.send(200, (MEDIA / "sheet.pdf").read_bytes(), "application/pdf",
@@ -402,6 +442,23 @@ class H(BaseHTTPRequestHandler):
             f = MEDIA / p[5:]
             return self.file(f, "application/vnd.apple.mpegurl" if f.suffix == ".m3u8" else "video/mp2t")
         return self.send(404, "not found")
+
+    def drive_folder(self, fid, rk):
+        """Drive's embeddedfolderview page: the folder's name, then a link per file, Google Doc and folder."""
+        sign_in = '<html><head><title>Sign in</title></head><body><input type="password" name="Passwd"></body></html>'
+        def a(href, name):
+            return f'<div class="flip-entry"><a href="{href}" target="_blank"><div class="flip-entry-title">{name}</div></a></div>'
+        if fid == "1FolderCampaignMapsFolder0001":
+            body = (a("https://drive.google.com/file/d/1FolderHandoutFolderHandout01/view?usp=drive_web", "Handout.pdf")
+                    + a("https://drive.google.com/file/d/1SmallMapSmallMapSmallMap0001/view?usp=drive_web", "Map.pdf")
+                    + a("https://docs.google.com/document/d/1FolderDocFolderDocFolderDoc1/edit?usp=drive_web", "Session notes")
+                    + a("https://docs.google.com/forms/d/1FormFormFormFormFormForm01/viewform?usp=drive_web", "Sign-up form")
+                    + a("https://drive.google.com/drive/folders/1SubfolderOldMapsSubfolder01?resourcekey=0-old", "Old maps"))
+            return self.send(200, f"<html><head><title>Campaign Maps</title></head><body>{body}</body></html>")
+        if fid == "1SubfolderOldMapsSubfolder01" and rk == "0-old":
+            body = a("https://drive.google.com/file/d/1OldMapOldMapOldMapOldMap0001/view?usp=drive_web", "Old Map.pdf")
+            return self.send(200, f"<html><head><title>Old maps</title></head><body>{body}</body></html>")
+        return self.send(200, sign_in)
 
     def tubearchivist(self, p):
         if self.headers.get("Authorization") != f"Token {TA_TOKEN}":

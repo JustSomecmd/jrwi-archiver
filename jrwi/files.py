@@ -161,6 +161,7 @@ def post_files(paths: Paths, post: dict) -> list[dict]:
         e = entry(paths, d["url"], "document", pid, d.get("name"), d.get("source"))
         if e and d["url"] not in seen:
             seen.add(d["url"])
+            e["folder"] = d.get("folder")   # where it is in a shared Drive folder the post links to
             out.append(e)
     for at in post.get("attachments") or []:
         e = entry(paths, at["url"], "attachment", pid, at.get("name"), None, at.get("size"))
@@ -177,12 +178,15 @@ def post_files(paths: Paths, post: dict) -> list[dict]:
         if e:
             out.append(e)
     # Google Docs and Drive links that weren't saved (a folder, or one the site's owner didn't share)
-    saved_sources = {d.get("source") for d in post.get("documents") or []}
+    saved_sources = ({d.get("source") for d in post.get("documents") or []}
+                     | {d.get("folder_url") for d in post.get("documents") or []})
     for link in post.get("links") or []:
         url = link.get("url") or ""
         if urlparse(url).hostname in GOOGLE_FILE_HOSTS and url not in saved_sources:
             out.append({"name": link.get("text") or url, "role": "link", "type": "link", "mime": None, "size": None,
                         "url": None, "path": None, "post_id": pid, "source": url, "saved": False, "preview": None})
+    for e in out:
+        e.setdefault("folder", None)
     return out
 
 

@@ -45,7 +45,7 @@
 
   <div class="post-info">
     <div class="pmeta">
-      <span>{{ nice_date(item.date) }}</span>
+      <span>{{ nice_date(item.date) }}{% if item.published_at %} · <span data-time-of-day="{{ item.published_at }}" title="The time the podcast feed gives"></span>{% endif %}</span>
       {% if item.pinned %}<span class="tag">{{ icon('pin') }} Pinned</span>{% endif %}
       {% if item.paired and item.version %}<span class="tag">{{ version_name[item.version] }}</span>{% endif %}
       {% for pl in places %}<a class="show" href="/shows/{{ pl.show }}?tab={{ pl.tab }}{% if pl.tab == 'episodes' and pl.show == item.show and item.season %}&season={{ item.season }}{% endif %}">{{ pl.name }} · {{ tab_name(pl.tab) }}</a>{% endfor %}
@@ -59,7 +59,7 @@
     {% if item.attachments or item.documents %}
       <div class="files">
         {% for f in item.attachments %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('file') }} {{ f.name }}{% if f.size %} <span class="muted">({{ human_size(f.size) }})</span>{% endif %}</a>{% endfor %}
-        {% for f in item.documents %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }} {{ f.name }}</a>{% endfor %}
+        {% for f in item.documents %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }} {% if f.folder %}<span class="muted">{{ f.folder }}/</span>{% endif %}{{ f.name }}</a>{% endfor %}
       </div>
     {% endif %}
     {% if item.tags %}<div class="tags">{% for t in item.tags %}<a class="tag" href="/?tag={{ t | urlencode }}" title="All posts tagged {{ t }}">{{ t }}</a>{% endfor %}</div>{% endif %}

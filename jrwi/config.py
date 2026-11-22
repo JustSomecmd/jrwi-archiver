@@ -31,6 +31,8 @@ MUX_BASE = os.environ.get("JRWI_MUX_BASE", "https://stream.mux.com").rstrip("/")
 YT_THUMBS = os.environ.get("JRWI_YT_THUMBS", "https://i.ytimg.com").rstrip("/")
 GDOCS_BASE = os.environ.get("JRWI_GDOCS_BASE", "https://docs.google.com").rstrip("/")
 DRIVE_DOWNLOAD = os.environ.get("JRWI_DRIVE_DOWNLOAD", "https://drive.usercontent.google.com/download")
+# The page Google makes for showing a shared folder inside another site: a plain list of what the folder holds
+DRIVE_FOLDER_VIEW = os.environ.get("JRWI_DRIVE_FOLDER_VIEW", "https://drive.google.com/embeddedfolderview")
 
 # Defaults for everything the admin page can change. Stored in the settings table.
 DEFAULTS: dict = {
@@ -54,6 +56,8 @@ DEFAULTS: dict = {
     "ta_token": "",                # its API token (its Settings page)
     "handover": True,              # delete an archived video once TubeArchivist has the same video from YouTube
     "recheck_days": 60,            # each check reads the feed back this far, to catch posts added with an older date
+    "podcast_feed": "",            # the members' private podcast feed (RSS); its address holds a key, like a password
+    "feed_minutes": 15,            # how often to read it; 0 = never
     "api_token": "",
     "web_password_hash": "",
     "session_secret": "",

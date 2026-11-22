@@ -130,4 +130,41 @@
   </table>
   {% endif %}
 </div>
+
+<div class="panel" id="feed">
+  <h3>Podcast feed</h3>
+  {% if not feed_set %}
+  <p class="muted small">Not set up. With the site's private podcast feed in <a href="/admin/settings">Settings</a>,
+    the archiver reads it every few minutes, starts a check when a new episode is in it, and takes the time of day
+    each episode came out.</p>
+  {% else %}
+  {% set fs = feed.state %}
+  <p class="small">{% if fs.last_read %}Read <span data-when-at="{{ fs.last_read }}">{{ fs.last_read }}</span>
+    {%- if fs.ok %}: {{ feed.count }} episodes{% if fs.title %} in “{{ fs.title }}”{% endif %}{% else %}: <b>{{ fs.error }}</b>{% endif %}.
+    {% else %}Not read yet.{% endif %}
+    {% if feed_every %}Read every {{ feed_every }} minutes between checks.{% else %}Reading it is off in Settings.{% endif %}
+    {% if fs.last_trigger %}Last started a check <span data-when-at="{{ fs.last_trigger.at }}">{{ fs.last_trigger.at }}</span>,
+      for {{ fs.last_trigger.titles | join(', ') }}.{% endif %}</p>
+  {% if feed.count %}
+  <p class="small">{{ feed.matched }} of {{ feed.count }} episodes are posts in the archive.
+    {{ feed.with_time }} say the time of day they came out{% if feed.times_used %}, which {{ feed.times_used }} posts now show{% endif %}.
+    {% if feed.gone %}{{ feed.gone }} that were in it are gone from it.{% endif %}</p>
+  <details class="small"><summary>What each episode in it has</summary>
+    <table>{% for name, n in feed.fields %}<tr><td><code>{{ name }}</code></td><td class="muted">{{ n }} of {{ feed.count }}</td></tr>{% endfor %}</table>
+    {% if fs.channel_fields %}<p class="muted">The feed itself: {% for f in fs.channel_fields %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  </details>
+  <details class="small"><summary>Newest in it</summary>
+    <table>{% for r in feed.latest %}<tr><td>{% if r.post_id %}<a href="/items/{{ r.post_id }}">{{ r.title }}</a>{% else %}{{ r.title }}{% endif %}</td>
+      <td class="muted">{% if r.published %}<span data-when-at="{{ r.published }}">{{ r.published }}</span>{% endif %}
+        {%- if r.duration %} · {% if r.duration >= 60 %}{{ r.duration // 60 }} min{% else %}{{ r.duration }} s{% endif %}{% endif %}{% if r.enclosure_type %} · {{ r.enclosure_type }}{% endif %}</td></tr>{% endfor %}</table>
+  </details>
+  {% if feed.unmatched %}
+  <details class="small"><summary>In the feed but not found in the archive ({{ feed.unmatched | length }}{% if feed.unmatched | length == 20 %}+{% endif %})</summary>
+    <table>{% for r in feed.unmatched %}<tr><td>{{ r.title }}</td><td class="muted">{% if r.published %}<span data-when-at="{{ r.published }}">{{ r.published }}</span>{% endif %}</td></tr>{% endfor %}</table>
+  </details>
+  {% endif %}
+  {% endif %}
+  <form method="post" action="/admin/feed/read"><button class="ghost">Read it now</button></form>
+  {% endif %}
+</div>
 {% endblock %}

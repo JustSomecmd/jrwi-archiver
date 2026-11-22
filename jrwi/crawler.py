@@ -18,7 +18,7 @@ from urllib.parse import urlencode, urljoin, urlparse
 import requests
 
 from . import handover, organize
-from .config import DRIVE_DOWNLOAD, GDOCS_BASE, MUX_BASE, SITE_BASE, Paths
+from .config import DRIVE_DOWNLOAD, DRIVE_FOLDER_VIEW, GDOCS_BASE, MUX_BASE, SITE_BASE, Paths
 from .db import Db, now
 from .site import parse as P
 from .site.client import (HTML_ACCEPT, TURBO_ACCEPT, Blocked, Client, LoginFailed, NotFound, SessionExpired,
@@ -691,14 +691,8 @@ class Archiver:
                 elif it["kind"] == "gdoc":
                     if have(key):
                         continue
-                    fmt = {"document": ("export?format=pdf", ".pdf"), "spreadsheets": ("export?format=xlsx", ".xlsx"),
-                           "presentation": ("export/pdf", ".pdf")}[it["doc_type"]]
-                    export = f"{GDOCS_BASE}/{it['doc_type']}/d/{it['doc_id']}/{fmt[0]}"
-                    label = it.get("label") or f"Google doc {it['doc_id'][:10]}"
-                    name = P.safe_filename(f"{label} [{it['doc_id'][:8]}]", 110, keep_ext=False) + fmt[1]
                     try:
-                        p = downloader.file(export, self.paths.archive / "google-docs", name, referer=final,
-                                            reject_html=True, tries=2)
+                        p = self.google_doc(downloader, it["doc_type"], it["doc_id"], it.get("label"), final)
                         files[key] = self.rel(p)
                         documents.append({"name": p.name, "url": self.rel(p), "source": it["url"]})
                     except DownloadError as e:
@@ -719,8 +713,11 @@ class Archiver:
                         else:
                             raise
                 elif it["kind"] == "gdrive_folder":
-                    notes.append(f"linked Google Drive folder not saved (folders can't be downloaded as a whole; "
-                                 f"links to the files in it are saved): {it['url']}")
+                    if have(key):
+                        continue
+                    record = self.drive_folder(downloader, it, final, files, documents, notes, post["title"])
+                    if record is not None:
+                        files[key] = self.rel(record)
             except DownloadError as e:
                 if self.stop_event.is_set():
                     raise
@@ -1124,11 +1121,125 @@ class Archiver:
             (self.paths.archive / old).unlink(missing_ok=True)
         return self.rel(dest)
 
+    GOOGLE_EXPORTS = {"document": ("export?format=pdf", ".pdf"), "spreadsheets": ("export?format=xlsx", ".xlsx"),
+                      "presentation": ("export/pdf", ".pdf")}
+
+    def google_doc(self, downloader: Downloader, doc_type: str, doc_id: str, label: str | None, referer: str,
+                   resource_key: str | None = None) -> Path:
+        """A Google Doc, Sheet or Slides saved as a PDF (a Sheet as .xlsx)."""
+        fmt = self.GOOGLE_EXPORTS[doc_type]
+        export = f"{GDOCS_BASE}/{doc_type}/d/{doc_id}/{fmt[0]}"
+        if resource_key:
+            export += ("&" if "?" in export else "?") + urlencode({"resourcekey": resource_key})
+        label = label or f"Google doc {doc_id[:10]}"
+        name = P.safe_filename(f"{label} [{doc_id[:8]}]", 110, keep_ext=False) + fmt[1]
+        return downloader.file(export, self.paths.archive / "google-docs", name, referer=referer,
+                               reject_html=True, tries=2)
+
+    FOLDER_MAX_FILES = 300   # per linked folder, subfolders included
+    FOLDER_MAX_DEPTH = 5
+
+    def drive_folder(self, downloader: Downloader, it: dict, referer: str, files: dict, documents: list,
+                     notes: list, title: str) -> Path | None:
+        """A folder someone shared from Google Drive: every file in it and in its folders, each saved as a file
+        linked on its own would be (Google Docs as PDFs), listed as the post's documents with the folder it's in.
+        What the folder held is kept in google-docs/folders/<id>.json. Returns that file, or None when the folder
+        couldn't be read, which is noted on the post."""
+        root_name = it.get("label") or ""
+        record = {"id": it["folder_id"], "url": it["url"], "listed": now(), "files": [], "skipped": []}
+        queue = [(it["folder_id"], it.get("resource_key"), "", 0)]
+        seen_folders: set[str] = set()
+        count = 0
+        while queue:
+            if self.stop_event.is_set():
+                raise DownloadError("stopped")
+            folder_id, rk, path, depth = queue.pop(0)
+            if folder_id in seen_folders:
+                continue
+            seen_folders.add(folder_id)
+            params = {"id": folder_id, **({"resourcekey": rk} if rk else {})}
+            try:
+                r = self.client.request("GET", f"{DRIVE_FOLDER_VIEW}?{urlencode(params)}",
+                                        headers={"Referer": referer}, pace=False, tries=2)
+            except SiteError as e:
+                if self.stop_event.is_set():
+                    raise DownloadError("stopped") from None
+                listing, error = None, str(e).split(": http")[0]
+            else:
+                if "charset" not in (r.headers.get("Content-Type") or "").lower():
+                    r.encoding = "utf-8"
+                listing = P.parse_drive_folder(r.text) if r.status_code < 400 else None
+                error = (f"HTTP {r.status_code}" if r.status_code >= 400 else
+                         "Drive showed no folder there; it may not be shared with everyone who has the link")
+            if listing is None:
+                if not path:
+                    notes.append(f"linked Google Drive folder couldn't be read ({error}): {it['url']}")
+                    return None
+                record["skipped"].append({"folder": path, "reason": error})
+                continue
+            if not path:
+                record["name"] = root_name = listing["name"] or root_name
+            here = path or root_name or "Drive folder"
+            for e in listing["entries"]:
+                if e["kind"] == "folder":
+                    if depth + 1 >= self.FOLDER_MAX_DEPTH:
+                        record["skipped"].append({"folder": f"{here}/{e['name']}", "reason": "too deep"})
+                    else:
+                        queue.append((e["id"], e["resource_key"], f"{here}/{e['name'] or e['id'][:8]}", depth + 1))
+                    continue
+                if count >= self.FOLDER_MAX_FILES:
+                    record["skipped"].append({"folder": here, "name": e["name"], "reason": "too many files"})
+                    continue
+                count += 1
+                key = ("gdoc:" if e["kind"] == "gdoc" else "gdrive:") + e["id"]
+                source = (f"https://docs.google.com/{e['doc_type']}/d/{e['id']}" if e["kind"] == "gdoc"
+                          else f"https://drive.google.com/file/d/{e['id']}/view")
+                entry = {"name": e["name"], "id": e["id"], "folder": here, "path": None}
+                record["files"].append(entry)
+                if key in files and (self.paths.archive / files[key]).exists():
+                    entry["path"] = files[key]   # linked on its own in the post too
+                    for d in documents:
+                        if d["url"] == files[key]:
+                            d.setdefault("folder", here)
+                            d.setdefault("folder_url", it["url"])
+                    continue
+                if e["kind"] == "gdoc" and e["doc_type"] not in self.GOOGLE_EXPORTS:
+                    entry["skipped"] = f"a Google {e['doc_type']} file, which can't be saved as a file"
+                    continue
+                self.status.set(detail=f"{title} · saving the Google Drive folder \"{root_name or 'Drive folder'}\": "
+                                       f"{e['name'] or e['id'][:8]}", current=None)
+                try:
+                    if e["kind"] == "gdoc":
+                        p = self.google_doc(downloader, e["doc_type"], e["id"], e["name"], referer, e["resource_key"])
+                    else:
+                        p = self.drive_file(downloader, {"file_id": e["id"], "label": e["name"],
+                                                         "resource_key": e["resource_key"]}, referer)
+                except DownloadError as err:
+                    if self.stop_event.is_set():
+                        raise
+                    entry["skipped"] = str(err)
+                    notes.append(f"a file in the linked Google Drive folder \"{here}\" wasn't saved "
+                                 f"({e['name'] or e['id']}: {err})")
+                    continue
+                files[key] = entry["path"] = self.rel(p)
+                documents.append({"name": p.name, "url": self.rel(p), "source": source, "folder": here,
+                                  "folder_url": it["url"]})
+        if record["skipped"]:
+            notes.append(f"the linked Google Drive folder \"{record.get('name') or it['url']}\" was saved in part: "
+                         f"{len(record['skipped'])} files or folders left out (too many, too deep or not shared)")
+        out = self.paths.archive / "google-docs" / "folders" / f"{it['folder_id']}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(record, indent=1, ensure_ascii=False))
+        return out
+
     def drive_file(self, downloader: Downloader, it: dict, referer: str) -> Path:
         """A file someone shared from Google Drive. Large files get a page asking to confirm the download, as Drive
         can't scan them for viruses; its form has what's needed to go ahead."""
         dest = self.paths.archive / "google-docs" / "drive" / it["file_id"]
-        url = f"{DRIVE_DOWNLOAD}?{urlencode({'id': it['file_id'], 'export': 'download'})}"
+        params = {"id": it["file_id"], "export": "download"}
+        if it.get("resource_key"):
+            params["resourcekey"] = it["resource_key"]
+        url = f"{DRIVE_DOWNLOAD}?{urlencode(params)}"
         try:
             p = downloader.file(url, dest, None, referer=referer, reject_html=True, tries=2)
         except DownloadError as e:
@@ -1176,7 +1287,7 @@ class Archiver:
             if cls and not wanted.get(cls, True):
                 continue
             kind = it["kind"]
-            if kind in ("image", "thumbnail", "attachment", "gdoc", "gdrive"):
+            if kind in ("image", "thumbnail", "attachment", "gdoc", "gdrive", "gdrive_folder"):
                 gone = not have(it["key"])
             elif kind == "download":
                 gone = not have_video() if cls == "video" else not have(it["key"])

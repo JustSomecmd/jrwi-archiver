@@ -33,6 +33,7 @@ os.environ.update(
     JRWI_SITE=f"http://127.0.0.1:{PORT}", JRWI_MUX_BASE=f"http://127.0.0.1:{PORT}/mux",
     JRWI_YT_THUMBS=f"http://127.0.0.1:{PORT}/imgproxy/yt", JRWI_GDOCS_BASE=f"http://127.0.0.1:{PORT}/gdocs",
     JRWI_DRIVE_DOWNLOAD=f"http://127.0.0.1:{PORT}/drive/download",
+    JRWI_DRIVE_FOLDER_VIEW=f"http://127.0.0.1:{PORT}/drive/folderview",
     JRWI_EMAIL="fan@example.com", JRWI_PASSWORD="hunter2",
 )
 
@@ -437,6 +438,34 @@ def test_google_drive_files(app, client):
     assert {d["name"] for d in shown} >= {"Map.pdf", "Big Map.pdf"}
 
 
+def test_drive_folders(app, client):
+    """A shared Drive folder a post links to: its files, Google Docs and folders are saved, each with the folder
+    it's in. A folder that isn't shared is noted, and a Google Form, which can't be a file, is left out. Saved by
+    the check test_google_drive_files runs with Google files on."""
+    archiver = app.state.archiver
+    post = app.state.db.post(287)
+    docs = {d["name"]: d for d in post["documents"]}
+    assert docs["Handout.pdf"]["folder"] == "Campaign Maps" and docs["Map.pdf"]["folder"] == "Campaign Maps"
+    assert docs["Old Map.pdf"]["folder"] == "Campaign Maps/Old maps"   # its link needed the resource key
+    notes = next(n for n in docs if n.startswith("Session notes"))
+    assert notes.endswith(".pdf") and docs[notes]["folder"] == "Campaign Maps"
+    assert any("couldn't be read" in p and "1PrivatePrivatePrivatePriv01" in p for p in post["problems"])
+    record = json.loads((archiver.paths.archive / post["files"]["gdrive_folder:1FolderCampaignMapsFolder0001"]).read_text())
+    assert record["name"] == "Campaign Maps" and len(record["files"]) == 5
+    assert next(f for f in record["files"] if f["name"] == "Sign-up form")["skipped"].startswith("a Google forms")
+    # The API and the inspector say which folder each file is in; the folder link no longer shows as not saved
+    full = client.get("/api/posts/287").json()
+    assert {d["name"]: d["folder"] for d in full["documents"]}["Old Map.pdf"] == "Campaign Maps/Old maps"
+    files = client.get("/api/posts/287/files").json()["files"]
+    assert next(f for f in files if f["name"] == "Handout.pdf")["folder"] == "Campaign Maps"
+    links = [f["source"] for f in files if f["role"] == "link"]
+    assert links == ["https://drive.google.com/drive/folders/1PrivatePrivatePrivatePriv01"]
+    assert all("folder" in f for f in files)
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    assert "In the Drive folder Campaign Maps/Old maps" in web.get("/items/287/files").text
+
+
 def test_download_a_post_again(app, client):
     archiver, db = app.state.archiver, app.state.db
     post = db.post(299)
@@ -822,7 +851,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.18" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.19" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -898,6 +927,83 @@ def test_api_for_the_apps(app, client):
     assert kim["name"] == "Alex" and kim["count"] == 2 and kim["likes"] == 327
     lee = next(t for t in c["top"] if t["name"] == "Lee")
     assert lee["id"] is None and lee["count"] == 1
+
+
+def test_podcast_feed(app, client, monkeypatch):
+    """The private podcast feed: kept without its key, matched to posts for the time of day they came out, and a
+    new episode in it starts a check of the site, a few times at most."""
+    import requests as rq
+    from jrwi import podcast
+    db, scheduler = app.state.db, app.state.scheduler
+    key = "feedkey123secret"
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    assert "Not set up" in web.get("/admin").text
+    s = db.settings()   # the form sends every setting: keep the tests' own
+    form = {"podcast_feed": f"http://127.0.0.1:{PORT}/supporters/podcast/{key}/rss", "feed_minutes": "15",
+            **{k: str(s[k]) for k in ("check_interval_hours", "max_height", "comment_refresh_days", "request_delay",
+                                      "recheck_days", "site_email", "public_url", "ta_url", "notify_url")},
+            **{k: "on" for k in ("video", "audio", "images", "attachments", "comments", "google_docs",
+                                 "public_pages", "youtube_embeds", "handover") if s[k]}}
+    web.post("/admin/settings", data=form)
+    assert db.settings() == {**s, "podcast_feed": form["podcast_feed"], "feed_state": {}}
+    assert db.setting("podcast_feed").endswith(f"/{key}/rss") and scheduler.feed_due()
+
+    started = []
+    monkeypatch.setattr(scheduler, "check_now", lambda full=False: started.append(full) or True)
+    first = scheduler.read_feed()
+    assert first["ok"] and first["changed"] and first["matched"] == 2
+    assert not first["start_check"] and not scheduler.feed_due()   # the first read is the baseline
+    # Matched by the post's address, and by its title; the bonus episode isn't in the archive
+    assert db.post(288)["published_at"] == "2026-10-17T18:04:00+00:00"
+    assert db.post(298)["published_at"] == "2026-11-07T17:30:00+00:00"
+    item = db.one("SELECT * FROM feed_items WHERE guid = 'b0nu5-tavern'")
+    assert item["post_id"] is None and item["duration"] == 3723 and item["enclosure_host"] == "cdn.example.com"
+    assert "itunes:duration" in item["feed_fields"] and "enclosure" in item["feed_fields"]
+    # The API: posts and their items, and each version
+    assert client.get("/api/posts/288").json()["published_at"] == "2026-10-17T18:04:00+00:00"
+    full = client.get("/api/items/300").json()
+    assert full["published_at"] == "2026-11-07T17:30:00+00:00"   # from its audio version
+    assert {v["post_id"]: v["published_at"] for v in full["versions"]}[298] == "2026-11-07T17:30:00+00:00"
+    assert client.get("/api/posts/299").json()["published_at"] is None
+    # The key is never kept outside the setting, nor shown
+    for r in db.q("SELECT * FROM feed_items"):
+        assert key not in json.dumps(r)
+    assert key not in json.dumps(db.setting("feed_state"))
+    admin = web.get("/admin").text
+    assert key not in admin and key not in web.get("/admin/settings").text
+    assert "2 of 3 episodes are posts in the archive" in admin and "Bonus: Tavern Talk" in admin
+    assert "<code>itunes:duration</code>" in admin and "2 say the time of day" not in admin
+    assert "3 say the time of day they came out, which 2 posts now show" in admin
+    assert 'data-time-of-day="2026-10-17T18:04:00+00:00"' in web.get("/items/288").text
+
+    # Nothing new: the feed answers 304 and nothing starts
+    again = scheduler.read_feed()
+    assert again["ok"] and not again["changed"] and not again["start_check"]
+    # A new episode the site hasn't shown yet: a check starts, and again at most every 30 minutes, 3 times
+    rq.get(f"http://127.0.0.1:{PORT}/_test/feed?n=1", timeout=5)
+    try:
+        r = scheduler.read_feed()
+        assert r["start_check"] and r["new"] == ["Something New | Riptide #137 (AUDIO ONLY)"]
+        assert not scheduler.read_feed(force=True)["start_check"]   # tried just now
+        db.x("UPDATE feed_items SET last_try = '2000-01-01T00:00:00+00:00' WHERE guid = 'fresh-episode-1'")
+        assert scheduler.read_feed(force=True)["start_check"]
+        web.post("/admin/feed/read")                                  # "Read it now" starts the check itself
+        db.x("UPDATE feed_items SET last_try = '2000-01-01T00:00:00+00:00' WHERE guid = 'fresh-episode-1'")
+        web.post("/admin/feed/read")
+        assert started == [False]
+        assert db.one("SELECT tries FROM feed_items WHERE guid = 'fresh-episode-1'")["tries"] == 3
+        db.x("UPDATE feed_items SET last_try = '2000-01-01T00:00:00+00:00' WHERE guid = 'fresh-episode-1'")
+        assert not scheduler.read_feed(force=True)["start_check"]   # three tries are enough
+        assert "Last started a check" in web.get("/admin").text
+    finally:
+        rq.get(f"http://127.0.0.1:{PORT}/_test/feed?n=0", timeout=5)
+    # A wrong address: the error names the host, never the key
+    db.set_setting("podcast_feed", f"http://127.0.0.1:{PORT}/supporters/podcast/wrong{key}/rss")
+    bad = podcast.poll(db, force=True)
+    assert not bad["ok"] and "HTTP 404" in bad["error"] and key not in bad["error"]
+    db.set_setting("podcast_feed", "")
+    db.set_setting("feed_state", {})
 
 
 def test_feed_is_read_back_far_enough():

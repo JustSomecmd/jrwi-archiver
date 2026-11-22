@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from xml.sax.saxutils import escape
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -25,7 +25,7 @@ from .. import CONTRACT, FEATURES, NAME, VERSION
 from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
 from .. import files as files_mod
-from .. import handover
+from .. import handover, podcast
 from ..db import Db, now
 from ..tubearchivist import TaError, TubeArchivist
 from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, MAX_PICTURE, TABS, add_show, art_choices, choose_show_art,
@@ -811,6 +811,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                       every=settings["check_interval_hours"], back_days=settings["recheck_days"],
                       comment_days=settings["comment_refresh_days"],
                       last_reparse=db.setting("last_reparse"),
+                      feed_set=bool((settings.get("podcast_feed") or "").strip()), feed=podcast.summary(db),
+                      feed_every=settings["feed_minutes"],
                       configured=bool(db.setting("site_email") or os.environ.get("JRWI_EMAIL")))
 
     @app.post("/admin/check", dependencies=[Depends(web_auth)])
@@ -822,6 +824,15 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     def admin_stop():
         scheduler.stop()
         return RedirectResponse("/admin", 303)
+
+    @app.post("/admin/feed/read", dependencies=[Depends(web_auth)])
+    def admin_read_feed():
+        """Read the podcast feed now, whatever it said last time; a new episode the archive hasn't found starts a
+        check, as when it's read between checks."""
+        result = scheduler.read_feed(force=True)
+        if result.get("start_check"):
+            scheduler.check_now()
+        return RedirectResponse("/admin#feed", 303)
 
     @app.get("/admin/problems", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def admin_problems(request: Request):
@@ -843,11 +854,20 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             db.set_setting("ta_token", form["ta_token"].strip())
         elif form.get("ta_token_clear"):
             db.set_setting("ta_token", "")
+        feed = (form.get("podcast_feed") or "").strip()
+        if feed and urlparse(feed).scheme in ("http", "https") and urlparse(feed).hostname:
+            if feed != db.setting("podcast_feed"):
+                db.set_setting("podcast_feed", feed)
+                db.set_setting("feed_state", {})
+                scheduler.feed_read = None   # read the new one soon
+        elif form.get("podcast_feed_clear"):
+            db.set_setting("podcast_feed", "")
+            db.set_setting("feed_state", {})
         if form.get("site_password"):
             db.set_setting("site_password", form["site_password"])
             archiver.client.clear_cookies()
         for key, cast in (("check_interval_hours", float), ("max_height", int), ("comment_refresh_days", int),
-                          ("request_delay", float), ("recheck_days", int)):
+                          ("request_delay", float), ("recheck_days", int), ("feed_minutes", int)):
             try:
                 db.set_setting(key, cast(form.get(key) or s[key]))
             except ValueError:

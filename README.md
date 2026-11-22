@@ -66,6 +66,17 @@ Some episodes are posted on the members site only as YouTube embeds. The archive
 
 Every post has a **Files** button that opens its files in place: PDFs page by page, spreadsheets as tables, Word and PowerPoint files as text, plain text and subtitles, the contents of zip files, pictures, audio and video. **Admin > Files** counts the archive's files by type.
 
+Google Docs and Drive files a post links to are saved with it, and so are shared Drive folders: every file in the folder and its subfolders (up to 300 files, 5 folders deep), with Google Docs in it saved as PDFs. The Files page says which folder each one is in. A folder that isn't shared with everyone who has the link is listed as a link that couldn't be saved.
+
+### The site's podcast feed
+
+The site gives each member a private podcast feed for podcast apps. Enter its address under **Settings > Podcast feed** and the archiver reads it every 15 minutes between checks. It lists the audio posts only, so it adds no new content, but:
+
+- when a new episode shows up in it, a check of the site starts right away instead of at the next scheduled check (and again every 30 minutes, three times at most, if the site doesn't have the post yet);
+- it gives the time of day each episode came out, which the site doesn't show; posts show it next to their date.
+
+The address holds a key that's yours, so it's never shown again once saved, and it isn't logged. The Admin page shows what the feed holds and which of its episodes the archive doesn't have.
+
 ## What you'll find in the folders
 
 ```
@@ -109,6 +120,7 @@ On the site, an episode's members-only video, its YouTube embed and its "(AUDIO 
 | Video quality | Best available | Lower it to save disk space |
 | Re-read comments on posts newer than | 30 days | Picks up comments that arrive after a post goes up |
 | Notification URL | none | An ntfy topic URL or a Discord webhook. It gets new posts and problems such as a failed login. |
+| Podcast feed | none | The site's private podcast feed, read every 15 minutes (a setting) to start checks for new episodes |
 
 You can also set these environment variables:
 

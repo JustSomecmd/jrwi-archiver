@@ -134,3 +134,31 @@ def test_comment_keeps_its_most_exact_date(archiver):
     assert one() == {"date": "2026-01-20", "date_text": "11h"}
     store("10h", "2026-01-20T11:00:00+00:00")     # as exact: replaces it, as when re-reading the same page
     assert one() == {"date": "2026-01-20", "date_text": "10h"}
+
+
+def test_new_episode_in_the_podcast_feed_starts_a_check(archiver, monkeypatch):
+    """Between checks the scheduler reads the podcast feed when it's due, and a new episode in it starts a check
+    right away; without a login to check with, it waits for Settings."""
+    import time
+
+    from jrwi import scheduler as sched
+
+    archiver.db.set_setting("podcast_feed", "https://jrwishow.com/supporters/podcast/key/rss")
+    s = sched.Scheduler(archiver, archiver.db)
+    ran, reads = [], []
+    answers = iter([{"start_check": True}, {"start_check": True}])
+    monkeypatch.setattr(archiver, "run_check", lambda full=False: ran.append(full) or {"result": "ok"})
+    monkeypatch.setattr(s, "read_feed", lambda force=False: reads.append(1) or next(answers, {"start_check": False}))
+    monkeypatch.setattr(s, "feed_due", lambda: len(reads) < 3)
+    monkeypatch.setattr(s.wake, "wait", lambda timeout=None: time.sleep(0.02) or False)   # minutes pass quickly
+    s.start()
+    time.sleep(0.5)
+    assert len(reads) >= 1 and ran == []        # nothing to log in with yet
+    archiver.db.set_setting("site_email", "fan@example.com")
+    archiver.db.set_setting("site_password", "hunter2")
+    reads.clear()
+    answers = iter([{"start_check": True}])
+    monkeypatch.setattr(s, "read_feed", lambda force=False: reads.append(1) or next(answers, {"start_check": False}))
+    time.sleep(0.5)
+    assert ran == [False]                       # one ordinary check, started by the feed
+    assert s.next_check is not None             # and the scheduled one moved on from it

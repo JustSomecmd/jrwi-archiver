@@ -139,6 +139,9 @@ class Serializer:
             p["duration"] for p in (video, audio) if p and p.get("duration")]
         return {
             "id": primary["id"], "title": primary["title"], "date": iso(primary["published"]),
+            # The time of day it came out, from the podcast feed: the main post's, or else another version's
+            "published_at": primary.get("published_at") or next(
+                (m["published_at"] for m in members if m.get("published_at")), None),
             "show": primary["show_id"] or "other", "tab": tab, "tabs": tabs,
             "places": [{"show": p.split(":", 1)[0], "tab": p.split(":", 1)[1]} for p in (primary.get("places") or [])],
             "kind": kind, "episode": primary["episode"],
@@ -183,7 +186,8 @@ class Serializer:
         """Every post of the episode this post belongs to, main post first, each with its own counts."""
         primary = self.primary_of(post["id"]) or post
         return [{"post_id": m["id"], "version": self.version_of(m), "title": m["title"], "url": m["url"],
-                 "date": iso(m["published"]), "like_count": m["like_count"], "comment_count": m["comment_count"],
+                 "date": iso(m["published"]), "published_at": m.get("published_at"),
+                 "like_count": m["like_count"], "comment_count": m["comment_count"],
                  "main": m["id"] == primary["id"], "removed_from_site": m.get("site_gone")}
                 for m in self.members(primary)]
 
@@ -240,7 +244,8 @@ class Serializer:
             "attachments": [{"name": a["name"], "url": files_url(a["url"]), "size": a.get("size")}
                             for a in collect("attachments")],
             "links": collect("links"),
-            "documents": [{"name": d["name"], "url": files_url(d["url"])} for d in collect("documents")],
+            "documents": [{"name": d["name"], "url": files_url(d["url"]), "folder": d.get("folder")}
+                          for d in collect("documents")],
             "embeds": [{"kind": e["kind"], "url": e["url"]} for e in collect("embeds")],
             "versions": self.versions(primary),
             "problems": [p for m in members for p in (m["problems"] or [])],

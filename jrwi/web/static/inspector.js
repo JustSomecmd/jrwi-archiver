@@ -131,7 +131,7 @@
         body.append(note("YouTube videos aren't saved in the archive. TubeArchivist keeps JRWI's YouTube channel."));
         return;
       case "link":
-        body.append(note("This Google link couldn't be saved (a whole Drive folder can't be downloaded, for example). The original link may still work."));
+        body.append(note("This Google link couldn't be saved: the file or folder isn't shared with everyone who has the link, or Google wouldn't hand it over. The original link may still work."));
         return;
     }
     if (!f.preview) {

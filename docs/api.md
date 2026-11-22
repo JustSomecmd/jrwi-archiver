@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.18)
+# JRWI archiver API (contract v0.19)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.8.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.10.0.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -19,7 +19,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.16:** the status gains `step`, a stable name for what a check is doing, and `progress.unit`, what its count counts. `phase` and `detail` are now worded for people and can change between versions. In the service since 0.9.3.
 - **v0.17:** the Tubedroid chat's suggestions 3 to 9. `GET /api/ping` gains `contract` and `features` (see Ping). Posts gain `progress` (see Post). `GET /api/tags`, and `tag` on `GET /api/posts` and `GET /api/items`, whose `q` now also finds the names of a post's tags. `GET /api/feed` (see Feed), `GET /api/continue` (see Continue watching), `POST /api/stop` and `GET /api/stats` (see Stats). In the service since 0.9.7.
 - **v0.18:** comment authors gain `id`, the member's ID on the site (see Comment), and `GET /api/stats` counts commenters by it, with `id` on each of the top ten. In the service since 0.9.8.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known.
+- **v0.19:** items, posts and item `versions` gain `published_at`, the time of day they came out, from the site's private podcast feed (see Item). Files in a shared Google Drive folder a post links to are saved, and files and `documents` gain `folder`, where in that folder each is (see File). In the service since 0.10.0.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -32,7 +33,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.8", "contract": "0.18", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.0", "contract": "0.19", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/stop` | (v0.17) Stops the check, or the re-read of saved pages, that's running, as the admin page's Stop does: `202` with `{"stopping": true}`, or `409` when nothing is running. The status shows it running until it has stopped, then `last_result` is `stopped`. |
@@ -67,7 +68,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.9.8", "contract": "0.18",
+{"name": "jrwi-archiver", "version": "0.10.0", "contract": "0.19",
  "features": ["post_progress", "tags", "continue", "stop", "feed", "stats"]}
 ```
 
@@ -136,6 +137,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 **Files and previews (v0.15, decision 16):** for a file inspector.
 - **Lists:** `GET /api/posts/{postId}/files` gives one post's files, in the order the web app lists them: video, audio, documents, attachments, pictures, thumbnail, then Google links that couldn't be saved. `GET /api/items/{postId}/files` gives every version's, the main post's first, each file once.
 - **Opening a file:** `url` is where it is, with the token like any address. `type` says how to show it: `image`, `audio` and `video` are shown or played from `url`; `pdf`, `table`, `document`, `text` and `archive` have a `preview` address; `youtube` plays through TubeArchivist; `link` was never saved and only has `source`; `other` can only be downloaded.
+- **Drive folders (v0.19):** a shared Google Drive folder a post links to is saved whole: every file in it and in its folders (up to 300 files, 5 folders deep), Google Docs in it as PDFs (Sheets as `.xlsx`), each listed as a `document` with `folder`, such as `"Campaign Maps/Old maps"`. A folder that isn't shared with everyone who has the link stays a `link` entry, and so do Google Forms in a folder, which can't be files.
 
 ## Objects
 
@@ -183,6 +185,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 
 ```json
 {"id": 300, "title": "Through the Fire | Riptide #136", "date": "2026-11-07T00:00:00+00:00",
+ "published_at": "2026-11-07T17:30:00+00:00",
  "show": "riptide", "tab": "episodes", "tabs": ["episodes"], "places": [{"show": "riptide", "tab": "episodes"}],
  "kind": "episode", "season": 1, "episode": 136, "pinned": true,
  "thumbnail": "/files/posts/300/thumbnail.webp", "duration": 11695,
@@ -203,6 +206,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`kind`:** one of `episode`, `video`, `audio`, `youtube`, `art` or `post`. `episode` is a video or audio whose main tab is `episodes`.
 - **`season` (v0.11):** the season of an episode in its own show's `episodes` tab: named in the title or a tag, or since v0.13 worked out (see "Episode numbers and seasons"). Since v0.14 also the season of a post in its own show's `aftershow` tab. `null` for other posts, episodes without a number, and Just Rolled With It of a show without episodes. Seasons can each start again at episode 1, so apps show both, as the web app does with "S2 #1" for seasons after the first.
 - **`date`:** the site only shows a date, so the time is midnight UTC.
+- **`published_at` (v0.19):** when it came out, to the second, from the site's private podcast feed once it's set up in the archiver's Settings, or `null`. The feed only lists audio posts, so an item has its audio version's time when its main post has none of its own. `date` stays the site's date, and lists stay in the site's order; apps can show the time of day next to the date.
 
 **`video` takes one of two shapes, or is `null`:**
 - **Archived file:** `{post_id, jellyfin_path, url, height, size, duration}`. `jellyfin_path` is the path as the archiver sees it. Match Jellyfin items on the `[jrwi-<post id>]` tag in the file name, not on the full path.
@@ -231,21 +235,23 @@ The list fields, plus:
  "images": [{"url": "/files/posts/290/images/01.webp"}],
  "attachments": [{"name": "Zombie Character Sheets.pdf", "url": "/files/posts/299/attachments/Zombie%20Character%20Sheets.pdf", "size": 1234567}],
  "links": [{"text": "Episode transcription here.", "url": "https://docs.google.com/..."}],
- "documents": [{"name": "Riptide 135 - Blue Jay [TRANSCRIPT] [1B_ZJmqV].pdf", "url": "/files/google-docs/..."}],
+ "documents": [{"name": "Riptide 135 - Blue Jay [TRANSCRIPT] [1B_ZJmqV].pdf", "url": "/files/google-docs/...", "folder": null}],
  "embeds": [{"kind": "youtube", "url": "https://www.youtube.com/watch?v=CzZ13VPQOcw"}],
  "versions": [{"post_id": 300, "version": "video", "main": true, "title": "Through the Fire | Riptide #136",
-               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 469, "comment_count": 12,
+               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "published_at": null,
+               "like_count": 469, "comment_count": 12,
                "removed_from_site": null},
               {"post_id": 298, "version": "audio", "main": false, "title": "Through the Fire | Riptide #136 (AUDIO ONLY)",
-               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "like_count": 10, "comment_count": 1,
+               "url": "https://...", "date": "2026-11-07T00:00:00+00:00", "published_at": "2026-11-07T17:30:00+00:00",
+               "like_count": 10, "comment_count": 1,
                "removed_from_site": null}],
  "problems": []}
 ```
 
 - **`body_html`:** cleaned of scripts, with images pointing at the archived copies.
 - **`attachments`, `documents` and `images`:** collected from every version of the item.
-- **`documents`:** linked Google Docs, saved as PDFs, and since 0.5.0 files shared from Google Drive, under the name Drive gives them.
-- **`versions` (fields beyond `post_id`, `title` and `url` since v0.7):** every post of the item, main post first, each with its own counts. `version` is `video` (members-only video), `audio`, `youtube`, or `null` for a post without either. `removed_from_site` (v0.15): when the archiver noticed the site no longer has that post, or `null`.
+- **`documents`:** linked Google Docs, saved as PDFs, and since 0.5.0 files shared from Google Drive, under the name Drive gives them. Since v0.19 also the files in a linked Drive folder, with `folder` saying where in it each is; `null` for files linked on their own.
+- **`versions` (fields beyond `post_id`, `title` and `url` since v0.7):** every post of the item, main post first, each with its own counts. `version` is `video` (members-only video), `audio`, `youtube`, or `null` for a post without either. `removed_from_site` (v0.15): when the archiver noticed the site no longer has that post, or `null`. `published_at` (v0.19): that post's own time from the podcast feed, or `null`.
 
 ### Post (v0.7)
 
@@ -271,14 +277,15 @@ A single post, never merged with its other versions. It has the same fields as a
 {"name": "Zombie Character Sheets.pdf", "role": "attachment", "type": "pdf", "mime": "application/pdf",
  "size": 1234567, "url": "/files/posts/299/attachments/Zombie%20Character%20Sheets.pdf",
  "path": "posts/299/attachments/Zombie Character Sheets.pdf", "post_id": 299, "source": null, "saved": true,
- "preview": "/api/preview/posts/299/attachments/Zombie%20Character%20Sheets.pdf"}
+ "preview": "/api/preview/posts/299/attachments/Zombie%20Character%20Sheets.pdf", "folder": null}
 ```
 
-- **`role`:** where the file comes from: `video`, `audio`, `document` (a linked Google Doc or Drive file), `attachment`, `image` (a picture in the post), `thumbnail`, or `link` (a Google link that couldn't be saved).
+- **`role`:** where the file comes from: `video`, `audio`, `document` (a linked Google Doc or Drive file), `attachment`, `image` (a picture in the post), `thumbnail`, or `link` (a Google link that couldn't be saved: not shared with everyone who has the link, say).
 - **`type`:** how to show it: `image`, `audio`, `video`, `pdf`, `table`, `document`, `text`, `archive`, `youtube`, `link` or `other`. Worked out from the name, and for a file without a usable name (Drive files saved as `.bin`) from what's in it.
 - **`url`:** the file's address, or `null` when it isn't saved (`youtube`, `link`). For the video and audio it's `/api/video/{postId}` and `/api/audio/{postId}`.
 - **`path`:** the file's path under `/files/`, for `/api/preview/<path>`, or `null` for the video and for what isn't saved.
 - **`source`:** the address it was saved from: the Google Docs or Drive link for a document, the site's address for a picture, the YouTube address for `youtube`, the link for `link`. Otherwise `null`.
+- **`folder` (v0.19):** for a file from a shared Drive folder the post links to, where it is in that folder, starting with the folder's own name (`"Campaign Maps/Old maps"`); otherwise `null`.
 - **`saved`:** `false` for `youtube` and `link` entries, which aren't files in the archive.
 - **`preview`:** the Preview address, for `pdf`, `table`, `document`, `text` and `archive`; `null` for the rest.
 - **Extra fields:** `duration` on the video and audio, `youtube_id` on `youtube` entries.

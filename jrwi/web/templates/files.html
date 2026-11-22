@@ -11,7 +11,7 @@
 <button type="button" class="insp-file" data-file='{{ e | tojson }}'>
   <span class="insp-icon">{{ icon(type_icons.get(e.type, 'file')) }}</span>
   <span class="insp-text"><span class="insp-name">{{ e.name }}</span>
-    <span class="insp-meta">{{ role_names.get(e.role, 'File') }} · {{ type_names.get(e.type, 'File') }}{% if e.size %} · {{ human_size(e.size) }}{% endif %}{% if from_title %} · {{ from_title }}{% endif %}</span></span>
+    <span class="insp-meta">{% if e.folder %}In the Drive folder {{ e.folder }}{% else %}{{ role_names.get(e.role, 'File') }}{% endif %} · {{ type_names.get(e.type, 'File') }}{% if e.size %} · {{ human_size(e.size) }}{% endif %}{% if from_title %} · {{ from_title }}{% endif %}</span></span>
 </button>
 {% endmacro %}
 {% block content %}

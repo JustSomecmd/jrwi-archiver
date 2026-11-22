@@ -121,7 +121,7 @@
   {% endif %}
   <div class="pbody">
     <div class="pmeta">
-      <a href="{{ url }}">{{ nice_date(p.date) }}</a>
+      <a href="{{ url }}">{{ nice_date(p.date) }}{% if p.published_at %} · <span data-time-of-day="{{ p.published_at }}"></span>{% endif %}</a>
       {% if p.pinned %}<span class="tag">{{ icon('pin') }} Pinned</span>{% endif %}
       {% if p.paired and p.version %}<span class="tag">{{ version_name[p.version] }}</span>{% endif %}
       {% if p.locked %}<span class="tag">{{ icon('lock') }} Not in your tier</span>{% endif %}
@@ -135,7 +135,7 @@
     {% if p.attachments or p.documents %}
       <div class="filelist">
         {% for f in p.attachments %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('link') }}<span>{{ f.name }}</span></a>{% endfor %}
-        {% for f in p.documents %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }}<span>{{ f.name }}</span></a>{% endfor %}
+        {% for f in p.documents %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }}<span>{% if f.folder %}<span class="muted">{{ f.folder }}/</span>{% endif %}{{ f.name }}</span></a>{% endfor %}
       </div>
     {% endif %}
     {% if p.tags %}<div class="chips">{% for t in p.tags %}<a class="chip" href="/?tag={{ t | urlencode }}" title="All posts tagged {{ t }}">{{ t }}</a>{% endfor %}</div>{% endif %}

@@ -8,6 +8,7 @@ import shutil
 import threading
 from datetime import datetime, timedelta, timezone
 
+from . import podcast
 from .crawler import Archiver
 from .site.parse import PARSER_VERSION
 from .db import Db
@@ -26,6 +27,8 @@ class Scheduler:
         self.next_check: datetime | None = None
         self.planned_with: timedelta | None = None   # the interval next_check was planned with
         self.last_start: datetime | None = None
+        self.feed_read: datetime | None = None
+        self.feed_lock = threading.Lock()
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
 
     def start(self) -> None:
@@ -70,6 +73,22 @@ class Scheduler:
     def stop(self) -> None:
         self.archiver.stop_event.set()
 
+    def feed_due(self) -> bool:
+        minutes = float(self.db.setting("feed_minutes") or 0)
+        if minutes <= 0 or not (self.db.setting("podcast_feed") or "").strip():
+            return False
+        return self.feed_read is None or datetime.now(timezone.utc) - self.feed_read >= timedelta(minutes=minutes)
+
+    def read_feed(self, force: bool = False) -> dict:
+        """Read the podcast feed now (never during a check, as the check reads the site anyway)."""
+        with self.feed_lock:
+            self.feed_read = datetime.now(timezone.utc)
+            try:
+                return podcast.poll(self.db, force=force)
+            except Exception:
+                log.exception("reading the podcast feed failed")
+                return {"ok": False, "error": "reading the feed failed; see the log", "start_check": False}
+
     def _interval(self) -> timedelta | None:
         hours = float(self.db.setting("check_interval_hours") or 0)
         return timedelta(hours=hours) if hours > 0 else None
@@ -102,6 +121,7 @@ class Scheduler:
             if self.next_check:
                 timeout = max(0.0, (self.next_check - datetime.now(timezone.utc)).total_seconds())
             woke = self.wake.wait(timeout=min(timeout, 60) if timeout is not None else 60)
+            from_feed = False
             if not woke and (self.next_check is None or datetime.now(timezone.utc) < self.next_check):
                 # Pick up a new interval set in Settings
                 if self._interval() != self.planned_with:
@@ -109,8 +129,12 @@ class Scheduler:
                     self._plan_next(self.last_start or now)
                     if self.next_check and self.next_check < now + FIRST_CHECK_DELAY:
                         self.next_check = now + FIRST_CHECK_DELAY
-                continue
-            manual = woke or self.wake.is_set()
+                # The podcast feed has an episode the archive hasn't found: the site most likely has it too
+                if not (self.feed_due() and self.read_feed().get("start_check") and self.archiver.has_login()):
+                    continue
+                from_feed = True
+                log.info("the podcast feed has a new episode; checking the site")
+            manual = woke or self.wake.is_set() or from_feed
             self.wake.clear()
             if self.reparse_requested:
                 self.reparse_requested = False
@@ -128,6 +152,10 @@ class Scheduler:
                 log.info("check finished: %s", result)
             except Exception:
                 log.exception("check crashed")
+            try:
+                podcast.match(self.db)   # the feed's new episodes, now that the check has saved their posts
+            except Exception:
+                log.exception("matching the podcast feed failed")
             # A check that ran past the next one's time: the next comes a whole interval after this one ended
             now = datetime.now(timezone.utc)
             if self.next_check and self.next_check < now + timedelta(minutes=10):

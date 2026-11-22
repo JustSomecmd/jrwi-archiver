@@ -96,6 +96,27 @@
     <span class="muted">({{ ta_status.at }})</span>{% endif %}
     <button form="test-ta" class="ghost" style="padding:.15rem .6rem">Test connection</button> (save first)</p>
 </div>
+<div class="panel">
+  <h2>Podcast feed</h2>
+  <p class="muted small">The site's private podcast feed, the address it gives you for podcast apps. It lists the
+    audio posts, so it adds no new content, but it says the time of day each episode came out (the site only shows
+    the date), and reading it is one small request without logging in. So it's read every few minutes between
+    checks, and when a new episode shows up in it, a check of the site starts. What it holds is on the Admin page.</p>
+  <div class="cols">
+    <div>
+      <label for="feed">The feed's address</label>
+      <input id="feed" type="password" name="podcast_feed" autocomplete="off"
+        placeholder="{{ 'Saved; leave empty to keep it' if s.podcast_feed else 'Its private RSS address' }}">
+      <div class="hint">It holds a key that's yours, like a password, so it's never shown again once saved.</div>
+      <label class="check"><input type="checkbox" name="podcast_feed_clear"> Forget the saved address</label>
+    </div>
+    <div>
+      <label for="feedmin">Read it every this many minutes</label>
+      <input id="feedmin" type="number" min="0" name="feed_minutes" value="{{ s.feed_minutes }}">
+      <div class="hint">0 never reads it.</div>
+    </div>
+  </div>
+</div>
 <p><button type="submit">Save settings</button></p>
 </form>
 <form id="test-login" method="post" action="/admin/test-login"></form>

@@ -68,6 +68,12 @@ const whenAt = (iso) => {
   if (days === -1) return `yesterday at ${time}`;
   return `${d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })} at ${time}`;
 };
+// Times written by the server in UTC, shown in the browser's own time zone
+document.querySelectorAll("[data-when-at]").forEach((el) => { el.textContent = whenAt(el.dataset.whenAt); });
+document.querySelectorAll("[data-time-of-day]").forEach((el) => {
+  const d = new Date(el.dataset.timeOfDay);
+  if (!Number.isNaN(d.getTime())) el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+});
 // How long until then: "in 2 h 5 min", "in 4 min", "due now"
 const whenIn = (iso) => {
   const m = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
