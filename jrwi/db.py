@@ -93,6 +93,9 @@ class Db:
         self.conn.row_factory = sqlite3.Row
         with self.lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
+            # Safe with WAL: a power cut can lose the last moments' writes, never the database
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA busy_timeout=10000")
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.executescript(SCHEMA)
             self._migrate()
@@ -119,6 +122,18 @@ class Db:
                                           "WHERE COALESCE(banner, poster) IS NOT NULL")
         # 0.8.0: a picture picked on the admin page became an override, which stays until it's turned off
         self.conn.execute("UPDATE shows SET art_source = 'override' WHERE art_source = 'picked'")
+
+    def drop_comment_raw(self) -> None:
+        """Before 0.10.3 each comment's HTML was kept in the database too (up to 200 KB each), though nothing read
+        it: the comment pages are saved as files. Empty that column once and give the space back."""
+        if self.setting("comments_raw_dropped"):
+            return
+        with self.lock:
+            had = self.conn.execute("SELECT COUNT(*) FROM comments WHERE raw IS NOT NULL").fetchone()[0]
+            if had:
+                self.conn.execute("UPDATE comments SET raw = NULL WHERE raw IS NOT NULL")
+                self.conn.execute("VACUUM")
+        self.set_setting("comments_raw_dropped", True)
 
     # ------------------------------------------------------------------ basics
 

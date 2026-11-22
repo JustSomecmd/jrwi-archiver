@@ -27,8 +27,11 @@ def main(argv=None) -> int:
         import uvicorn
 
         from .web.app import create_app
+        # Only a proxy on these addresses may say who's asking (X-Forwarded-For); anyone else could pretend to be
+        # someone new each time and get past the wait after wrong passwords
         uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning", proxy_headers=True,
-                    forwarded_allow_ips="*")
+                    forwarded_allow_ips=os.environ.get("JRWI_TRUSTED_PROXIES", "127.0.0.1"),
+                    server_header=False)
         return 0
 
     from .config import Paths

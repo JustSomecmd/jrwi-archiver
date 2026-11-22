@@ -31,7 +31,7 @@
       actions.append(el("a", {class: "pill", href: f.url, target: "_blank", rel: "noopener", text: "Open on its own"}));
       actions.append(el("a", {class: "pill", href: f.url, download: f.name, text: "Download"}));
     }
-    if (f.source) actions.append(el("a", {class: "pill", href: f.source, target: "_blank", rel: "noopener", text: "Original link"}));
+    if (f.source && /^https?:\/\//i.test(f.source)) actions.append(el("a", {class: "pill", href: f.source, target: "_blank", rel: "noopener", text: "Original link"}));
     return el("div", {class: "insp-head"},
       el("h2", {text: f.name}),
       el("div", {class: "muted small", text: [TYPE[f.type] || "File", f.mime, size(f.size)].filter(Boolean).join(" · ")}),

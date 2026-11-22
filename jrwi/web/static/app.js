@@ -1,5 +1,12 @@
 // Small helpers for the archive pages. No framework.
 
+// Forms that ask before they do something big (the pages run no inline script, so this isn't an onsubmit)
+document.querySelectorAll("form[data-confirm]").forEach((form) => {
+  form.addEventListener("submit", (e) => {
+    if (!window.confirm(form.dataset.confirm)) e.preventDefault();
+  });
+});
+
 // Video/audio switch on episode pages
 document.querySelectorAll("[data-switch]").forEach((sw) => {
   sw.addEventListener("click", (e) => {

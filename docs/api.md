@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.20)
+# JRWI archiver API (contract v0.21)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.10.1.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.10.3.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -21,6 +21,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.18:** comment authors gain `id`, the member's ID on the site (see Comment), and `GET /api/stats` counts commenters by it, with `id` on each of the top ten. In the service since 0.9.8.
 - **v0.19:** items, posts and item `versions` gain `published_at`, the time of day they came out, from the site's private podcast feed (see Item). Files in a shared Google Drive folder a post links to are saved, and files and `documents` gain `folder`, where in that folder each is (see File). In the service since 0.10.0.
 - **v0.20:** the Tubedroid chat's suggestions 10 and 11. `POST /api/reparse` starts a re-read of saved pages, and `GET /api/podcast` and `POST /api/podcast/read` give the podcast feed's state and read it now (see Podcast feed). Feature names `reparse` and `podcast`. In the service since 0.10.1.
+- **v0.21:** a change (`POST`, `PUT`, `PATCH`, `DELETE`) that a browser sends from a page on another site, as its `Origin` or `Referer` says, is refused with `403` (see General rules). Apps that send neither header, as Tubedroid's do, aren't affected. A reply's `date_text` is no longer the site's text twice over ("2d 2d"), and its `date` is worked out from it. In the service since 0.10.3.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there.
 
 **General rules**
@@ -28,13 +29,14 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **Paths:** image, file, audio and video addresses in responses are paths such as `/files/...`, `/api/audio/...` or `/api/video/...`, relative to the server address. They take the same token.
 - **Times** are ISO 8601 with a UTC offset. **Durations** are in seconds.
 - **Errors** come back as `{"error": "message"}` with a 4xx or 5xx status.
+- **Changes from other sites (v0.21):** a `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` (or, without one, `Referer`) is another address than the archiver's own, or `null`, gets `403`. Other services on the same server count as other sites. Apps don't send these headers, so they're not affected; a web page or WebView calling the API from its own address would be.
 - **Lists** are paged: `?page=1&page_size=50` returns `{"items": [...], "page": 1, "page_size": 50, "total": 123}`. `page_size` goes up to 200.
 
 ## Endpoints
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.1", "contract": "0.20", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.3", "contract": "0.21", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/reparse` | (v0.20) Re-reads the saved pages with the current parsers, as the admin page's Re-read saved pages does: `202` with `{"started": true}`, or `409` when a check or a re-read is running. It runs as its own job, with `step` `reparse` in the status, and `POST /api/stop` stops it. |
@@ -72,7 +74,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.10.1", "contract": "0.20",
+{"name": "jrwi-archiver", "version": "0.10.3", "contract": "0.21",
  "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast"]}
 ```
 

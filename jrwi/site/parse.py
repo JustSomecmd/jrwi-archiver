@@ -22,7 +22,7 @@ SameSite = Callable[[str], bool]
 
 # Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
 # it has saved, so fixes reach posts and comments that were archived before the update.
-PARSER_VERSION = 9
+PARSER_VERSION = 10
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
@@ -879,6 +879,17 @@ def _author_id(el) -> str | None:
     return None
 
 
+REPEATED_RE = re.compile(r"(.*?\S)\s*\1")
+
+
+def _date_shown(el) -> str:
+    """What the site shows as a comment's age. A reply's date holds it twice ("2d 2d"), so a text that's the same
+    thing twice over is taken once."""
+    shown = norm_space(el.get_text(" ", strip=True))
+    m = REPEATED_RE.fullmatch(shown)
+    return m.group(1) if m else shown
+
+
 def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
     m = COMMENT_FRAME_RE.match(el.get("id") or "")
     cid = m.group(1) if m else (el.get("data-comment-id") or el.get("data-id") or str(abs(hash(str(el)[:400]))))
@@ -908,7 +919,7 @@ def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
     date_el = own.select_one(".comment__date")
     t = own.find("time", attrs={"datetime": True})
     if date_el is not None:
-        shown = norm_space(date_el.get_text(" ", strip=True))
+        shown = _date_shown(date_el)
         when = parse_date_text(shown, fetched)
     elif t is not None:
         shown, when = t.get_text(strip=True), t["datetime"]
@@ -928,7 +939,6 @@ def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
         "body_text": norm_space(body_el.get_text(" ", strip=True)) if body_el is not None else "",
         "like_count": to_int(like_el.get_text(strip=True)) if like_el is not None else None,
         "pinned": pinned, "link": urljoin(page_url, link["href"]) if link is not None else None,
-        "raw": str(el)[:200_000],
     }
 
 

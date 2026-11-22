@@ -65,10 +65,10 @@
     {% if item.tags %}<div class="tags">{% for t in item.tags %}<a class="tag" href="/?tag={{ t | urlencode }}" title="All posts tagged {{ t }}">{{ t }}</a>{% endfor %}</div>{% endif %}
     <div class="pfoot">
       {{ counts(item) }}
-      <a class="pill" href="{{ item.original_url }}" target="_blank" rel="noopener">{{ icon('external') }} Original post</a>
+      <a class="pill" href="{{ link(item.original_url) }}" target="_blank" rel="noopener">{{ icon('external') }} Original post</a>
       {% if item.images or item.attachments or item.documents or item.audio or (v and v.url) or item.handed_over or item.thumbnail %}
       <a class="pill" href="/items/{{ item.id }}/files">{{ icon('file') }} Files</a>{% endif %}
-      {% if v and v.youtube_url %}<a class="pill" href="{{ v.youtube_url }}" target="_blank" rel="noopener">{{ icon('video') }} YouTube</a>{% endif %}
+      {% if v and v.youtube_url %}<a class="pill" href="{{ link(v.youtube_url) }}" target="_blank" rel="noopener">{{ icon('video') }} YouTube</a>{% endif %}
     </div>
     {% if item.paired %}
     <div class="versions">

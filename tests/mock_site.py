@@ -163,7 +163,8 @@ BADGES = ('<div class="badge badge--small"><div class="badge__icon">🔥</div> 4
 MEMBER_IDS = {"Sam": "81000001", "Jo": "81000002", "Kim": "81000004", "Pat": "81000005", "Alex": "81000004"}
 
 
-def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when="13d", picture=True, badges=False):
+def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when="13d", picture=True, badges=False,
+                 date_twice=False):
     """A comment as the real site renders it, including the parts that must be ignored. Members without a
     profile picture get their initial instead, and their badges are then the first images in the comment."""
     sid = MEMBER_IDS.get(author)
@@ -185,7 +186,7 @@ def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when=
             f'<span class="comment__author"><div class="hidden"><div class="profile-popover"><div class="profile-popover__nickname">{author}</div>'
             '<time datetime="2025-07-16T22:34:22Z">Jul 16, 2025</time></div></div>'
             f'<div class="comment__author-name"><div data-testid="Post.CommentAuthor">{author}</div></div>{author_badges}</span>'
-            f'<div class="comment__date-and-actions"><a href="/supporters/posts/x?cid=comment_h{cid}"><span class="comment__date">{when}</span></a>'
+            f'<div class="comment__date-and-actions"><a href="/supporters/posts/x?cid=comment_h{cid}"><span class="comment__date">{f"<span>{when}</span><span>{when}</span>" if date_twice else when}</span></a>'
             f'<div class="comment__dropdown"><div class="dropdown"><div class="modal"><p>Block someone?</p>{report}</div></div></div></div></div>'
             f'<div class="comment__content"><div><div class="comment__body"><p>{body}</p></div><button>Read more</button></div></div>'
             f'<div class="comment__footer"><turbo-frame id="comment_{cid}_like"><form action="/supporters/posts/{pid}/comments/{cid}/like" method="post">'
@@ -209,7 +210,8 @@ COMMENT_PAGES = {
     (300, None): [real_comment(300, 601, "Kim", "Best episode yet.", likes=327, pinned=True)],
     (298, None): [real_comment(298, 701, "Pat", "Listening on my commute.", likes=2)],
 }
-REPLY_PAGES = {(299, 501): [real_comment(299, 502, "Alex", "Same here.", when="2d")]}
+# Replies show their date twice over on the real site ("2d 2d")
+REPLY_PAGES = {(299, 501): [real_comment(299, 502, "Alex", "Same here.", when="2d", date_twice=True)]}
 
 
 def comments_stream(pid, marker):

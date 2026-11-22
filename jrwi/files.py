@@ -22,6 +22,7 @@ import mimetypes
 import re
 import shutil
 import subprocess
+import threading
 import zipfile
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -52,6 +53,22 @@ MAX_TEXT = 400_000      # characters of text shown
 MAX_ENTRIES = 1000      # files listed from a .zip
 MAX_PARSE = 60 * 1024 * 1024   # bigger spreadsheets and documents aren't opened for a preview
 PAGE_WIDTH = 1400       # pixels across a PDF page picture
+MAX_UNZIPPED = 100 * 1024 * 1024   # a part of a .docx, .pptx or .xlsx bigger than this unpacked isn't read
+POPPLER_MEMORY = 1024 * 1024 * 1024   # what pdfinfo and pdftoppm may use, so an odd PDF can't take the server's memory
+RENDERING = threading.BoundedSemaphore(2)   # PDF pages drawn at once
+
+
+def limited(cmd: list[str]) -> list[str]:
+    """A command run with a cap on its memory, where prlimit is there to set one."""
+    exe = shutil.which("prlimit")
+    return [exe, f"--as={POPPLER_MEMORY}", "--", *cmd] if exe else cmd
+
+
+def unpacks_small(z: zipfile.ZipFile, names) -> bool:
+    """Whether these parts of a zip-based file unpack to a sensible size. A file can be packed so a few KB unpack to
+    gigabytes, which would fill the memory when read."""
+    sizes = {i.filename: i.file_size for i in z.infolist()}
+    return all(sizes.get(n, 0) <= MAX_UNZIPPED for n in names)
 
 
 # ------------------------------------------------------------------ what a file is
@@ -67,7 +84,8 @@ def sniff(f: Path) -> str | None:
         return "pdf"
     if head.startswith(b"PK"):
         try:
-            names = set(zipfile.ZipFile(f).namelist())
+            with zipfile.ZipFile(f) as z:
+                names = set(z.namelist())
         except (zipfile.BadZipFile, OSError):
             return None
         if "word/document.xml" in names or "ppt/presentation.xml" in names:
@@ -243,7 +261,7 @@ def pdf_info(f: Path, rel: str) -> dict:
     exe = shutil.which("pdfinfo")
     if exe:
         try:
-            out = subprocess.run([exe, str(f)], capture_output=True, text=True, timeout=60).stdout
+            out = subprocess.run(limited([exe, str(f)]), capture_output=True, text=True, timeout=60).stdout
             m = re.search(r"^Pages:\s+(\d+)", out, re.M)
             pages = int(m.group(1)) if m else None
         except (OSError, subprocess.SubprocessError):
@@ -261,9 +279,10 @@ def pdf_page(paths: Paths, f: Path, page: int) -> Path | None:
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run([exe, "-png", "-f", str(page), "-l", str(page), "-scale-to-x", str(PAGE_WIDTH),
-                        "-scale-to-y", "-1", "-singlefile", str(f), str(out.with_suffix(""))],
-                       capture_output=True, timeout=120, check=True)
+        with RENDERING:
+            subprocess.run(limited([exe, "-png", "-f", str(page), "-l", str(page), "-scale-to-x", str(PAGE_WIDTH),
+                                    "-scale-to-y", "-1", "-singlefile", str(f), str(out.with_suffix(""))]),
+                           capture_output=True, timeout=120, check=True)
     except (OSError, subprocess.SubprocessError):
         return None
     return out if out.is_file() else None
@@ -295,6 +314,9 @@ def table(f: Path) -> dict:
     else:
         import openpyxl
         try:
+            with zipfile.ZipFile(f) as z:
+                if not unpacks_small(z, [n for n in z.namelist() if n.startswith("xl/")]):
+                    return {"sheets": [], "note": "too big to show here; download it"}
             wb = openpyxl.load_workbook(f, read_only=True, data_only=True)
         except Exception as e:  # a damaged or unusual file: the inspector says so and offers the download
             return {"sheets": [], "note": f"can't be read ({type(e).__name__})"}
@@ -328,20 +350,24 @@ def document(f: Path) -> dict:
     if f.stat().st_size > MAX_PARSE:
         return {"blocks": [], "note": "too big to show here; download it"}
     try:
-        z = zipfile.ZipFile(f)
-        names = z.namelist()
-        if "word/document.xml" in names:
-            return {"blocks": word_blocks(z.read("word/document.xml"))}
-        slides = sorted((n for n in names if re.match(r"ppt/slides/slide\d+\.xml$", n)),
-                        key=lambda n: int(re.search(r"(\d+)", n.rsplit("/", 1)[1]).group(1)))
-        blocks = []
-        for i, n in enumerate(slides, 1):
-            blocks.append({"kind": "heading", "level": 2, "text": f"Slide {i}"})
-            for p in ET.fromstring(z.read(n)).iter(f"{A}p"):
-                t = "".join(x.text or "" for x in p.iter(f"{A}t")).strip()
-                if t:
-                    blocks.append({"kind": "paragraph", "text": t})
-        return {"blocks": blocks}
+        with zipfile.ZipFile(f) as z:
+            names = z.namelist()
+            if "word/document.xml" in names:
+                if not unpacks_small(z, ["word/document.xml"]):
+                    return {"blocks": [], "note": "too big to show here; download it"}
+                return {"blocks": word_blocks(z.read("word/document.xml"))}
+            slides = sorted((n for n in names if re.match(r"ppt/slides/slide\d+\.xml$", n)),
+                            key=lambda n: int(re.search(r"(\d+)", n.rsplit("/", 1)[1]).group(1)))
+            if not unpacks_small(z, slides):
+                return {"blocks": [], "note": "too big to show here; download it"}
+            blocks = []
+            for i, n in enumerate(slides, 1):
+                blocks.append({"kind": "heading", "level": 2, "text": f"Slide {i}"})
+                for p in ET.fromstring(z.read(n)).iter(f"{A}p"):
+                    t = "".join(x.text or "" for x in p.iter(f"{A}t")).strip()
+                    if t:
+                        blocks.append({"kind": "paragraph", "text": t})
+            return {"blocks": blocks}
     except Exception as e:
         return {"blocks": [], "note": f"can't be read ({type(e).__name__})"}
 
@@ -402,7 +428,8 @@ def text(f: Path) -> dict:
 
 def archive(f: Path) -> dict:
     try:
-        infos = zipfile.ZipFile(f).infolist()
+        with zipfile.ZipFile(f) as z:
+            infos = z.infolist()
     except (zipfile.BadZipFile, OSError) as e:
         return {"entries": [], "note": f"can't be read ({type(e).__name__})"}
     return {"entries": [{"name": i.filename, "size": i.file_size, "folder": i.is_dir()} for i in infos[:MAX_ENTRIES]],

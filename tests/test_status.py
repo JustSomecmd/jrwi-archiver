@@ -162,3 +162,18 @@ def test_new_episode_in_the_podcast_feed_starts_a_check(archiver, monkeypatch):
     time.sleep(0.5)
     assert ran == [False]                       # one ordinary check, started by the feed
     assert s.next_check is not None             # and the scheduled one moved on from it
+
+
+def test_old_raw_comment_html_is_dropped_once(tmp_path):
+    """Before 0.10.3 every comment's HTML was kept in the database too. It's emptied once, and the rest stays."""
+    from jrwi.db import Db
+    db = Db(tmp_path / "jrwi.db")
+    db.x("INSERT INTO comments (id, post_id, author_name, body_text, raw) VALUES ('1:1', 1, 'Sam', 'Hi', ?)",
+         ("<div>" + "x" * 100_000 + "</div>",))
+    db.drop_comment_raw()
+    row = db.one("SELECT * FROM comments WHERE id='1:1'")
+    assert row["raw"] is None and row["author_name"] == "Sam" and row["body_text"] == "Hi"
+    assert db.setting("comments_raw_dropped")
+    db.x("UPDATE comments SET raw = 'again' WHERE id='1:1'")
+    db.drop_comment_raw()   # once only
+    assert db.one("SELECT raw FROM comments WHERE id='1:1'")["raw"] == "again"

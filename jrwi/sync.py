@@ -16,11 +16,14 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
 from pathlib import Path
-
-import numpy as np
+from typing import TYPE_CHECKING
 
 from .site.download import ffmpeg_exe
+
+if TYPE_CHECKING:
+    import numpy as np
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +62,7 @@ def probe_duration(path: Path) -> float | None:
 def loudness(path: Path | str, start: float, length: float, headers: dict | None = None) -> np.ndarray:
     """A file's loudness from `start` for `length` seconds, RATE points a second, on a log scale. `path` can be an
     http address (a file in TubeArchivist), with the request headers it needs."""
+    import numpy as np   # only loaded when a line-up runs, not kept by an idle service
     exe = ffmpeg_exe()
     if not exe:
         raise RuntimeError("ffmpeg is needed to compare video and audio")
@@ -66,14 +70,43 @@ def loudness(path: Path | str, start: float, length: float, headers: dict | None
     extra = ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())] if headers else []
     cmd = [exe, "-v", "error", *extra, "-ss", f"{max(0.0, start):.3f}", "-t", f"{length:.3f}", "-i", str(path), "-vn",
            "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"]
-    raw = subprocess.run(cmd, capture_output=True, timeout=1800).stdout
-    x = np.frombuffer(raw, dtype=np.float32)
     step = sr // RATE
-    n = len(x) // step
-    if n == 0:
+    frame_bytes = step * 4
+    # Read the sound as ffmpeg makes it and keep only each 10 ms frame's mean square: 15 minutes of sound are
+    # 7 million samples (29 MB), which never need to be in memory at once
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    timed_out = threading.Event()
+
+    def give_up():
+        timed_out.set()
+        proc.kill()
+
+    timer = threading.Timer(1800, give_up)
+    timer.start()
+    parts, rest = [], b""
+    try:
+        while True:
+            chunk = proc.stdout.read(frame_bytes * 4096)
+            if not chunk:
+                break
+            buf = rest + chunk
+            usable = len(buf) // frame_bytes * frame_bytes
+            frames = np.frombuffer(buf, dtype=np.float32, count=usable // 4).reshape(-1, step)
+            parts.append(np.einsum("ij,ij->i", frames, frames))
+            rest = buf[usable:]
+        proc.wait()
+    finally:
+        timer.cancel()
+        proc.stdout.close()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    if timed_out.is_set():
+        raise subprocess.TimeoutExpired(cmd, 1800)
+    if not sum(len(x) for x in parts):
         return np.zeros(0, dtype=np.float32)
-    frames = x[: n * step].astype(np.float64).reshape(n, step)
-    return np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-4)
+    power = np.concatenate(parts).astype(np.float64) / step
+    return np.log10(np.sqrt(power) + 1e-4)
 
 
 def best_shift(a: np.ndarray, v: np.ndarray, max_shift: int) -> tuple[int, float, float]:
@@ -82,6 +115,7 @@ def best_shift(a: np.ndarray, v: np.ndarray, max_shift: int) -> tuple[int, float
     The curves are compared by how the loudness changes from one point to the next, which ignores differences in
     overall volume and gives a sharp peak at the right shift. Returns (k, score, runner_up): score is the
     correlation at k (up to 1); runner_up is the best correlation at least a second away from k."""
+    import numpy as np
     if len(a) < RATE * 5 or len(v) < RATE * 5:
         return 0, 0.0, 0.0
     a, v = np.diff(a), np.diff(v)

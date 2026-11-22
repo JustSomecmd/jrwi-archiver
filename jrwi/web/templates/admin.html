@@ -35,7 +35,7 @@
   {% endif %}
   <form method="post" action="/admin/reparse"><button class="action" {% if st.running %}disabled{% endif %}>{{ icon('reread') }}<b>Re-read saved pages</b>
     <span>Apply this version's fixes to what's saved, without downloading</span></button></form>
-  <form method="post" action="/admin/refetch-all" onsubmit="return confirm('Fetch every archived post\'s page and comments again? Files are kept.')">
+  <form method="post" action="/admin/refetch-all" data-confirm="Fetch every archived post's page and comments again? Files are kept.">
     <button class="action" {% if st.running %}disabled{% endif %}>{{ icon('download') }}<b>Fetch all posts again</b>
     <span>Download every post's page and comments again; files are kept</span></button></form>
   <a class="action" href="/admin/settings">{{ icon('sliders') }}<b>Settings</b><span>Login, schedule, downloads and TubeArchivist</span></a>

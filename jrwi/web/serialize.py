@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
+from bs4.element import PreformattedString
 
 from ..config import Paths
 from ..db import Db
@@ -21,6 +23,22 @@ ALLOWED_TAGS = {
 ALLOWED_ATTRS = {"href", "src", "srcset", "alt", "title", "width", "height", "class", "colspan", "rowspan",
                  "target", "rel", "controls", "poster", "type", "loading"}
 SAFE_IFRAME_HOSTS = ("www.youtube.com", "youtube.com", "www.youtube-nocookie.com", "player.vimeo.com")
+URL_ATTRS = {"href", "src", "poster"}
+LINK_SCHEMES = {"", "http", "https", "mailto"}
+SOURCE_SCHEMES = {"", "http", "https"}
+
+
+def url_ok(attr: str, value: str, tag: str) -> bool:
+    """Whether an address in saved HTML is safe to keep: web addresses and relative ones, mailto: for links, and
+    data: pictures in <img>. Browsers ignore tabs, line breaks and leading control characters in an address
+    ("java\tscript:"), so those are dropped before looking at the scheme."""
+    u = "".join(c for c in value if ord(c) > 32).lower()
+    scheme = u.split(":", 1)[0] if re.match(r"^[a-z][a-z0-9+.-]*:", u) else ""
+    if attr == "href":
+        return scheme in LINK_SCHEMES
+    if scheme == "data":
+        return tag == "img" and attr == "src" and u.startswith("data:image/")   # never run as a page in <img>
+    return scheme in SOURCE_SCHEMES
 
 
 def files_url(rel: str | None) -> str | None:
@@ -38,6 +56,10 @@ def clean_html(html: str | None, local_images: dict[str, str] | None = None) -> 
     if not html:
         return ""
     soup = BeautifulSoup(html, "html.parser")
+    # Comments, CDATA, <?...?> and doctypes: browsers end some of them sooner than this parser does
+    # ("<!-- --!>"), so what's inside could come out as HTML
+    for node in soup.find_all(string=lambda s: isinstance(s, PreformattedString)):
+        node.extract()
     for tag in soup.find_all(["script", "style", "form", "input", "button", "noscript", "template", "svg"]):
         tag.decompose()
     for tag in soup.find_all(True):
@@ -50,7 +72,12 @@ def clean_html(html: str | None, local_images: dict[str, str] | None = None) -> 
         for attr in list(tag.attrs):
             val = tag.attrs[attr]
             sval = " ".join(val) if isinstance(val, list) else str(val)
-            if attr not in ALLOWED_ATTRS or sval.strip().lower().startswith(("javascript:", "data:text")):
+            if attr not in ALLOWED_ATTRS:
+                del tag.attrs[attr]
+            elif attr in URL_ATTRS and not url_ok(attr, sval, tag.name):
+                del tag.attrs[attr]
+            elif attr == "srcset" and not all(url_ok("src", part.strip().split(" ")[0], tag.name)
+                                              for part in sval.split(",") if part.strip()):
                 del tag.attrs[attr]
         if local_images:
             for attr in ("src", "href"):
@@ -267,7 +294,9 @@ class Serializer:
         """Threaded comments. For an item: from every version, the main post's first. With only_post: just the
         comments on that one post."""
         ids = [only_post] if only_post else [m["id"] for m in self.members(primary)]
-        rows = self.db.q(f"SELECT * FROM comments WHERE post_id IN ({','.join('?' * len(ids))}) "
+        rows = self.db.q("SELECT id, post_id, parent_id, author_id, author_name, author_avatar, author_badges, "
+                         "author_color, date, date_text, body_html, body_text, like_count, pinned, link "
+                         f"FROM comments WHERE post_id IN ({','.join('?' * len(ids))}) "
                          "ORDER BY post_id = ? DESC, position", ids + [primary["id"]])
         by_parent: dict[str | None, list[dict]] = {}
         for r in rows:

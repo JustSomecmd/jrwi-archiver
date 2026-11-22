@@ -242,6 +242,8 @@ def test_post_with_attachment_and_comments(client):
     assert first["author"]["name"] == "Sam" and first["like_count"] == 4
     assert first["body_text"] == "Love these rules!"
     assert first["replies"][0]["body_text"] == "Same here."
+    # A reply's date, shown twice over in its markup, read once
+    assert first["replies"][0]["date_text"] == "2d" and first["replies"][0]["date"]
     assert first["author"]["avatar"].startswith("/files/avatars/") and first["author"]["badges"] == []
     # Member IDs from each comment's Report form; a reply has its own, and the user's own comment has none
     assert first["author"]["id"] == "81000001" and first["replies"][0]["author"]["id"] == "81000004"
@@ -852,7 +854,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.20" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.21" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1120,3 +1122,64 @@ def test_video_handed_over_to_tubearchivist(app, client):
     handover.run(db, archiver.paths, db.settings())
     assert db.post(287)["handover"]["status"] == "done" and not keeper_file.exists()
     assert "already deleted" in web.post("/admin/items/287/handover", data={"choice": "force"}).text
+
+
+def test_security(app, client):
+    """Headers on pages and files, forms from other sites refused, a wait after wrong passwords, logins that only
+    send you to this site, and saved HTML that can't run anything."""
+    from jrwi.web.guard import safe_link, safe_next
+    from jrwi.web.serialize import clean_html
+    paths = app.state.archiver.paths
+    web = TestClient(app, client=("10.9.8.7", 50000))
+    web.post("/login", data={"password": "test-password"})
+    page = web.get("/admin")
+    csp = page.headers["content-security-policy"]
+    assert page.status_code == 200 and "script-src 'self'" in csp and "frame-ancestors 'self'" in csp
+    assert page.headers["x-frame-options"] == "SAMEORIGIN" and page.headers["x-content-type-options"] == "nosniff"
+    assert 'data-confirm="Fetch every archived post' in page.text and "onsubmit" not in page.text
+    assert "server" not in {k.lower() for k in page.headers} or "uvicorn" not in page.headers.get("server", "")
+    # A file a browser would run as a page opens sandboxed; a PDF opens as itself
+    odd = paths.archive / "posts" / "299" / "attachments" / "notes.html"
+    odd.parent.mkdir(parents=True, exist_ok=True)
+    odd.write_text("<script>alert(1)</script>")
+    r = client.get("/files/posts/299/attachments/notes.html")
+    assert r.status_code == 200 and r.headers["content-security-policy"].startswith("sandbox")
+    pdf = next(f for f in client.get("/api/posts/299/files").json()["files"] if f["type"] == "pdf")
+    r = client.get(pdf["url"])
+    assert r.status_code == 200 and "content-security-policy" not in r.headers and r.headers["x-content-type-options"] == "nosniff"
+    odd.unlink()
+    # Changes from another site's page are refused; from the archive's own, and from apps, they go through
+    assert web.post("/admin/stop", headers={"Origin": "http://evil.example"}).status_code == 403
+    assert web.post("/admin/stop", headers={"Origin": "http://box:8096"}).status_code == 403   # same server, other port
+    assert web.post("/admin/stop", headers={"Referer": "http://evil.example/x"}).status_code == 403
+    assert web.post("/admin/stop", headers={"Origin": "null"}).status_code == 403
+    assert web.post("/admin/stop", headers={"Origin": "http://testserver"}, follow_redirects=False).status_code == 303
+    assert web.post("/admin/stop", follow_redirects=False).status_code == 303
+    assert client.post("/api/stop").status_code == 409   # the app's token, no Origin: as before
+    # Logging in sends you only to this site
+    for bad in ("//evil.example", "/\\evil.example", "https://evil.example", "/\tx"):
+        assert safe_next(bad) == "/"
+    assert safe_next("/admin?x=1") == "/admin?x=1"
+    r = web.post("/login", data={"password": "test-password", "next": "/\\evil.example"}, follow_redirects=False)
+    assert r.headers["location"] == "/"
+    assert safe_link("javascript:alert(1)") == "#" and safe_link("java\tscript:x") == "#"
+    assert safe_link("https://jrwishow.com/x") == "https://jrwishow.com/x" and safe_link("/items/1") == "/items/1"
+    # Five wrong passwords, then that address waits, even with the right one; others don't
+    guesser = TestClient(app, client=("10.1.2.3", 50001))
+    for _ in range(5):
+        assert guesser.post("/login", data={"password": "wrong"}).status_code == 401
+    r = guesser.post("/login", data={"password": "test-password"})
+    assert r.status_code == 429 and "Try again in" in r.text
+    assert TestClient(app, client=("10.1.2.4", 50002)).post(
+        "/login", data={"password": "test-password"}, follow_redirects=False).status_code == 303
+    # Saved HTML keeps its formatting and loses anything that could run
+    for bad in ('<a href="java\tscript:alert(1)">x</a>', '<a href="\x01javascript:alert(1)">x</a>',
+                '<p>a<!-- --!><img src=x onerror=alert(1)> --></p>', '<img srcset="/a.png 1x, javascript:x 2x">',
+                '<svg onload=alert(1)></svg>', '<p onclick="alert(1)">p</p>', '<iframe src="https://evil.example"></iframe>'):
+        out = clean_html(bad)
+        assert "javascript" not in out and "onerror" not in out and "onload" not in out and "onclick" not in out
+        assert "evil" not in out and "<!--" not in out
+    assert clean_html('<p>Hi <b>there</b> <a href="https://x.example/a">link</a></p>').startswith('<p>Hi <b>there</b> <a href="https://x.example/a"')
+    assert 'src="data:image/png;base64,AAAA"' in clean_html('<img src="data:image/png;base64,AAAA">')
+    # A wrong token with odd characters is just wrong
+    assert TestClient(app).get("/api/status", params={"token": "ünïcode"}).status_code == 401

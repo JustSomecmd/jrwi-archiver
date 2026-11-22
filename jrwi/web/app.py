@@ -9,6 +9,7 @@ import math
 import os
 import secrets
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -33,6 +34,7 @@ from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, MAX_PICTURE, TABS, add_sh
                         classify_all, delete_saved_override, drop_shared_show_art, norm, post_pictures, refresh_jellyfin,
                         reorganize, saved_overrides, set_art_override, show_tag_names, tag_role)
 from ..scheduler import Scheduler
+from .guard import Guard, LoginThrottle, safe_link, safe_next
 from .progress import Progress
 from .serialize import Serializer, clean_html, files_url, iso, safe_join, tab_name
 
@@ -138,10 +140,12 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                   lifespan=lifespan)
     app.add_middleware(SessionMiddleware, secret_key=db.setting("session_secret"), max_age=60 * 60 * 24 * 30,
                        same_site="lax", session_cookie="jrwi_session")
+    app.add_middleware(Guard)   # outermost: security headers on every answer, other sites' forms refused
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.globals.update(files_url=files_url, human_size=human_size, human_duration=human_duration,
                                  tab_name=tab_name, version=VERSION, quote=quote, nice_date=nice_date, ago=ago,
+                                 link=safe_link,
                                  version_name={"video": "Video version", "audio": "Audio version",
                                                "youtube": "YouTube version"})
     app.state.db, app.state.archiver, app.state.scheduler = db, archiver, scheduler
@@ -157,7 +161,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         header = request.headers.get("Authorization", "")
         if header.lower().startswith(("token ", "bearer ")):
             given = header.split(" ", 1)[1].strip()
-        return bool(token and given and hmac.compare_digest(given, token))
+        # As bytes: a token with characters outside ASCII is simply wrong, rather than an error
+        return bool(token and given and hmac.compare_digest(given.encode(), token.encode()))
 
     def api_auth(request: Request) -> None:
         if not (token_ok(request) or session_ok(request)):
@@ -339,7 +344,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         def read():
             if scheduler.read_feed(force=True).get("start_check"):
                 scheduler.check_now()
-        threading.Thread(target=read, name="read-feed", daemon=True).start()
+        if not scheduler.feed_lock.locked():   # already reading: that read's result is the one to show
+            threading.Thread(target=read, name="read-feed", daemon=True).start()
         return JSONResponse({"reading": True}, status_code=202)
 
     @app.post("/api/stop", dependencies=[Depends(api_auth)])
@@ -453,7 +459,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                     "parent_id, date, rowid AS n FROM comments")
         commenters = commenter_groups(rows)
         top = sorted(commenters, key=lambda g: (-g["count"], -g["likes"], g["newest"]["author_name"].lower()))[:10]
-        return {"checks": checks, "files": files_mod.summary(paths, archived_posts()),
+        return {"checks": checks, "files": files_summary(),
                 "comments": {"total": len(rows), "replies": sum(1 for r in rows if r["parent_id"]),
                              "commenters": len(commenters),
                              "top": [{**ser.author(g["newest"]), "count": g["count"], "likes": g["likes"]}
@@ -632,20 +638,30 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         request.session.update(auth=True, pw=db.setting("web_password_hash")[-12:])
         return RedirectResponse("/admin/settings", 303)
 
+    throttle = LoginThrottle()
+
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, next: str = "/"):
         if not db.setting("web_password_hash"):
             return RedirectResponse("/setup", 303)
-        return templates.TemplateResponse(request, "login.html", {"setup": False, "error": None, "next": next})
+        return templates.TemplateResponse(request, "login.html", {"setup": False, "error": None, "next": safe_next(next)})
 
     @app.post("/login")
     def login_post(request: Request, password: str = Form(...), next: str = Form("/")):
         stored = db.setting("web_password_hash") or ""
-        if not check_password(password, stored):
+        who = request.client.host if request.client else "?"
+        wait = throttle.wait(who)
+        if wait:
             return templates.TemplateResponse(request, "login.html", {
-                "setup": False, "error": "That password isn't right.", "next": next}, status_code=401)
+                "setup": False, "next": safe_next(next),
+                "error": f"Too many wrong passwords. Try again in {max(1, round(wait / 60))} min."}, status_code=429)
+        if not check_password(password, stored):
+            throttle.failed(who)
+            return templates.TemplateResponse(request, "login.html", {
+                "setup": False, "error": "That password isn't right.", "next": safe_next(next)}, status_code=401)
+        throttle.succeeded(who)
         request.session.update(auth=True, pw=stored[-12:])
-        return RedirectResponse(next if next.startswith("/") and not next.startswith("//") else "/", 303)
+        return RedirectResponse(safe_next(next), 303)
 
     @app.get("/logout")
     def logout(request: Request):
@@ -818,9 +834,24 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return db.q("SELECT id, media, embeds, handover, documents, attachments, images, thumbnail, links "
                     "FROM posts WHERE status IN ('complete', 'partial', 'gone')")
 
+    files_cache: dict = {}
+
+    def files_summary() -> list[dict]:
+        """Admin > Files and the stats' file counts. Counting looks at every file, so the answer is kept until a
+        post's files change (or for 10 minutes, for files changed outside the archiver)."""
+        key = tuple(db.one("SELECT COUNT(*) AS n, MAX(last_fetched) AS f, COUNT(handover) AS h, "
+                           "SUM(LENGTH(files)) + SUM(LENGTH(media)) + SUM(LENGTH(documents)) AS s "
+                           "FROM posts WHERE status IN ('complete', 'partial', 'gone')").values())
+        hit = files_cache.get("v")
+        if hit and hit[0] == key and time.monotonic() - hit[1] < 600:
+            return hit[2]
+        rows = files_mod.summary(paths, archived_posts())
+        files_cache["v"] = (key, time.monotonic(), rows)
+        return rows
+
     @app.get("/admin/files", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def admin_files(request: Request):
-        return render(request, "admin_files.html", rows=files_mod.summary(paths, archived_posts()),
+        return render(request, "admin_files.html", rows=files_summary(),
                       previewable=files_mod.PREVIEWABLE)
 
     @app.get("/pages", response_class=HTMLResponse, dependencies=[Depends(web_auth)])

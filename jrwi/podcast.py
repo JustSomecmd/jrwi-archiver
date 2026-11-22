@@ -152,12 +152,12 @@ def fetch(url: str, state: dict) -> tuple[int, bytes | None, dict]:
                 return 304, None, {}
             if r.status_code >= 400:
                 raise FeedError(f"{host_of(url)} answered HTTP {r.status_code}")
-            data = b""
+            data = bytearray()   # grows in place, rather than copying the whole feed for every chunk
             for chunk in r.iter_content(65536):
                 data += chunk
                 if len(data) > MAX_BYTES:
                     raise FeedError("the feed is larger than 30 MB")
-            return r.status_code, data, {"etag": r.headers.get("ETag"), "last_modified": r.headers.get("Last-Modified")}
+            return r.status_code, bytes(data), {"etag": r.headers.get("ETag"), "last_modified": r.headers.get("Last-Modified")}
     except requests.RequestException as e:
         # The exception's text holds the address, key included: say only what went wrong and where
         raise FeedError(f"couldn't reach {host_of(url)} ({type(e).__name__})") from None

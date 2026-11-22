@@ -126,7 +126,23 @@ You can also set these environment variables:
 
 - **`JRWI_EMAIL` and `JRWI_PASSWORD`:** the jrwishow.com login. They take priority over the Settings page.
 - **`JRWI_WEB_PASSWORD`:** sets the web app's password on first start.
+- **`JRWI_TRUSTED_PROXIES`:** only needed behind a reverse proxy: its address (or a comma-separated list), so the archiver
+  takes the visitor's address from it. Without it, the address the connection comes from is used.
 - **`TZ`:** the time zone.
+
+## Security
+
+The archive holds your jrwishow.com login, so the web app protects itself:
+
+- Its pages run only the archive's own scripts and can't be framed by other sites. Saved posts and comments are cleaned
+  before they're shown: no scripts, event handlers or `javascript:` links.
+- Files in the archive that a browser could run as a page (HTML, SVG, XML attachments) open in a sandbox.
+- A change sent by a browser from a page on another site (even another service on the same server) is refused. The apps,
+  which use the API token, aren't affected.
+- After five wrong passwords in 15 minutes, logging in from that address waits until the oldest is 15 minutes old.
+- The jrwishow.com password, TubeArchivist's token and the podcast feed's address are never shown again once saved.
+
+It's meant for your own network or Tailscale. Run it as your own user (`user:` in the compose file), not as root.
 
 ## Disk space
 

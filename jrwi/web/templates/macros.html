@@ -142,7 +142,7 @@
     <div class="pfoot">
       {% if p.like_count is not none %}<span class="pill">{{ icon('heart') }} {{ p.like_count }}</span>{% endif %}
       <a class="pill" href="{{ url }}#comments">{{ icon('comment') }} {{ p.comment_count or 0 }}</a>
-      {% if p.original_url %}<a class="pill" href="{{ p.original_url }}" target="_blank" rel="noopener">{{ icon('external') }} Original post</a>{% endif %}
+      {% if p.original_url %}<a class="pill" href="{{ link(p.original_url) }}" target="_blank" rel="noopener">{{ icon('external') }} Original post</a>{% endif %}
       {% if not p.locked and (p.images or p.attachments or p.documents or p.audio or (p.video and p.video.url) or p.handed_over or p.thumbnail) %}
       <a class="pill" href="{{ url }}/files">{{ icon('file') }} Files</a>{% endif %}
     </div>
@@ -183,7 +183,7 @@
       {%- endfor %}
       {%- if c.pinned %}<span class="mbadge pin">Pinned</span>{% endif %}
       <span class="when" title="{{ nice_date(c.date) }}{% if c.date_text %} (shown on the site as {{ c.date_text }}){% endif %}">{{ ago(c.date) or c.date_text }}</span>
-      {% if c.link %}<a class="cmenu" href="{{ c.link }}" target="_blank" rel="noopener" title="Open this comment on jrwishow.com">&bull;&bull;&bull;</a>{% endif %}
+      {% if c.link %}<a class="cmenu" href="{{ link(c.link) }}" target="_blank" rel="noopener" title="Open this comment on jrwishow.com">&bull;&bull;&bull;</a>{% endif %}
     </div>
     <div class="rich crich clamp" data-clamp>{{ c.body_html | safe if c.body_html else c.body_text }}</div>
     <button type="button" class="more-link" data-unclamp hidden>Read more</button>

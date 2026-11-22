@@ -8,12 +8,15 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY jrwi ./jrwi
+RUN python -m compileall -q jrwi
 
 ENV JRWI_DATA=/data \
     JRWI_ARCHIVE=/archive \
     JRWI_MEDIA=/media/jrwi \
     JRWI_PORT=8090 \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    MALLOC_ARENA_MAX=2 \
     XDG_CACHE_HOME=/tmp/.cache
 
 VOLUME ["/data", "/archive", "/media/jrwi"]

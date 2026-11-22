@@ -8,7 +8,7 @@ import shutil
 import threading
 from datetime import datetime, timedelta, timezone
 
-from . import podcast
+from . import memory, podcast
 from .crawler import Archiver
 from .site.parse import PARSER_VERSION
 from .db import Db
@@ -24,6 +24,7 @@ class Scheduler:
         self.wake = threading.Event()
         self.full_requested = False
         self.reparse_requested = False
+        self.check_requested = False
         self.next_check: datetime | None = None
         self.planned_with: timedelta | None = None   # the interval next_check was planned with
         self.last_start: datetime | None = None
@@ -42,6 +43,7 @@ class Scheduler:
         if self.running:
             return False
         self.full_requested = full
+        self.check_requested = True
         self.wake.set()
         return True
 
@@ -57,6 +59,7 @@ class Scheduler:
         try:
             result = self.archiver.run_reparse()
             log.info("re-read saved pages: %s", result)
+            memory.release()
         except Exception:
             log.exception("re-reading saved pages failed")
 
@@ -105,6 +108,10 @@ class Scheduler:
         self.next_check = after + interval + timedelta(seconds=jitter)
 
     def _loop(self) -> None:
+        try:
+            self.db.drop_comment_raw()
+        except Exception:
+            log.exception("tidying the database failed")
         self._reparse_after_update()
         last = self.db.one("SELECT started FROM runs WHERE started IS NOT NULL ORDER BY id DESC LIMIT 1")
         start = datetime.now(timezone.utc)
@@ -139,12 +146,15 @@ class Scheduler:
             if self.reparse_requested:
                 self.reparse_requested = False
                 self._reparse()
+                if self.check_requested:
+                    self.wake.set()   # Check now was pressed while the re-read was being started: it's next
                 continue
             if not manual and not self.archiver.has_login():
                 # Nothing to log in with yet: wait for Settings instead of recording a failed check
                 self._plan_next(datetime.now(timezone.utc))
                 continue
             full, self.full_requested = self.full_requested, False
+            self.check_requested = False
             self.last_start = datetime.now(timezone.utc)
             self._plan_next(self.last_start)
             try:
@@ -156,6 +166,7 @@ class Scheduler:
                 podcast.match(self.db)   # the feed's new episodes, now that the check has saved their posts
             except Exception:
                 log.exception("matching the podcast feed failed")
+            memory.release()
             # A check that ran past the next one's time: the next comes a whole interval after this one ended
             now = datetime.now(timezone.utc)
             if self.next_check and self.next_check < now + timedelta(minutes=10):

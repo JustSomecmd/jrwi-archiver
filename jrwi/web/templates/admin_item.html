@@ -29,11 +29,11 @@
   <p class="muted small">If this post looks wrong or incomplete, fetch it from the site again. <b>Re-read saved pages</b> on the
     Admin page is quicker and fixes most reading mistakes without downloading; use this when the saved copy itself is
     wrong or out of date.</p>
-  <form method="post" action="/admin/items/{{ p.id }}/refetch" onsubmit="return confirm('Fetch this post\'s page and comments again?')">
+  <form method="post" action="/admin/items/{{ p.id }}/refetch" data-confirm="Fetch this post's page and comments again?">
     <input type="hidden" name="what" value="page"><button class="ghost">Page and comments</button>
     <div class="muted small">Keeps the downloaded files.</div></form>
   <form method="post" action="/admin/items/{{ p.id }}/refetch" style="margin-top:.9rem"
-        onsubmit="return confirm('Delete this post\'s downloaded files (video, audio, images, attachments) and download everything again?')">
+        data-confirm="Delete this post's downloaded files (video, audio, images, attachments) and download everything again?">
     <input type="hidden" name="what" value="files"><button class="ghost">Everything, files included</button>
     <div class="muted small">Deletes and re-downloads its video, audio, images and attachments.</div></form>
 </div>
@@ -43,7 +43,7 @@
   {% if error %}<p class="error small">{{ error }}</p>{% endif %}
   <p class="small">{{ ho.text }}</p>
   <table class="small">
-    <tr><th>YouTube video</th><td><a href="{{ h.youtube_url }}" target="_blank" rel="noopener">{{ h.youtube_id }}</a>
+    <tr><th>YouTube video</th><td><a href="{{ link(h.youtube_url) }}" target="_blank" rel="noopener">{{ h.youtube_id }}</a>
       (<a href="/items/{{ h.youtube_post }}">its post</a>)</td></tr>
     <tr><th>Archived video</th><td><a href="/items/{{ ho.post.id }}">{{ ho.post.title }}</a>{% if ho.gone %} <span class="muted">(no longer on the site)</span>{% endif %}</td></tr>
     {% if h.archived_duration %}<tr><th>Lengths</th><td>archived {{ human_duration(h.archived_duration) }}{% if h.ta_duration %},
@@ -55,7 +55,7 @@
   </table>
   {% if h.status == 'done' %}
     {% if not ho.gone %}
-    <form method="post" action="/admin/items/{{ ho.post.id }}/handover" onsubmit="return confirm('Download the members-only video again and keep it?')">
+    <form method="post" action="/admin/items/{{ ho.post.id }}/handover" data-confirm="Download the members-only video again and keep it?">
       <input type="hidden" name="choice" value="redownload"><button class="ghost">Download the members-only video again</button>
       <div class="muted small">Only works while the post is still on the site. It's then kept, next to TubeArchivist's copy.</div></form>
     {% endif %}
@@ -69,7 +69,7 @@
       <button class="ghost">Keep the archived video</button></form>
     {% if h.status == 'differs' and not h.force %}
     <form method="post" action="/admin/items/{{ ho.post.id }}/handover" style="margin-top:.6rem"
-          onsubmit="return confirm('Delete the archived video at the next check, even though the lengths differ?')">
+          data-confirm="Delete the archived video at the next check, even though the lengths differ?">
       <input type="hidden" name="choice" value="force"><button class="ghost">Delete it anyway</button>
       <div class="muted small">The lengths differ by more than {{ ho.tolerance | int }} seconds, so the two may not be the same cut.</div></form>
     {% endif %}
@@ -83,7 +83,7 @@
     <tr><th>Status</th><td>{{ p.status }}</td></tr>
     <tr><th>Type</th><td>{{ p.path_kind }}</td></tr>
     <tr><th>Visible to</th><td>{{ p.access }}</td></tr>
-    <tr><th>Original</th><td><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.url }}</a></td></tr>
+    <tr><th>Original</th><td><a href="{{ link(p.url) }}" target="_blank" rel="noopener">{{ p.url }}</a></td></tr>
     <tr><th>Video file</th><td class="small">{{ (p.media or {}).get('video', {}).get('path', '') }}</td></tr>
     <tr><th>Audio file</th><td class="small">{{ (p.media or {}).get('audio', {}).get('path', '') }}</td></tr>
     {% if p.site_gone %}<tr><th>On the site</th><td>Gone since {{ p.site_gone }}</td></tr>{% endif %}
