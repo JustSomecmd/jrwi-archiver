@@ -1,6 +1,6 @@
-# JRWI archiver API (contract v0.17)
+# JRWI archiver API (contract v0.18)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.7.
+This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.9.8.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
@@ -18,7 +18,8 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.15:** `GET /api/items/{postId}/files`, `GET /api/posts/{postId}/files` and `GET /api/preview/<path>` (see Files and previews). A YouTube `video` gains `handed_over` when the item's archived video was deleted because TubeArchivist has it; posts gain `handed_over` and `removed_from_site`, and item `versions` gain `removed_from_site`. The event `video_handed_over`. `sync` on YouTube-only items can now be checked. A post whose video was handed over still takes video progress. Offline downloads keep the post's files. In the service since 0.9.0.
 - **v0.16:** the status gains `step`, a stable name for what a check is doing, and `progress.unit`, what its count counts. `phase` and `detail` are now worded for people and can change between versions. In the service since 0.9.3.
 - **v0.17:** the Tubedroid chat's suggestions 3 to 9. `GET /api/ping` gains `contract` and `features` (see Ping). Posts gain `progress` (see Post). `GET /api/tags`, and `tag` on `GET /api/posts` and `GET /api/items`, whose `q` now also finds the names of a post's tags. `GET /api/feed` (see Feed), `GET /api/continue` (see Continue watching), `POST /api/stop` and `GET /api/stats` (see Stats). In the service since 0.9.7.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored.
+- **v0.18:** comment authors gain `id`, the member's ID on the site (see Comment), and `GET /api/stats` counts commenters by it, with `id` on each of the top ten. In the service since 0.9.8.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -31,7 +32,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.7", "contract": "0.17", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.9.8", "contract": "0.18", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/stop` | (v0.17) Stops the check, or the re-read of saved pages, that's running, as the admin page's Stop does: `202` with `{"stopping": true}`, or `409` when nothing is running. The status shows it running until it has stopped, then `last_result` is `stopped`. |
@@ -66,7 +67,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.9.7", "contract": "0.17",
+{"name": "jrwi-archiver", "version": "0.9.8", "contract": "0.18",
  "features": ["post_progress", "tags", "continue", "stop", "feed", "stats"]}
 ```
 
@@ -102,13 +103,14 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
              "result": "ok", "message": null, "new_items": 3, "archived": 5}],
  "files": [{"type": "pdf", "ext": ".pdf", "count": 312, "bytes": 1234567890}],
  "comments": {"total": 18234, "replies": 4012, "commenters": 812,
-              "top": [{"name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
+              "top": [{"id": "1234567", "name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
                        "badges": [], "color": "rgb(247, 221, 210)", "count": 120, "likes": 3400}]}}
 ```
 
 - **`checks`:** the last 15 runs, newest first, as the admin page lists them. A check that's running has `result` `running` and `finished` `null`; otherwise `result` is as `last_result` in the status. `new_items` counts the items archived for the first time, `archived` every post saved, new or changed.
 - **`files`:** the archive's files by type (as File `type`) and extension, as Admin > Files counts them: how many and how big. YouTube videos and Google links that couldn't be saved are counted with `ext` `YouTube` or `link`, and `bytes` 0.
-- **`comments`:** every comment and reply in the archive (`total`), how many of them are replies, how many members commented, and the ten who commented most, with how many comments and the likes on them. The site shows no member IDs, so members are told apart by name. `name`, `avatar`, `badges` and `color` are as on their newest comment, in the shape of a Comment's `author`.
+- **`comments`:** every comment and reply in the archive (`total`), how many of them are replies, how many members commented, and the ten who commented most, with how many comments and the likes on them, in the shape of a Comment's `author`.
+  - **Members (v0.18):** told apart by `author.id`, so a member who changed their name counts once. `name`, `avatar`, `badges` and `color` are as on their newest comment, so the name is the one they use now. A comment without an `id` (the user's own) goes with the member last seen with that name, or else counts by name, with `id` `null`. Before v0.18, members were told apart by name.
 
 **Finding an item by YouTube ID (v0.10):** `GET /api/items?youtube_id=CzZ13VPQOcw` lists the items with a post, of any version, that embeds that YouTube video: usually one item, or none. For a YouTube-only episode, that item's `video.youtube_id` is the ID asked for. An item whose members-only video is archived and that also embeds the YouTube version is listed too, with `video` being the archived file; apps that only want YouTube-only items can check `video.youtube_id`. `/api/posts` takes `youtube_id` the same way, listing the posts themselves.
 
@@ -306,7 +308,7 @@ A single post, never merged with its other versions. It has the same fields as a
 
 ```json
 {"id": "286486:1016036", "post_id": 286486,
- "author": {"name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
+ "author": {"id": "1234567", "name": "jazzyferin", "avatar": "/files/avatars/b4a56f4a9840a6bb.webp",
             "badges": [{"name": "4-month member", "icon": "🔥", "image": null},
                        {"name": "JRWiener", "icon": null, "image": "/files/badges/0c1d2e3f4a5b6c7d.webp"}],
             "color": "rgb(247, 221, 210)"},
@@ -319,6 +321,7 @@ A single post, never merged with its other versions. It has the same fields as a
 - **Dates:** the site only shows how long ago a comment was posted ("13d"), so `date` is counted back from when that page was downloaded. The site shows older comments more roughly ("5mo"), so when a later download is rougher, the earlier, more exact `date` is kept. `date_text` is what the site showed for the `date` that's kept.
 - **`pinned` (v0.4):** pinned comments come first, as on the site.
 - **`link` (v0.4):** the comment's own address on the site, or `null`.
+- **`author.id` (v0.18):** the member's ID on the site, as text: the same on all their comments and replies, on every post, even after they change their name, so apps can tell members apart and group a member's comments. It's read from the comment's Report form, so it's `null` on the user's own comments, which the site doesn't let them report. Comments saved before 0.9.8 get it when the saved pages are re-read, which 0.9.8 does by itself after the update, before its first check.
 - **`author.avatar`:** `null` for members without a profile picture. The site shows their initial instead, and apps can do the same.
 - **`author.badges` (v0.5):** the badges next to the name, in the site's order: the membership tier (an image, with the tier name as `name`), months as a member (an emoji `icon` and text) and `Verified` on verified accounts. Any of `name`, `icon` and `image` can be `null`. An empty list when there are none.
 - **`author.color` (v0.8):** the CSS colour the site shows the name in, which follows the member's tier, such as `rgb(247, 221, 210)`, or `null`.

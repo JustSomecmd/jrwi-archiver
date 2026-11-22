@@ -155,9 +155,18 @@ BADGES = ('<div class="badge badge--small"><div class="badge__icon">🔥</div> 4
           f'<div class="badge__icon"><img alt="Badge icon" class="badge__image" src="{B}/imgproxy/badge-tier/b.webp"></div></div>')
 
 
+# Members' IDs, as the site puts them in each comment's Report form. Alex is Kim under a new name; Lee's comment
+# is the user's own, which the site doesn't let you report, so it has none.
+MEMBER_IDS = {"Sam": "81000001", "Jo": "81000002", "Kim": "81000004", "Pat": "81000005", "Alex": "81000004"}
+
+
 def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when="13d", picture=True, badges=False):
     """A comment as the real site renders it, including the parts that must be ignored. Members without a
     profile picture get their initial instead, and their badges are then the first images in the comment."""
+    sid = MEMBER_IDS.get(author)
+    report = ('<form action="/supporters/reported_supporters" method="post"><input type="hidden" name="authenticity_token" '
+              f'value="tok"><input type="hidden" name="reported_supporter_id" value="{sid}"><button>Report</button></form>'
+              if sid else "")
     badge = '<div class="comment__badge-container"><div class="pill">Pinned</div></div>' if pinned else ""
     avatar = (f'<div class="avatar"><img class="avatar__image" alt="{author}" src="{B}/imgproxy/av-{author}/a.webp"></div>'
               if picture else f'<div class="avatar avatar--medium">\n        {author[0].lower()}\n</div>')
@@ -174,7 +183,7 @@ def real_comment(pid, cid, author, body, likes=0, replies=0, pinned=False, when=
             '<time datetime="2025-07-16T22:34:22Z">Jul 16, 2025</time></div></div>'
             f'<div class="comment__author-name"><div data-testid="Post.CommentAuthor">{author}</div></div>{author_badges}</span>'
             f'<div class="comment__date-and-actions"><a href="/supporters/posts/x?cid=comment_h{cid}"><span class="comment__date">{when}</span></a>'
-            '<div class="comment__dropdown"><div class="dropdown"><div class="modal"><p>Block someone?</p></div></div></div></div></div>'
+            f'<div class="comment__dropdown"><div class="dropdown"><div class="modal"><p>Block someone?</p>{report}</div></div></div></div></div>'
             f'<div class="comment__content"><div><div class="comment__body"><p>{body}</p></div><button>Read more</button></div></div>'
             f'<div class="comment__footer"><turbo-frame id="comment_{cid}_like"><form action="/supporters/posts/{pid}/comments/{cid}/like" method="post">'
             f'<button aria-label="Like"><span class="comment__footer-item-number">{likes}</span></button></form></turbo-frame>{load}</div>'
@@ -197,7 +206,7 @@ COMMENT_PAGES = {
     (300, None): [real_comment(300, 601, "Kim", "Best episode yet.", likes=327, pinned=True)],
     (298, None): [real_comment(298, 701, "Pat", "Listening on my commute.", likes=2)],
 }
-REPLY_PAGES = {(299, 501): [real_comment(299, 502, "Alex", "Same here.")]}
+REPLY_PAGES = {(299, 501): [real_comment(299, 502, "Alex", "Same here.", when="2d")]}
 
 
 def comments_stream(pid, marker):

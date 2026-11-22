@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS comments (
     id TEXT PRIMARY KEY, post_id INTEGER, parent_id TEXT,
     author_name TEXT, author_avatar TEXT, date TEXT, date_text TEXT,
     body_html TEXT, body_text TEXT, like_count INTEGER, position INTEGER,
-    raw TEXT, pinned INTEGER DEFAULT 0, link TEXT, author_badges TEXT DEFAULT '[]', author_color TEXT
+    raw TEXT, pinned INTEGER DEFAULT 0, link TEXT, author_badges TEXT DEFAULT '[]', author_color TEXT,
+    author_id TEXT
 );
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id, position);
 
@@ -97,7 +98,8 @@ class Db:
                   "shows": {"source": "TEXT", "art": "TEXT", "art_source": "TEXT", "art_options": "TEXT DEFAULT '[]'",
                             "seasons": "TEXT DEFAULT '[]'"},
                   "progress": {"timeline": "TEXT"},
-                  "comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'", "author_color": "TEXT"}}
+                  "comments": {"pinned": "INTEGER DEFAULT 0", "link": "TEXT", "author_badges": "TEXT DEFAULT '[]'", "author_color": "TEXT",
+                               "author_id": "TEXT"}}
         for table, cols in wanted.items():
             have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
             for col, decl in cols.items():

@@ -255,8 +255,8 @@ class Serializer:
 
         badges = [{"name": b.get("name"), "icon": b.get("icon"), "image": local(b.get("image"))}
                   for b in (r.get("author_badges") or [])]
-        return {"name": r["author_name"] or "", "avatar": local(r["author_avatar"]), "badges": badges,
-                "color": r.get("author_color")}
+        return {"id": r.get("author_id"), "name": r["author_name"] or "", "avatar": local(r["author_avatar"]),
+                "badges": badges, "color": r.get("author_color")}
 
     def comments(self, primary: dict, page: int = 1, page_size: int = 50, only_post: int | None = None) -> dict:
         """Threaded comments. For an item: from every version, the main post's first. With only_post: just the

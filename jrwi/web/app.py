@@ -408,19 +408,36 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         """The archive's own numbers that apps can't work out from posts and items (contract v0.17)."""
         checks = [{k: r[k] for k in ("started", "finished", "result", "message", "new_items", "archived")}
                   for r in db.q("SELECT * FROM runs ORDER BY id DESC LIMIT 15")]
-        totals = db.one("SELECT COUNT(*) AS total, SUM(parent_id IS NOT NULL) AS replies, "
-                        "COUNT(DISTINCT NULLIF(author_name, '')) AS commenters FROM comments")
-        top = []
-        # The site shows no member IDs, so commenters are told apart by name
-        for r in db.q("SELECT author_name AS name, COUNT(*) AS n, COALESCE(SUM(like_count), 0) AS likes FROM comments "
-                      "WHERE COALESCE(author_name, '') != '' GROUP BY author_name "
-                      "ORDER BY n DESC, likes DESC, author_name LIMIT 10"):
-            newest = db.one("SELECT author_name, author_avatar, author_badges, author_color FROM comments "
-                            "WHERE author_name = ? ORDER BY date DESC, rowid DESC LIMIT 1", (r["name"],))
-            top.append({**ser.author(newest), "count": r["n"], "likes": r["likes"]})
+        rows = db.q("SELECT author_id, author_name, author_avatar, author_badges, author_color, like_count, "
+                    "parent_id, date, rowid AS n FROM comments")
+        commenters = commenter_groups(rows)
+        top = sorted(commenters, key=lambda g: (-g["count"], -g["likes"], g["newest"]["author_name"].lower()))[:10]
         return {"checks": checks, "files": files_mod.summary(paths, archived_posts()),
-                "comments": {"total": int(totals["total"] or 0), "replies": int(totals["replies"] or 0),
-                             "commenters": int(totals["commenters"] or 0), "top": top}}
+                "comments": {"total": len(rows), "replies": sum(1 for r in rows if r["parent_id"]),
+                             "commenters": len(commenters),
+                             "top": [{**ser.author(g["newest"]), "count": g["count"], "likes": g["likes"]}
+                                     for g in top]}}
+
+    def commenter_groups(rows: list[dict]) -> list[dict]:
+        """Comments by member: by their member ID, so a member who changed their name counts once. Comments
+        without one (your own, which the site doesn't let you report) go with the member last seen with that
+        name, or else by name. Each group's newest comment gives the name, picture and badges shown."""
+        rows = sorted(rows, key=lambda r: (r["date"] or "", r["n"]))
+        id_of_name = {r["author_name"]: r["author_id"] for r in rows if r["author_id"] and r["author_name"]}
+        groups: dict[str, dict] = {}
+        for r in rows:
+            key = r["author_id"] or id_of_name.get(r["author_name"]) or (r["author_name"] and "name:" + r["author_name"])
+            if not key:
+                continue
+            g = groups.setdefault(key, {"count": 0, "likes": 0})
+            g["count"] += 1
+            g["likes"] += r["like_count"] or 0
+            g["newest"] = r
+        for key, g in groups.items():
+            # The newest comment with the member's ID, so an ID-less comment never hides who it is
+            if not key.startswith("name:") and not g["newest"]["author_id"]:
+                g["newest"] = {**g["newest"], "author_id": key}
+        return list(groups.values())
 
     @app.get("/api/posts/{post_id}/comments", dependencies=[Depends(api_auth)])
     def api_post_comments(post_id: int, page: int = 1, page_size: int = 50):

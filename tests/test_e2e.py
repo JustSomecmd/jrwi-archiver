@@ -241,6 +241,9 @@ def test_post_with_attachment_and_comments(client):
     assert first["body_text"] == "Love these rules!"
     assert first["replies"][0]["body_text"] == "Same here."
     assert first["author"]["avatar"].startswith("/files/avatars/") and first["author"]["badges"] == []
+    # Member IDs from each comment's Report form; a reply has its own, and the user's own comment has none
+    assert first["author"]["id"] == "81000001" and first["replies"][0]["author"]["id"] == "81000004"
+    assert next(c for c in comments["items"] if c["author"]["name"] == "Lee")["author"]["id"] is None
     # No profile picture: no avatar, and the badges stay badges
     lee = next(c for c in comments["items"] if c["author"]["name"] == "Lee")
     assert lee["author"]["avatar"] is None
@@ -250,6 +253,28 @@ def test_post_with_attachment_and_comments(client):
     assert client.get(badges[1]["image"]).status_code == 200
     pinned = client.get("/api/items/300/comments").json()["items"][0]
     assert pinned["pinned"] and pinned["author"]["name"] == "Kim" and pinned["like_count"] == 327
+
+
+def test_comment_member_ids():
+    """The member ID is in a comment's Report form. A reply inside a comment has its own, which mustn't be taken
+    for the comment's; the user's own comments have no Report form."""
+    from jrwi.site.parse import parse_comments
+
+    def report(sid):
+        return ('<div class="modal"><form action="/supporters/reported_supporters" method="post">'
+                f'<input type="hidden" name="reported_supporter_id" value="{sid}"></form></div>')
+
+    def frame(cid, name, inner="", sid=None):
+        return (f'<turbo-frame id="comment_{cid}"><div class="comment"><div class="comment__main">'
+                f'<div data-testid="Post.CommentAuthor">{name}</div>{report(sid) if sid else ""}'
+                f'<div class="comment__body"><p>Hi from {name}</p></div>'
+                f'<turbo-frame id="comment_{cid}_replies">{inner}</turbo-frame></div></div></turbo-frame>')
+
+    page = ('<turbo-stream action="append" target="post_1_comments"><template>'
+            + frame(10, "Mine", inner=frame(11, "Replier", sid="555")) + frame(12, "Other", sid="777")
+            + '</template></turbo-stream>')
+    got = {c["author_name"]: c["author_id"] for c in parse_comments([(page, None)], "https://jrwishow.com/supporters")}
+    assert got == {"Mine": None, "Replier": "555", "Other": "777"}
 
 
 def test_card_details(client):
@@ -371,6 +396,7 @@ def test_reparse_fixes_old_archives(app, client):
     old_files = {("thumb:old-blurred-strip" if k.startswith("thumb:") else k): (old_rel if k.startswith("thumb:") else v)
                  for k, v in audio["files"].items()}
     db.update("posts", "id", 298, {"files": old_files, "thumbnail": old_rel})
+    db.x("UPDATE comments SET author_id=NULL")   # saved before 0.9.8, which reads member IDs
     db.set_setting("parser_version", 1)
 
     result = archiver.run_reparse()
@@ -385,6 +411,7 @@ def test_reparse_fixes_old_archives(app, client):
     assert db.setting("parser_version") == PARSER_VERSION
     lee = next(c for c in client.get("/api/items/299/comments").json()["items"] if c["author"]["name"] == "Lee")
     assert lee["author"]["avatar"] is None
+    assert db.one("SELECT author_id FROM comments WHERE author_name='Sam'")["author_id"] == "81000001"
 
     assert archiver.run_check()["result"] == "ok"
     post = db.post(299)
@@ -795,7 +822,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.17" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.18" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -859,11 +886,18 @@ def test_api_for_the_apps(app, client):
     assert any(f["type"] == "pdf" and f["count"] >= 1 for f in stats["files"])
     total = app.state.db.one("SELECT COUNT(*) AS n FROM comments")["n"]
     c = stats["comments"]
-    assert c["total"] == total and 0 < c["replies"] < total and c["commenters"] >= 3
+    assert c["total"] == total and 0 < c["replies"] < total
     assert len(c["top"]) <= 10 and c["top"] == sorted(c["top"], key=lambda t: -t["count"])
     sam = next(t for t in c["top"] if t["name"] == "Sam")
     assert sam["avatar"].startswith("/files/avatars/") and sam["count"] >= 1 and sam["likes"] >= 4
-    assert set(sam) == {"name", "avatar", "badges", "color", "count", "likes"}
+    assert set(sam) == {"id", "name", "avatar", "badges", "color", "count", "likes"} and sam["id"] == "81000001"
+    # Kim renamed herself Alex: one member, under the newer name; the user's own comments go by name
+    names = {r["author_name"] for r in app.state.db.q("SELECT DISTINCT author_name FROM comments")}
+    assert {"Kim", "Alex"} <= names and c["commenters"] == len(names) - 1
+    kim = next(t for t in c["top"] if t["id"] == "81000004")
+    assert kim["name"] == "Alex" and kim["count"] == 2 and kim["likes"] == 327
+    lee = next(t for t in c["top"] if t["name"] == "Lee")
+    assert lee["id"] is None and lee["count"] == 1
 
 
 def test_feed_is_read_back_far_enough():

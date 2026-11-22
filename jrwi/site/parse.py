@@ -22,7 +22,7 @@ SameSite = Callable[[str], bool]
 
 # Raise this whenever a change reads saved pages differently. On the next start, the service re-reads everything
 # it has saved, so fixes reach posts and comments that were archived before the update.
-PARSER_VERSION = 7
+PARSER_VERSION = 8
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".heic"}
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".opus"}
@@ -828,6 +828,18 @@ def _author_badges(own, page_url: str) -> list[dict]:
     return out
 
 
+def _author_id(el) -> str | None:
+    """The commenter's member ID on the site. It's in the comment's Report form, which reports the member rather
+    than the comment. Your own comments can't be reported, so they have none. Replies inside the comment have
+    their own forms, so only a form whose nearest comment is this one counts."""
+    for inp in el.find_all("input", attrs={"name": "reported_supporter_id"}):
+        frame = next((p for p in inp.parents if COMMENT_FRAME_RE.match(p.get("id") or "")), None)
+        value = (inp.get("value") or "").strip()
+        if (frame is None or frame is el) and value.isdigit():
+            return value
+    return None
+
+
 def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
     m = COMMENT_FRAME_RE.match(el.get("id") or "")
     cid = m.group(1) if m else (el.get("data-comment-id") or el.get("data-id") or str(abs(hash(str(el)[:400]))))
@@ -868,7 +880,7 @@ def _parse_comment(el, page_url: str, fetched: datetime | None = None) -> dict:
     pinned = any(norm_space(x.get_text(" ", strip=True)) == "Pinned" for x in own.select("[class*=badge]"))
     link = own.find("a", href=re.compile(r"[?&]cid="))
     return {
-        "id": str(cid), "author_name": author,
+        "id": str(cid), "author_name": author, "author_id": _author_id(el),
         "author_avatar": urljoin(page_url, avatar_el["src"]) if avatar_el is not None and avatar_el.get("src") else None,
         "author_badges": badges,
         "author_color": color_m.group(1).strip() if color_m else None,
