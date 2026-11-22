@@ -290,11 +290,13 @@ document.querySelectorAll("[data-comments]").forEach((box) => {
   }));
 });
 
-// Picture viewer: tapping a post's picture opens it full screen. Swipe, the arrows or the arrow keys go through the
-// post's pictures; tapping the picture zooms in; Esc, the X or the phone's back button closes it.
+// Picture viewer: tapping a post's picture, or a picture or PDF it carries, opens it full screen. Swipe, the arrows or
+// the arrow keys go through all of them, a PDF page by page; tapping the picture zooms in; Esc, the X or the phone's
+// back button closes it. Each entry is {src, file, name}, or {pdf, file, name} for a PDF whose pages are looked up
+// (/api/preview) when the viewer gets to it.
 const viewer = (() => {
   const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
-  let box, stage, img, count, save, prevBtn, nextBtn, list = [], at = 0, pushed = false, touchX = null;
+  let box, stage, img, noteBox, count, save, prevBtn, nextBtn, list = [], at = 0, pushed = false, touchX = null, asked = 0;
   const build = () => {
     box = document.createElement("div");
     box.className = "lb";
@@ -305,20 +307,22 @@ const viewer = (() => {
       <div class="lb-top"><span class="lb-count"></span>
         <a class="lb-btn lb-save" download title="Download">${svg('<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>')}</a>
         <button type="button" class="lb-btn lb-close" title="Close">${svg('<path d="M6 6l12 12M18 6L6 18"/>')}</button></div>
-      <div class="lb-stage"><img alt=""></div>
+      <div class="lb-stage"><img alt=""><div class="lb-note" hidden><p></p><a class="pill" target="_blank" rel="noopener">Open the file</a></div></div>
       <button type="button" class="lb-nav lb-prev" title="Previous">${svg('<path d="M15 6l-6 6 6 6"/>')}</button>
       <button type="button" class="lb-nav lb-next" title="Next">${svg('<path d="M9 6l6 6-6 6"/>')}</button>`;
     document.body.append(box);
     stage = box.querySelector(".lb-stage");
     img = stage.querySelector("img");
+    noteBox = stage.querySelector(".lb-note");
     count = box.querySelector(".lb-count");
     save = box.querySelector(".lb-save");
     prevBtn = box.querySelector(".lb-prev");
     nextBtn = box.querySelector(".lb-next");
     box.querySelector(".lb-close").addEventListener("click", () => close());
-    prevBtn.addEventListener("click", () => show(at - 1));
-    nextBtn.addEventListener("click", () => show(at + 1));
+    prevBtn.addEventListener("click", () => show(at - 1, -1));
+    nextBtn.addEventListener("click", () => show(at + 1, 1));
     stage.addEventListener("click", (e) => {
+      if (e.target.closest(".lb-note")) return;
       if (e.target !== img) { if (!box.classList.contains("zoom")) close(); return; }
       zoom(e);
     });
@@ -326,14 +330,14 @@ const viewer = (() => {
     stage.addEventListener("touchend", (e) => {
       if (touchX === null || box.classList.contains("zoom")) return;
       const dx = e.changedTouches[0].clientX - touchX;
-      if (Math.abs(dx) > 50) show(at + (dx < 0 ? 1 : -1));
+      if (Math.abs(dx) > 50) show(at + (dx < 0 ? 1 : -1), dx < 0 ? 1 : -1);
       touchX = null;
     });
     document.addEventListener("keydown", (e) => {
       if (box.hidden) return;
       if (e.key === "Escape") close();
-      else if (e.key === "ArrowLeft") show(at - 1);
-      else if (e.key === "ArrowRight") show(at + 1);
+      else if (e.key === "ArrowLeft") show(at - 1, -1);
+      else if (e.key === "ArrowRight") show(at + 1, 1);
     });
     window.addEventListener("popstate", () => { if (!box.hidden) { pushed = false; close(); } });
   };
@@ -347,18 +351,52 @@ const viewer = (() => {
     stage.scrollLeft = fx * img.offsetWidth - stage.clientWidth / 2;
     stage.scrollTop = fy * img.offsetHeight - stage.clientHeight / 2;
   };
-  const show = (n) => {
+  // A PDF's pages, in place of the PDF in the list; coming back from the next entry lands on its last page
+  const expand = async (i, dir) => {
+    const it = list[i], mine = ++asked;
+    count.textContent = `${it.name || "PDF"} · loading its pages…`;
+    let pages = null;
+    try {
+      const r = await fetch(it.pdf, { credentials: "same-origin" });
+      const p = r.ok ? await r.json() : {};
+      if (p.pages && p.page_url) {
+        pages = Array.from({ length: p.pages }, (_, k) => ({ src: p.page_url.replace("{n}", k + 1), file: it.file,
+                                                              name: it.name, page: k + 1, of: p.pages }));
+      }
+    } catch (e) { /* shown as a note below */ }
+    if (mine !== asked || box.hidden || list[i] !== it) return;   // moved on, or closed, meanwhile
+    list.splice(i, 1, ...(pages || [{ note: "This PDF's pages can't be shown here.", file: it.file, name: it.name }]));
+    show(dir < 0 && pages ? i + pages.length - 1 : i, dir);
+  };
+  const show = (n, dir = 1) => {
     if (!list.length) return;
     at = (n + list.length) % list.length;
     unzoom();
-    img.src = list[at];
-    save.href = list[at];
-    count.textContent = list.length > 1 ? `${at + 1} / ${list.length}` : "";
+    const it = list[at];
+    if (it.pdf) { expand(at, dir); return; }
+    asked++;
+    img.hidden = !!it.note;
+    noteBox.hidden = !it.note;
+    if (it.note) {
+      img.removeAttribute("src");
+      noteBox.querySelector("p").textContent = it.note;
+      noteBox.querySelector("a").href = it.file;
+    } else {
+      img.src = it.src;
+      img.alt = it.name || "";
+    }
+    save.href = it.file || it.src;
+    save.setAttribute("download", it.name || "");
+    const where = [it.name, it.of > 1 ? `page ${it.page} of ${it.of}` : ""].filter(Boolean).join(" · ");
+    count.textContent = [list.length > 1 ? `${at + 1} / ${list.length}` : "", where].filter(Boolean).join(" · ");
     prevBtn.hidden = nextBtn.hidden = list.length < 2;
+    // The next picture loads while this one is looked at
+    const next = list[(at + 1) % list.length];
+    if (next && next.src && list.length > 1) new Image().src = next.src;
   };
-  const open = (urls, n) => {
+  const open = (entries, n) => {
     if (!box) build();
-    list = urls;
+    list = entries.map((e) => (typeof e === "string" ? { src: e, file: e, name: "" } : { ...e }));
     box.hidden = false;
     document.documentElement.classList.add("lb-open");
     if (!pushed) { history.pushState({ viewer: true }, ""); pushed = true; }
@@ -367,6 +405,7 @@ const viewer = (() => {
   const close = () => {
     if (!box || box.hidden) return;
     box.hidden = true;
+    asked++;   // a PDF still being looked up is forgotten
     unzoom();
     img.removeAttribute("src");
     document.documentElement.classList.remove("lb-open");
@@ -382,7 +421,9 @@ document.addEventListener("click", (e) => {
   if (a) {
     e.preventDefault();
     const group = [...document.querySelectorAll(`a[data-lightbox="${a.dataset.lightbox}"]`)];
-    viewer.open(group.map((x) => x.href), group.indexOf(a));
+    viewer.open(group.map((x) => (x.dataset.pdf ? { pdf: x.dataset.pdf, file: x.dataset.file, name: x.dataset.name }
+      : { src: x.dataset.src || x.href, file: x.dataset.file || x.dataset.src || x.href, name: x.dataset.name || "" })),
+      group.indexOf(a));
     return;
   }
   // Pictures inside a post's text (not ones that are links)

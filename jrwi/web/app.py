@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from xml.sax.saxutils import escape
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -149,6 +149,24 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                                  version_name={"video": "Video version", "audio": "Audio version",
                                                "youtube": "YouTube version"})
     app.state.db, app.state.archiver, app.state.scheduler = db, archiver, scheduler
+
+    def viewable(url: str | None) -> dict | None:
+        """Whether a post's attachment or document opens in the picture viewer, with its pictures: a picture as it
+        is, a PDF page by page (its pages drawn by /api/preview). Anything else opens in the file inspector."""
+        if not url or not url.startswith("/files/"):
+            return None
+        rel = unquote(url[len("/files/"):])
+        f = safe_join(paths.archive, rel)
+        if not f or not f.is_file():
+            return None
+        kind = files_mod.type_of(f.name, f)
+        if kind == "image":
+            return {"kind": "image"}
+        if kind == "pdf":
+            return {"kind": "pdf", "preview": files_mod.preview_url(f.relative_to(paths.archive.resolve()).as_posix())}
+        return None
+
+    templates.env.globals["viewable"] = viewable
 
     # ------------------------------------------------------------------ auth
 

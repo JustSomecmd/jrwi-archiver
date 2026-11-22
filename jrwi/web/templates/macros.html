@@ -93,6 +93,13 @@
 </div>
 {% endmacro %}
 
+{# An attachment or document that the picture viewer shows along with the post's pictures (a picture, or a PDF page
+   by page): it joins the pictures' group, so the viewer's arrows go through all of them #}
+{% macro in_viewer(f, group) -%}
+{%- set vw = viewable(f.url) -%}
+{%- if vw %}data-lightbox="{{ group }}" data-name="{{ f.name }}" data-file="{{ f.url }}"{% if vw.kind == 'pdf' %} data-pdf="{{ vw.preview }}"{% else %} data-src="{{ f.url }}"{% endif %}{% endif -%}
+{%- endmacro %}
+
 {# Up to four of a post's pictures, all in view; the fourth shows how many more there are. Tapping one opens the
    picture viewer, which can go through all of them. #}
 {% macro image_grid(images, group) %}
@@ -134,8 +141,8 @@
     {% endif %}
     {% if p.attachments or p.documents %}
       <div class="filelist">
-        {% for f in p.attachments %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('link') }}<span>{{ f.name }}</span></a>{% endfor %}
-        {% for f in p.documents %}<a href="{{ url }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }}<span>{% if f.folder %}<span class="muted">{{ f.folder }}/</span>{% endif %}{{ f.name }}</span></a>{% endfor %}
+        {% for f in p.attachments %}<a href="{{ url }}/files?f={{ f.url | urlencode }}" {{ in_viewer(f, 'p' ~ p.id) }}>{{ icon('link') }}<span>{{ f.name }}</span></a>{% endfor %}
+        {% for f in p.documents %}<a href="{{ url }}/files?f={{ f.url | urlencode }}" {{ in_viewer(f, 'p' ~ p.id) }}>{{ icon('doc') }}<span>{% if f.folder %}<span class="muted">{{ f.folder }}/</span>{% endif %}{{ f.name }}</span></a>{% endfor %}
       </div>
     {% endif %}
     {% if p.tags %}<div class="chips">{% for t in p.tags %}<a class="chip" href="/?tag={{ t | urlencode }}" title="All posts tagged {{ t }}">{{ t }}</a>{% endfor %}</div>{% endif %}

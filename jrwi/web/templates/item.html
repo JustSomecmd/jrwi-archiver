@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import comment_tree, counts, mini, icon %}
+{% from "macros.html" import comment_tree, counts, mini, icon, in_viewer %}
 {% block title %}{{ item.title }} · JRWI archive{% endblock %}
 {% block content %}
 {% set v = item.video %}{% set a = item.audio %}
@@ -58,8 +58,8 @@
     {% endif %}
     {% if item.attachments or item.documents %}
       <div class="files">
-        {% for f in item.attachments %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('file') }} {{ f.name }}{% if f.size %} <span class="muted">({{ human_size(f.size) }})</span>{% endif %}</a>{% endfor %}
-        {% for f in item.documents %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}">{{ icon('doc') }} {% if f.folder %}<span class="muted">{{ f.folder }}/</span>{% endif %}{{ f.name }}</a>{% endfor %}
+        {% for f in item.attachments %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}" {{ in_viewer(f, 'g' ~ item.id) }}>{{ icon('file') }} {{ f.name }}{% if f.size %} <span class="muted">({{ human_size(f.size) }})</span>{% endif %}</a>{% endfor %}
+        {% for f in item.documents %}<a href="/items/{{ item.id }}/files?f={{ f.url | urlencode }}" {{ in_viewer(f, 'g' ~ item.id) }}>{{ icon('doc') }} {% if f.folder %}<span class="muted">{{ f.folder }}/</span>{% endif %}{{ f.name }}</a>{% endfor %}
       </div>
     {% endif %}
     {% if item.tags %}<div class="tags">{% for t in item.tags %}<a class="tag" href="/?tag={{ t | urlencode }}" title="All posts tagged {{ t }}">{{ t }}</a>{% endfor %}</div>{% endif %}

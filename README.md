@@ -66,6 +66,8 @@ Some episodes are posted on the members site only as YouTube embeds. The archive
 
 Every post has a **Files** button that opens its files in place: PDFs page by page, spreadsheets as tables, Word and PowerPoint files as text, plain text and subtitles, the contents of zip files, pictures, audio and video. **Admin > Files** counts the archive's files by type.
 
+A post's pictures, the pictures attached to it and its PDFs open in one picture viewer: tap any of them, then go through all of them with the arrows, the arrow keys or a swipe, PDFs page by page. The Files page has Previous and Next too, and the arrow keys go from file to file.
+
 Google Docs and Drive files a post links to are saved with it, and so are shared Drive folders: every file in the folder and its subfolders (up to 300 files, 5 folders deep), with Google Docs in it saved as PDFs. The Files page says which folder each one is in. A folder that isn't shared with everyone who has the link is listed as a link that couldn't be saved.
 
 ### The site's podcast feed

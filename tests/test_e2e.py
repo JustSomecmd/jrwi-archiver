@@ -765,6 +765,25 @@ def test_file_inspector(app, client):
     assert "PDF" in summary and ".pdf" in summary and "what's inside" in summary
 
 
+
+def test_pictures_and_pdfs_in_one_viewer(app):
+    """A post's pictures, picture attachments and PDFs (page by page) go in one picture viewer, on the post's page and
+    in the feed; other files still open in the inspector."""
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    page = web.get("/items/299").text
+    group = re.findall(r'<a [^>]*data-lightbox="g299"[^>]*>', page)
+    assert len(group) >= 2 and 'data-lightbox="g299"' in group[0] and "data-pdf" not in group[0]   # the picture first
+    pdf = next(a for a in group if "Zombie" in a)
+    assert 'data-pdf="/api/preview/posts/299/attachments/Zombie%20Character%20Sheets.pdf"' in pdf
+    assert 'data-file="/files/posts/299/attachments/Zombie%20Character%20Sheets.pdf"' in pdf
+    assert 'href="/items/299/files?f=' in pdf   # without the page's script, the inspector as before
+    feed = web.get("/").text
+    assert re.search(r'<a [^>]*data-lightbox="p299"[^>]*data-pdf=', feed)
+    # The viewer reads the PDF's pages from the preview
+    preview = web.get("/api/preview/posts/299/attachments/Zombie%20Character%20Sheets.pdf").json()
+    assert preview["pages"] >= 1 and web.get(preview["page_url"].replace("{n}", "1")).headers["content-type"] == "image/png"
+
 def test_continue_watching_on_home(app, client):
     """Home lists started, unfinished episodes under the show tiles, most recently played first, each opening the
     version that was played."""

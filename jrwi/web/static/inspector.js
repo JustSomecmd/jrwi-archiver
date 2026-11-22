@@ -105,13 +105,39 @@
     body.append(t);
   }
 
+  // Previous and next file, with the arrow keys too, so the files can be gone through one by one
+  const step = (by) => {
+    const i = buttons.findIndex((b) => b.classList.contains("on"));
+    if (i < 0 || buttons.length < 2) return;
+    const b = buttons[(i + by + buttons.length) % buttons.length];
+    show(b);
+    b.scrollIntoView({block: "nearest"});
+  };
+  function nav(i) {
+    if (buttons.length < 2) return null;
+    const prev = el("button", {type: "button", class: "pill", title: "Previous file (←)", text: "‹ Previous"});
+    const next = el("button", {type: "button", class: "pill", title: "Next file (→)", text: "Next ›"});
+    prev.addEventListener("click", () => step(-1));
+    next.addEventListener("click", () => step(1));
+    return el("div", {class: "insp-nav"}, prev, el("span", {class: "muted small", text: `${i + 1} of ${buttons.length}`}), next);
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.altKey || e.ctrlKey || e.metaKey || document.documentElement.classList.contains("lb-open")) return;
+    // Not while something on the page uses the arrows itself, such as a sheet scrolled sideways or a player
+    const t = e.target;
+    if (t !== document.body && !t.closest(".insp-list, .insp-nav")) return;
+    e.preventDefault();
+    step(e.key === "ArrowRight" ? 1 : -1);
+  });
+
   async function show(btn, tapped = false) {
     buttons.forEach((b) => b.classList.toggle("on", b === btn));
     const f = JSON.parse(btn.dataset.file);
     const key = f.path || f.url || f.source || "";
     history.replaceState(null, "", `?f=${encodeURIComponent(key)}`);
     const body = el("div", {class: "insp-body"});
-    view.replaceChildren(header(f), body);
+    view.replaceChildren(...[nav(buttons.indexOf(btn)), header(f), body].filter(Boolean));
     if (tapped && window.matchMedia("(max-width: 900px)").matches) view.scrollIntoView({behavior: "smooth", block: "start"});
     switch (f.type) {
       case "image":
