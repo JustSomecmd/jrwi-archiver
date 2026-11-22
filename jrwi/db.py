@@ -153,6 +153,13 @@ class Db:
             cur = self.conn.execute(sql, tuple(args))
             return cur.lastrowid
 
+    def close_unfinished_runs(self, message: str) -> int:
+        """Record checks that have no end as stopped, with a message saying why. A check's row is written when
+        it starts and finished when it ends, so one cut short by the archiver stopping would say running for good."""
+        with self.lock:
+            return self.conn.execute("UPDATE runs SET finished=?, result='stopped', message=? WHERE finished IS NULL",
+                                     (now(), message)).rowcount
+
     @staticmethod
     def _decode(row: sqlite3.Row) -> dict:
         d = dict(row)

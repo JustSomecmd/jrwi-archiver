@@ -177,3 +177,35 @@ def test_old_raw_comment_html_is_dropped_once(tmp_path):
     db.x("UPDATE comments SET raw = 'again' WHERE id='1:1'")
     db.drop_comment_raw()   # once only
     assert db.one("SELECT raw FROM comments WHERE id='1:1'")["raw"] == "again"
+
+
+def test_checks_cut_short_by_a_stop_or_restart_are_closed(archiver, monkeypatch):
+    from jrwi.scheduler import Scheduler
+    db = archiver.db
+    cut = db.x("INSERT INTO runs (started, result) VALUES ('2026-11-22T17:00:00+00:00', 'running')")
+    ok = db.x("INSERT INTO runs (started, finished, result) "
+              "VALUES ('2026-11-22T13:00:00+00:00', '2026-11-22T13:05:00+00:00', 'ok')")
+    sched = Scheduler(archiver, db)
+    monkeypatch.setattr(sched.thread, "start", lambda: None)
+    sched.start()   # the archiver starting again: no check can be running yet
+    row = db.one("SELECT * FROM runs WHERE id=?", (cut,))
+    assert row["result"] == "stopped" and row["finished"] and "stopped while this check ran" in row["message"]
+    assert db.one("SELECT * FROM runs WHERE id=?", (ok,))["finished"] == "2026-11-22T13:05:00+00:00"
+
+    # Shutting down while a check runs records it with the time it was cut short
+    running = db.x("INSERT INTO runs (started, result) VALUES ('2026-11-22T18:00:00+00:00', 'running')")
+    archiver.status.set(running=True)
+    sched.shut_down()
+    row = db.one("SELECT * FROM runs WHERE id=?", (running,))
+    assert row["result"] == "stopped" and row["finished"] and "shut down" in row["message"]
+    archiver.status.set(running=False)
+    sched.shut_down()   # nothing running: nothing changes
+    assert db.one("SELECT COUNT(*) AS n FROM runs WHERE finished IS NULL")["n"] == 0
+
+
+def test_a_posts_other_versions_are_found_by_an_index(archiver):
+    db = archiver.db
+    for sql, args in (("SELECT * FROM posts WHERE pair_id=? ORDER BY id", (1,)),
+                      ("SELECT COUNT(*) FROM posts WHERE (pair_id=? OR id=?) AND id != ?", (1, 1, 1))):
+        plan = " ".join(r[3] for r in db.conn.execute("EXPLAIN QUERY PLAN " + sql, args))
+        assert "posts_pair" in plan and "SCAN posts" not in plan

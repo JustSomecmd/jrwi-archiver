@@ -36,7 +36,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.3", "contract": "0.21", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.10.6", "contract": "0.21", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/reparse` | (v0.20) Re-reads the saved pages with the current parsers, as the admin page's Re-read saved pages does: `202` with `{"started": true}`, or `409` when a check or a re-read is running. It runs as its own job, with `step` `reparse` in the status, and `POST /api/stop` stops it. |
@@ -74,7 +74,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.10.3", "contract": "0.21",
+{"name": "jrwi-archiver", "version": "0.10.6", "contract": "0.21",
  "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast"]}
 ```
 
@@ -114,7 +114,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
                        "badges": [], "color": "rgb(247, 221, 210)", "count": 120, "likes": 3400}]}}
 ```
 
-- **`checks`:** the last 15 runs, newest first, as the admin page lists them. A check that's running has `result` `running` and `finished` `null`; otherwise `result` is as `last_result` in the status. `new_items` counts the items archived for the first time, `archived` every post saved, new or changed.
+- **`checks`:** the last 15 runs, newest first, as the admin page lists them. A check that's running has `result` `running` and `finished` `null`; otherwise `result` is as `last_result` in the status. A check the archiver couldn't finish because it stopped while the check ran (an update, a restart or a crash) has `result` `stopped`, with a `message` saying so, and `finished` when the archiver shut down or, if it was killed, when it started again. Since 0.10.6; before, such a check stayed `running` with `finished` `null` for good. `new_items` counts the items archived for the first time, `archived` every post saved, new or changed.
 - **`files`:** the archive's files by type (as File `type`) and extension, as Admin > Files counts them: how many and how big. YouTube videos and Google links that couldn't be saved are counted with `ext` `YouTube` or `link`, and `bytes` 0.
 - **`comments`:** every comment and reply in the archive (`total`), how many of them are replies, how many members commented, and the ten who commented most, with how many comments and the likes on them, in the shape of a Comment's `author`.
   - **Members (v0.18):** told apart by `author.id`, so a member who changed their name counts once. `name`, `avatar`, `badges` and `color` are as on their newest comment, so the name is the one they use now. A comment without an `id` (the user's own) goes with the member last seen with that name, or else counts by name, with `id` `null`. Before v0.18, members were told apart by name.

@@ -135,6 +135,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if start_scheduler:
             scheduler.start()
         yield
+        if start_scheduler:
+            scheduler.shut_down()
 
     app = FastAPI(title="JRWI archiver", version=VERSION, docs_url=None, redoc_url=None, openapi_url=None,
                   lifespan=lifespan)

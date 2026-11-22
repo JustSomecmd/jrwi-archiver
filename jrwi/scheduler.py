@@ -15,6 +15,11 @@ from .db import Db
 
 log = logging.getLogger("jrwi.scheduler")
 FIRST_CHECK_DELAY = timedelta(minutes=2)
+# Shown with a check that couldn't finish because the archiver stopped while it ran
+SHUT_DOWN = ("Cut short: the archiver was shut down while this check ran (an update, or the container stopping). "
+             "The next check picks up what it didn't finish.")
+RESTARTED = ("Cut short: the archiver stopped while this check ran (an update, a restart or a crash). "
+             "The next check picks up what it didn't finish.")
 
 
 class Scheduler:
@@ -33,7 +38,18 @@ class Scheduler:
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
 
     def start(self) -> None:
+        # No check can be running yet, so one without an end was cut short when the archiver last stopped
+        # (killed, or a crash), as checks run in this thread, which ends with the process
+        if self.db.close_unfinished_runs(RESTARTED):
+            log.info("a check was cut short when the archiver last stopped; it's recorded as stopped")
         self.thread.start()
+
+    def shut_down(self) -> None:
+        """The archiver is stopping (an update, or the container stopping): a check that's running can't finish,
+        so it's recorded as cut short now, with the right time. Should it end in the moments left, it records
+        its own result over this."""
+        if self.running:
+            self.db.close_unfinished_runs(SHUT_DOWN)
 
     @property
     def running(self) -> bool:
