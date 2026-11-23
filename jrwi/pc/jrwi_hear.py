@@ -48,7 +48,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-PROGRAM = "1.1"
+PROGRAM = "1.2"
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE / "jrwi_hear.json"
 CACHE = HERE / "jrwi_hear_cache"
@@ -125,12 +125,15 @@ def download(cfg: dict, job: dict) -> Path:
     s = job["sound"]
     CACHE.mkdir(exist_ok=True)
     dest = CACHE / f"{s['post_id']}-{s['size']}{Path(s.get('name') or '').suffix or '.m4a'}"
-    if dest.exists() and dest.stat().st_size == s["size"]:
+    if dest.exists():   # only ever there whole: a download is renamed to it once it's complete
         return dest
     req = urllib.request.Request(cfg["server"] + s["url"], headers={"Authorization": f"Token {cfg['token']}"})
     part = dest.with_suffix(dest.suffix + ".part")
+    if s.get("source") == "tubearchivist":
+        say("  The archiver is copying the sound out of TubeArchivist's copy of the video (a minute or two)...")
     try:
-        with urllib.request.urlopen(req, timeout=120) as r, open(part, "wb") as f:
+        with urllib.request.urlopen(req, timeout=900) as r, open(part, "wb") as f:
+            size = int(r.headers.get("Content-Length") or 0) or s["size"]
             got, last = 0, 0.0
             while True:
                 block = r.read(1 << 20)
@@ -139,12 +142,18 @@ def download(cfg: dict, job: dict) -> Path:
                 f.write(block)
                 got += len(block)
                 if time.monotonic() - last > 0.5:
-                    print(f"\r  Downloading the sound: {got >> 20} of {s['size'] >> 20} MB", end="", flush=True)
+                    print(f"\r  Downloading the sound: {got >> 20} of {size >> 20} MB", end="", flush=True)
                     last = time.monotonic()
-    except urllib.error.URLError as e:
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode()).get("error")
+        except Exception:
+            msg = None
+        die(f"Couldn't download the sound: {msg or e}")
+    except (urllib.error.URLError, OSError) as e:
         die(f"Couldn't download the sound: {getattr(e, 'reason', e)}")
-    print(f"\r  Downloaded the sound: {s['size'] >> 20} MB" + " " * 20, flush=True)
-    if part.stat().st_size != s["size"]:
+    print(f"\r  Downloaded the sound: {size >> 20} MB" + " " * 20, flush=True)
+    if part.stat().st_size != size:
         part.unlink(missing_ok=True)
         die("The sound didn't download whole; try again.")
     part.replace(dest)
@@ -169,9 +178,16 @@ def nvidia_dirs() -> list[str]:
     return out
 
 
+_NVIDIA_READY = False
+
+
 def use_nvidia_libraries() -> None:
     """Make pip's NVIDIA libraries findable. Windows looks on PATH; Linux reads LD_LIBRARY_PATH only as a program
     starts, so this starts the program again with it set."""
+    global _NVIDIA_READY
+    if _NVIDIA_READY:
+        return
+    _NVIDIA_READY = True
     dirs = nvidia_dirs()
     if not dirs:
         return
@@ -188,9 +204,32 @@ def use_nvidia_libraries() -> None:
         os.execve(sys.executable, [sys.executable, *sys.argv], env)
 
 
+def whisper_problem() -> str | None:
+    """Why this Python can't use faster-whisper, in words, or None when it can."""
+    use_nvidia_libraries()
+    try:
+        import ctranslate2  # noqa: F401
+        import faster_whisper  # noqa: F401
+        return None
+    except ModuleNotFoundError as e:
+        return (f"{e.name or 'faster-whisper'} isn't installed for the Python that runs this program "
+                f"({sys.executable}, Python {platform.python_version()}), so pip must have put it into another "
+                f"Python. Install it into this one:\n    \"{sys.executable}\" -m pip install faster-whisper psutil")
+    except (ImportError, OSError) as e:
+        text = f"{type(e).__name__}: {e}"
+        if os.name == "nt" and ("DLL" in text or "WinError" in text):
+            return (f"faster-whisper is installed, but a Windows library it needs couldn't be loaded ({text}). Most "
+                    "often that's the Microsoft Visual C++ Redistributable: install it from "
+                    "https://aka.ms/vc14/vc_redist.x64.exe, open a new terminal and run check again.")
+        return f"faster-whisper is installed, but couldn't be loaded ({text})."
+    except Exception as e:
+        return f"faster-whisper couldn't be loaded ({type(e).__name__}: {e})."
+
+
 def pick_device(want: str) -> str:
     if want == "cpu" or os.environ.get("JRWI_FAKE_HEARING"):
         return "cpu"
+    use_nvidia_libraries()
     try:
         import ctranslate2
         cards = ctranslate2.get_cuda_device_count()
@@ -375,6 +414,13 @@ def options(args) -> dict:
     return {"device": device, "workers": workers, "threads": threads, "batch": args.batch}
 
 
+def ready_to_hear() -> None:
+    if not os.environ.get("JRWI_FAKE_HEARING"):
+        problem = whisper_problem()
+        if problem:
+            die(problem)
+
+
 def describe(opts: dict, models: list[str]) -> None:
     how = (f"the graphics card, in batches of {opts['batch']}" if opts["device"] == "cuda" else
            f"the processor, {opts['workers']} pieces at once with {opts['threads']} threads each")
@@ -529,16 +575,22 @@ def cmd_check(args) -> None:
         say("This archiver only hands out episodes that aren't timed yet: update it to 0.14.1 or newer for --all.")
     physical, logical = cores()
     say(f"Processor: {physical} cores, {logical} threads.")
-    if args.device == "cpu" or os.environ.get("JRWI_FAKE_HEARING"):
+    say(f"Python: {platform.python_version()} at {sys.executable}")
+    if os.environ.get("JRWI_FAKE_HEARING"):
         say("Graphics card: not checked.")
         return
-    gpu = gpu_name()
-    try:
-        import ctranslate2
-        cards = ctranslate2.get_cuda_device_count()
-    except Exception as e:
-        say(f"faster-whisper isn't installed properly ({e}): run  pip install faster-whisper psutil")
+    problem = whisper_problem()
+    if problem:
+        say("faster-whisper: " + problem)
         return
+    import ctranslate2
+    import faster_whisper
+    say(f"faster-whisper: {faster_whisper.__version__}, with CTranslate2 {ctranslate2.__version__}.")
+    if args.device == "cpu":
+        say("Graphics card: not checked (--device cpu).")
+        return
+    gpu = gpu_name()
+    cards = ctranslate2.get_cuda_device_count()
     if not cards:
         say("Graphics card: none that faster-whisper can use" + (f" (the driver sees {gpu})" if gpu else "")
             + ", so hearing would use the processor. Update the NVIDIA driver; see the guide's last section.")
@@ -582,9 +634,8 @@ def cmd_list(args) -> None:
 def cmd_compare(args) -> None:
     cfg = load_config(args)
     models = model_list(args.models)
+    ready_to_hear()
     opts = options(args)
-    if opts["device"] == "cuda":
-        use_nvidia_libraries()
     stay_awake()
     if args.posts:
         jobs = [api(cfg, "GET", f"/api/transcripts/jobs/{p}") for p in args.posts]
@@ -613,9 +664,8 @@ def cmd_compare(args) -> None:
 def cmd_run(args) -> None:
     cfg = load_config(args)
     models = model_list(args.models)
+    ready_to_hear()
     opts = options(args)
-    if opts["device"] == "cuda":
-        use_nvidia_libraries()
     stay_awake()
     describe(opts, models)
     if args.all:
@@ -682,9 +732,8 @@ def cmd_run(args) -> None:
 
 def cmd_file(args) -> None:
     models = model_list(args.models)
+    ready_to_hear()
     opts = options(args)
-    if opts["device"] == "cuda":
-        use_nvidia_libraries()
     stay_awake()
     zpath = Path(args.zip)
     with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(zpath) as z:
@@ -753,6 +802,8 @@ def main() -> None:
     sp.add_argument("--batch", type=int, default=16)
     sub.add_parser("_probe")
     args = p.parse_args()
+    if args.cmd in ("check", "compare", "run", "file", "_probe") and getattr(args, "device", "auto") != "cpu":
+        use_nvidia_libraries()   # first, as on Linux it starts the program again
     try:
         {"setup": cmd_setup, "check": cmd_check, "list": cmd_list, "compare": cmd_compare, "run": cmd_run,
          "file": cmd_file, "_hear": cmd_hear, "_probe": cmd_probe}[args.cmd](args)

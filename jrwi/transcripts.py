@@ -446,6 +446,8 @@ class Transcripts:
         self.paths = paths
         self.status = status
         self.dir = paths.archive / "transcripts"
+        self._ta_seen: dict[str, tuple] = {}     # YouTube ID -> (when, TubeArchivist's video or None, why not, ttl)
+        self._fetch_lock = threading.Lock()
 
     # files
     def lines_file(self, item_id: int) -> Path:
@@ -487,7 +489,10 @@ class Transcripts:
 
     # the sound to hear
     def sound(self, members: list[dict]) -> dict | None:
-        """The archived audio, or else the archived video's sound: {path, timeline, post_id, size, duration}."""
+        """The archived audio, or else the archived video's sound, or else (since 0.14.2) the sound of
+        TubeArchivist's copy of the episode's YouTube video: {path, timeline, post_id, size, duration}, and for
+        TubeArchivist's copy `tubearchivist`, its YouTube ID. Its path is where its sound is copied out to (fetch),
+        and its size is the size of TubeArchivist's file, which says whether it's the same video."""
         for part, root in (("audio", self.paths.archive), ("video", self.paths.media)):
             for m in members:
                 media = (m.get("media") or {}).get(part)
@@ -495,7 +500,114 @@ class Transcripts:
                     f = root / media["path"]
                     return {"path": str(f), "timeline": part, "post_id": m["id"], "size": f.stat().st_size,
                             "duration": media.get("duration")}
-        return None
+        from .handover import youtube_version
+        yt = youtube_version(members)
+        if not yt:
+            return None
+        yid = yt[1]["youtube_id"]
+        video, _ = self.ta_video(yid)
+        if not video:
+            return None
+        from .tubearchivist import TubeArchivist
+        return {"path": str(self.ta_sound_file(yid)), "timeline": "video", "post_id": yt[0]["id"],
+                "size": video["_size"], "duration": TubeArchivist.duration(video), "tubearchivist": yid}
+
+    def why_no_sound(self, members: list[dict]) -> str:
+        from .handover import youtube_version
+        yt = youtube_version(members)
+        if not yt:
+            return "it has no audio or video in the archive, and no YouTube video"
+        _, why = self.ta_video(yt[1]["youtube_id"])
+        return f"its video is only on YouTube, and {why or 'TubeArchivist does not have it yet'}"
+
+    def _ta(self):
+        from .tubearchivist import TubeArchivist
+        return TubeArchivist(self.db.setting("ta_url") or "", self.db.setting("ta_token") or "")
+
+    def ta_video(self, youtube_id: str) -> tuple[dict | None, str | None]:
+        """TubeArchivist's copy of a YouTube video, with `_size` and `_url` added, or (None, why not). Asked at most
+        once an hour (every 15 minutes while it doesn't have it)."""
+        hit = self._ta_seen.get(youtube_id)
+        if hit and time.monotonic() - hit[0] < hit[3]:
+            return hit[1], hit[2]
+        ta = self._ta()
+        video, why, ttl = None, None, 3600
+        if not ta.configured:
+            why, ttl = "TubeArchivist isn't connected in the archiver's Settings, so its copy can't be heard", 60
+        else:
+            try:
+                found = ta.video(youtube_id)
+                url = ta.file_url(found) if found else None
+                if not url:
+                    why, ttl = "TubeArchivist doesn't have it yet", 900
+                else:
+                    size = found.get("media_size")
+                    if not isinstance(size, (int, float)) or size <= 0:
+                        import requests
+                        r = requests.head(url, headers=ta.headers, timeout=20, allow_redirects=True)
+                        size = int(r.headers.get("Content-Length") or 0)
+                    video = dict(found, _size=int(size or 0), _url=url)
+            except Exception as e:   # TubeArchivist down or refusing: said, and asked again in 5 minutes
+                why, ttl = f"TubeArchivist couldn't be asked ({type(e).__name__}: {e})", 300
+        self._ta_seen[youtube_id] = (time.monotonic(), video, why, ttl)
+        return video, why
+
+    def ta_sound_file(self, youtube_id: str) -> Path:
+        return self.paths.data / "transcripts" / "sound" / f"{youtube_id}.mka"
+
+    def fetch(self, sound: dict) -> Path:
+        """The sound as a file here. For TubeArchivist's copy, its sound track is copied out of it once, without
+        converting it (it reads the whole video from TubeArchivist, so a long episode takes a minute or two), and
+        kept until the episode has been timed or two days have passed."""
+        f = Path(sound["path"])
+        yid = sound.get("tubearchivist")
+        if not yid:
+            return f
+        meta = f.with_suffix(".json")
+
+        def ready() -> bool:
+            try:
+                return f.is_file() and json.loads(meta.read_text()).get("size") == sound["size"]
+            except (OSError, ValueError):
+                return False
+
+        if ready():
+            return f
+        with self._fetch_lock:
+            if ready():
+                return f
+            video, why = self.ta_video(yid)
+            if not video:
+                raise RuntimeError(why or "TubeArchivist doesn't have the video")
+            from .site.download import ffmpeg_exe
+            exe = ffmpeg_exe()
+            if not exe:
+                raise RuntimeError("ffmpeg is needed to copy the sound out of TubeArchivist's copy")
+            f.parent.mkdir(parents=True, exist_ok=True)
+            for old in f.parent.iterdir():   # copies left behind (never timed) go after two days
+                try:
+                    if time.time() - old.stat().st_mtime > 2 * 86400:
+                        old.unlink()
+                except OSError:
+                    pass
+            part = f.with_name(f.stem + ".part.mka")
+            headers = "".join(f"{k}: {v}\r\n" for k, v in self._ta().headers.items())
+            r = subprocess.run([exe, "-v", "error", "-y", "-headers", headers, "-i", video["_url"], "-map", "0:a:0",
+                                "-vn", "-c", "copy", "-f", "matroska", str(part)],
+                               capture_output=True, text=True, timeout=3600)
+            if r.returncode != 0 or not part.is_file() or not part.stat().st_size:
+                part.unlink(missing_ok=True)
+                raise RuntimeError("the sound couldn't be copied out of TubeArchivist's copy: "
+                                   + (r.stderr.strip().splitlines() or ["no sound track"])[-1][:300])
+            part.replace(f)
+            meta.write_text(json.dumps({"size": sound["size"], "youtube_id": yid}))
+        return f
+
+    def drop_sound(self, sound: dict) -> None:
+        """TubeArchivist's copy's sound, once its episode is timed."""
+        if sound.get("tubearchivist"):
+            Path(sound["path"]).unlink(missing_ok=True)
+            Path(sound["path"]).with_suffix(".json").unlink(missing_ok=True)
 
     def items(self, ser) -> list[tuple[dict, list[dict], dict]]:
         """Every item with a transcript, newest first."""
@@ -578,9 +690,12 @@ class Transcripts:
         if not lines or not sound:
             raise RuntimeError("no transcript lines" if not lines else "no archived audio or video to hear")
         total = float(sound["duration"] or 0)
-        if not total:
+        if not total and not sound.get("tubearchivist"):
             from .sync import probe_duration
             total = float(probe_duration(Path(sound["path"])) or 0)
+        if not total and sound.get("tubearchivist"):
+            from .sync import probe_duration
+            total = float(probe_duration(self.fetch(sound)) or 0)
         if not total:
             raise RuntimeError("the sound's length isn't known")
         model = self.model()
@@ -618,6 +733,11 @@ class Transcripts:
                     heard["load"] = msg["ready"]
                     piece.ready = True
                     piece.since = time.monotonic()
+            if sound.get("tubearchivist"):
+                if progress:
+                    progress(heard["until"] / total, "copying the sound out of TubeArchivist's copy")
+                self.fetch(sound)
+                began = time.monotonic()
             piece.since = began
             piece.ready = bool(os.environ.get("JRWI_FAKE_HEARING"))
             if progress:
@@ -649,6 +769,7 @@ class Transcripts:
                   "error": None if aligned else self._mismatch(result)}
         self._store(primary, stored, lines, sound, result, aligned, timing)
         self.record(primary, timing)
+        self.drop_sound(sound)
         return timing
 
     def _match(self, item_id: int, lines: list, heard_path: Path, should_yield=lambda: False) -> tuple[dict, float]:
@@ -695,7 +816,7 @@ class Transcripts:
         if not lines or not sound:
             return None
         duration = sound["duration"]
-        if not duration:
+        if not duration and not sound.get("tubearchivist"):
             from .sync import probe_duration
             duration = probe_duration(Path(sound["path"]))
         names = sorted({l["speaker"] for l in lines if l.get("speaker")})[:40]
@@ -710,7 +831,9 @@ class Transcripts:
                 "heard_with": self.heard_with(primary["id"], sound["size"], runs),
                 "sound": {"post_id": sound["post_id"], "timeline": part, "size": sound["size"],
                           "duration": round(float(duration), 1) if duration else None,
-                          "url": f"/api/{part}/{sound['post_id']}", "name": Path(sound["path"]).name},
+                          "url": (f"/api/transcripts/sound/{sound['post_id']}" if sound.get("tubearchivist") else
+                                  f"/api/{part}/{sound['post_id']}"), "name": Path(sound["path"]).name,
+                          "source": "tubearchivist" if sound.get("tubearchivist") else "archive"},
                 "hotwords": " ".join(names)[:400] or None, "hearing": dict(HEARING), "archiver": VERSION}
 
     def heard_with(self, item_id: int, size: int, runs: list[dict] | None = None) -> list[str]:
@@ -736,7 +859,7 @@ class Transcripts:
             if j:
                 out.append(j)
             elif every:
-                why = ("it has no archived audio or video to hear" if not self.sound(members) else
+                why = (self.why_no_sound(members) if not self.sound(members) else
                        "its transcript hasn't been read into lines yet (Settings > Transcripts > Read transcripts)")
                 left_out.append({"item_id": primary["id"], "title": primary.get("title"), "why": why})
         return {"jobs": out, "left_out": left_out, "episodes": len(found)}
@@ -832,6 +955,7 @@ class Transcripts:
                 "load": best["timing"]["load"], "sessions": 1, "threads_used": best["timing"]["threads_used"]})
         for x in tries:
             self.record(primary, x["timing"])
+        self.drop_sound(sound)
         return {"item_id": item_id, "used": best["timing"]["model"] if replaced else (before["model"] or "?"),
                 "replaced": replaced, "before": before,
                 "tries": [{k: x["timing"].get(k) for k in ("model", "device", "found", "placed", "unplaced", "took",
@@ -1020,7 +1144,10 @@ def record_figures(timing: dict | None) -> dict:
 
 
 def _same_file(sound: dict) -> bool:
-    """Whether the sound being heard is still there as it was when hearing began."""
+    """Whether the sound being heard is still there as it was when hearing began. TubeArchivist's copy is copied
+    out before hearing, and a check never changes it."""
+    if sound.get("tubearchivist"):
+        return True
     try:
         return os.stat(sound["path"]).st_size == sound["size"]
     except OSError:

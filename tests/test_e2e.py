@@ -899,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.25" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.26" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1469,3 +1469,54 @@ def pc_program_hears_and_sends(app, client, web, tmp_path):
         assert "large-v3" in client.get("/api/transcripts/jobs/300").json()["heard_with"]
     finally:
         server.should_exit = True
+
+
+def test_youtube_only_episodes_are_heard_from_tubearchivist(app, client, monkeypatch, tmp_path):
+    """An episode that's only on YouTube (or whose video was handed over) and has no audio version is heard from
+    TubeArchivist's copy: its sound is copied out once, handed to the PC program, and dropped once it's timed (0.14.2).
+    Runs after the hand-over test, which connects TubeArchivist."""
+    from transcript_pdf import write
+    db, scheduler, paths = app.state.db, app.state.scheduler, app.state.archiver.paths
+    tx = app.state.transcripts if hasattr(app.state, "transcripts") else scheduler.transcripts
+    primary = db.post(297)
+    members = [primary] + db.q("SELECT * FROM posts WHERE pair_id=297")
+    assert not any((m["media"] or {}).get("audio") for m in members), "item 297 is meant to have no audio"
+    name = "Handed over transcript [2HndOvr].pdf"
+    write(paths.archive / "google-docs" / name, [
+        ("Zach", "There is something wrong with this town"), ("Charlie", "What?"),
+        ("Zach", "And no one seems to notice at all"), ("Nate", "Okay then let us go")])
+    db.update("posts", "id", 295, {"documents": list(db.post(295)["documents"] or []) + [
+        {"name": name, "url": "google-docs/" + name, "source": "https://docs.google.com/document/d/2HndOvr/edit"}]})
+    members = [db.post(297)] + db.q("SELECT * FROM posts WHERE pair_id=297")
+    sound = tx.sound(members)
+    assert sound and sound["tubearchivist"] == "JRWI136ytAA" and sound["post_id"] == 295, sound
+    assert sound["timeline"] == "video" and sound["size"] > 0 and sound["duration"] == 23.0
+    heard = [[1.0, 1.3, "There"], [1.3, 1.5, "is"], [1.5, 2.0, "something"], [2.0, 2.3, "wrong"], [2.3, 2.5, "with"],
+             [2.5, 2.8, "this"], [2.8, 3.2, "town."], [4.0, 4.4, "What?"], [8.0, 8.3, "And"], [8.3, 8.5, "no"],
+             [8.5, 8.8, "one"], [8.8, 9.2, "seems"], [9.2, 9.4, "to"], [9.4, 9.9, "notice"], [9.9, 10.1, "at"],
+             [10.1, 10.4, "all."], [12.0, 12.3, "Okay,"], [12.3, 12.6, "then"], [12.6, 12.8, "let's"],
+             [12.8, 13.0, "us"], [13.0, 13.3, "go."]]
+    (tmp_path / "heard.json").write_text(json.dumps(heard))
+    monkeypatch.setenv("JRWI_FAKE_HEARING", str(tmp_path / "heard.json"))
+    scheduler._transcripts(one=297)   # reads the transcript (and, asked for by hand, times it)
+    job = client.get("/api/transcripts/jobs/297").json()
+    assert job["sound"]["source"] == "tubearchivist" and job["sound"]["url"] == "/api/transcripts/sound/295", job
+    every = client.get("/api/transcripts/jobs?all=true").json()
+    assert 297 in [j["item_id"] for j in every["jobs"]], every
+    # The sound, copied out of TubeArchivist's copy, as another computer gets it
+    r = client.get("/api/transcripts/sound/295")
+    assert r.status_code == 200 and r.content[:4] == b"\x1aE\xdf\xa3", r.status_code   # a Matroska file
+    assert client.get("/api/transcripts/sound/300").status_code == 404   # archived sound: its own address
+    # Timed on the server from the copy, which is dropped afterwards
+    scheduler._transcripts(one=297)
+    row = db.one("SELECT * FROM transcripts WHERE item_id=297")
+    assert row["aligned"] and row["timing"]["sound_post"] == 295 and row["timing"]["timeline"] == "video", row
+    assert not Path(sound["path"]).exists()
+    lines = client.get("/api/transcript/295").json()
+    assert lines["aligned"] and lines["lines"][1]["start"] is not None
+    # Without TubeArchivist, it's left out, saying why
+    tx._ta_seen.clear()
+    monkeypatch.setattr(tx, "_ta", lambda: type("T", (), {"configured": False})())
+    out = client.get("/api/transcripts/jobs?all=true").json()
+    gone = [x for x in out["left_out"] if x["item_id"] == 297]
+    assert gone and "only on YouTube" in gone[0]["why"] and "isn't connected" in gone[0]["why"], out["left_out"]

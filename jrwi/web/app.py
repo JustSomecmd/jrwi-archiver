@@ -12,6 +12,7 @@ import math
 import os
 import re
 import secrets
+import subprocess
 import threading
 import tempfile
 import time
@@ -611,8 +612,24 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         primary, members = job_target(post_id)
         job = transcripts.job(primary, members)
         if not job:
-            raise HTTPException(404, "This episode has no read transcript, or no archived audio or video")
+            raise HTTPException(404, "This episode can't be heard: " + (
+                "its transcript hasn't been read into lines yet" if transcripts.sound(members) else
+                transcripts.why_no_sound(members)))
         return job
+
+    @app.get("/api/transcripts/sound/{post_id}", dependencies=[Depends(api_auth)])
+    def api_transcript_sound(post_id: int):
+        """(v0.26) The sound of a YouTube-only episode, copied out of TubeArchivist's copy of its video, for another
+        computer to hear. It can take a minute or two before it starts, as the whole video is read."""
+        primary, members = job_target(post_id)
+        sound = transcripts.sound(members)
+        if not sound or not sound.get("tubearchivist"):
+            raise HTTPException(404, "This episode's sound isn't TubeArchivist's copy: its job gives its address")
+        try:
+            f = transcripts.fetch(sound)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(502, str(e)) from None
+        return FileResponse(f, media_type="audio/x-matroska", filename=f.name)
 
     @app.post("/api/transcripts/jobs/{post_id}", dependencies=[Depends(api_auth)])
     async def api_transcript_import(post_id: int, request: Request):
@@ -1407,9 +1424,14 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         tmp_dir.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(prefix="job-", suffix=".zip", dir=tmp_dir)
         os.close(fd)
+        try:
+            sound_file = transcripts.fetch(sound)   # TubeArchivist's copy: its sound copied out first
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            Path(name).unlink(missing_ok=True)
+            raise HTTPException(502, str(e)) from None
         with zipfile.ZipFile(name, "w", zipfile.ZIP_STORED) as z:   # sound is compressed already
             z.writestr("job.json", json.dumps(job, ensure_ascii=False, indent=1))
-            z.write(sound["path"], "sound/" + Path(sound["path"]).name)
+            z.write(sound_file, "sound/" + sound_file.name)
         return FileResponse(name, media_type="application/zip", filename=f"jrwi-job-{primary['id']}.zip",
                             background=BackgroundTask(lambda: Path(name).unlink(missing_ok=True)))
 
