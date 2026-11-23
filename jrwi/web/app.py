@@ -6,13 +6,16 @@ import csv
 import hashlib
 import hmac
 import io
+import json
 import logging
 import math
 import os
 import re
 import secrets
 import threading
+import tempfile
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -24,6 +27,8 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 from .. import CONTRACT, FEATURES, NAME, VERSION
@@ -584,6 +589,40 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             return FileResponse(png, media_type="image/png")
         return files_mod.preview(paths, rel, f)
 
+    # ------------------------------------------------------------------ hearing on another computer (v0.24)
+    def job_target(post_id: int) -> tuple[dict, list[dict]]:
+        p = db.post(post_id)
+        primary = ser.primary_of(post_id) if p else None
+        if not primary:
+            raise HTTPException(404, "No such post")
+        return primary, ser.members(primary)
+
+    @app.get("/api/transcripts/jobs", dependencies=[Depends(api_auth)])
+    def api_transcript_jobs(limit: int = 20):
+        """Episodes whose transcript isn't timed yet, newest first, for another computer to hear."""
+        return {"jobs": transcripts.jobs(ser, max(1, min(limit, 200)))}
+
+    @app.get("/api/transcripts/jobs/{post_id}", dependencies=[Depends(api_auth)])
+    def api_transcript_job(post_id: int):
+        """One episode's job, timed or not (to time it again, or compare models)."""
+        primary, members = job_target(post_id)
+        job = transcripts.job(primary, members)
+        if not job:
+            raise HTTPException(404, "This episode has no read transcript, or no archived audio or video")
+        return job
+
+    @app.post("/api/transcripts/jobs/{post_id}", dependencies=[Depends(api_auth)])
+    async def api_transcript_import(post_id: int, request: Request):
+        """Words heard on another computer, one result per model: matched here, recorded, the best one kept."""
+        primary, members = job_target(post_id)
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("expected a JSON object")
+            return await run_in_threadpool(transcripts.import_heard, primary, members, payload)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=409 if "changed" in str(e) else 400)
+
     @app.get("/api/transcript/{post_id}", dependencies=[Depends(api_auth)])
     def api_transcript(post_id: int):
         """The item's transcript as lines, timed in this post's timeline when it's been timed (contract v0.23)."""
@@ -955,15 +994,18 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         out = io.StringIO()
         cols = ["item_id", "title", "at", "result", "error", "duration_s", "took_s", "speed_x", "load_s",
                 "match_took_s", "peak_mb", "model", "threads", "sessions", "started", "heard_again", "words",
-                "words_heard", "found", "lines_placed", "lines_not_placed"]
+                "words_heard", "found", "lines_placed", "lines_not_placed", "where", "host", "device",
+                "compared_with", "start_diff_median_s", "start_diff_p90_s", "within_1s"]
         w = csv.writer(out)
         w.writerow(cols)
         for r in transcripts.runs():
             f = transcripts_mod.record_figures(r["timing"])
+            c = f.get("compare") or {}
             w.writerow([r["item_id"], r["title"], r["at"], f["result"], f.get("error"), f.get("duration"), f.get("took"),
                         f.get("speed"), f.get("load"), f.get("match_took"), f.get("peak_mb"), f.get("model"),
                         f["threads_text"], f.get("sessions"), f.get("started"), f.get("heard_now"), f.get("words"),
-                        f.get("heard"), f.get("found"), f.get("placed"), f.get("unplaced")])
+                        f.get("heard"), f.get("found"), f.get("placed"), f.get("unplaced"), f["where"], f.get("host"),
+                        f.get("device"), c.get("model"), c.get("median"), c.get("p90"), c.get("within_1s")])
         return Response(out.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="jrwi-transcript-timings.csv"'})
 
@@ -1269,12 +1311,14 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return RedirectResponse("/admin/shows", 303)
 
     @app.get("/admin/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
-    def admin_item(request: Request, post_id: int, queued: str = "", error: str = ""):
+    def admin_item(request: Request, post_id: int, queued: str = "", error: str = "", imported: str = "",
+                   tx_error: str = ""):
         p = db.post(post_id)
         if not p:
             raise HTTPException(404, "No such post")
         return render(request, "admin_item.html", p=p, shows=db.q("SELECT id, name FROM shows ORDER BY sort"),
-                      tabs=TABS, queued=queued, st=status_obj(), ho=handover_of(p), error=error, tx=transcript_of(p))
+                      tabs=TABS, queued=queued, st=status_obj(), ho=handover_of(p), error=error, tx=transcript_of(p),
+                      imported=imported, tx_error=tx_error)
 
     def transcript_of(p: dict) -> dict | None:
         """The transcript of the episode this post is in, for its admin page, or None."""
@@ -1347,6 +1391,52 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         db.x("UPDATE posts SET refetch='page' WHERE status IN ('complete', 'partial') AND refetch IS NULL")
         scheduler.check_now()
         return RedirectResponse("/admin", 303)
+
+    @app.get("/admin/items/{post_id}/transcript-job.zip", dependencies=[Depends(web_auth)])
+    def admin_transcript_job_zip(post_id: int):
+        """The job and its sound in one file, for the PC program's file mode (no network on the PC needed)."""
+        primary, members = job_target(post_id)
+        job = transcripts.job(primary, members)
+        sound = transcripts.sound(members)
+        if not job or not sound:
+            raise HTTPException(404, "This episode has no read transcript, or no archived audio or video")
+        tmp_dir = paths.data / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="job-", suffix=".zip", dir=tmp_dir)
+        os.close(fd)
+        with zipfile.ZipFile(name, "w", zipfile.ZIP_STORED) as z:   # sound is compressed already
+            z.writestr("job.json", json.dumps(job, ensure_ascii=False, indent=1))
+            z.write(sound["path"], "sound/" + Path(sound["path"]).name)
+        return FileResponse(name, media_type="application/zip", filename=f"jrwi-job-{primary['id']}.zip",
+                            background=BackgroundTask(lambda: Path(name).unlink(missing_ok=True)))
+
+    @app.post("/admin/items/{post_id}/transcript-import", dependencies=[Depends(web_auth)])
+    async def admin_transcript_import(post_id: int, result: UploadFile = File(...)):
+        """A result file the PC program wrote, imported as the API's import does."""
+        primary, members = job_target(post_id)
+        back = f"/admin/items/{post_id}"
+        try:
+            data = await result.read(60_000_001)
+            if not data or len(data) > 60_000_000:
+                raise ValueError("pick the result file the PC program wrote")
+            try:
+                payload = json.loads(data)
+            except ValueError:
+                raise ValueError("that isn't a result file from the PC program") from None
+            if not isinstance(payload, dict):
+                raise ValueError("that isn't a result file from the PC program")
+            if payload.get("item_id") and int(payload["item_id"]) != primary["id"]:
+                raise ValueError("that result is for another episode")
+            out = await run_in_threadpool(transcripts.import_heard, primary, members, payload)
+        except ValueError as e:
+            return RedirectResponse(f"{back}?tx_error={quote(str(e))}#transcripts", 303)
+        return RedirectResponse(f"{back}?imported={quote(out['used'])}#transcripts", 303)
+
+    @app.get("/admin/transcripts/jrwi_hear.py", dependencies=[Depends(web_auth)])
+    def admin_pc_program():
+        """The PC program, from this version of the archiver."""
+        return FileResponse(Path(__file__).resolve().parent.parent / "pc" / "jrwi_hear.py", media_type="text/x-python",
+                            filename="jrwi_hear.py")
 
     @app.post("/admin/transcripts/time", dependencies=[Depends(web_auth)])
     def admin_transcripts_time(item: str = Form("")):

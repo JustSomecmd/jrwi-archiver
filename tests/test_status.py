@@ -340,8 +340,18 @@ def test_the_record_of_timings_starts_from_what_was_there(tmp_path):
 
     from jrwi.transcripts import record_figures
     f = record_figures(timing)
-    assert f["result"] == "timed" and f["speed"] == round(11000 / 1605, 2) and f["threads_text"] == "4"
+    assert f["result"] == "timed" and f["speed"] == round(11000 / 1605, 2) and f["threads_text"] == "4 threads"
     assert round(f["placed_share"], 3) == round(3559 / 3629, 3)
     assert record_figures({"at": "x", "error": "only 2% heard", "found": 0.02})["result"] == "mismatch"
     assert record_figures({"at": "x", "error": "no sound"})["result"] == "error"
     assert record_figures({})["result"] == "waiting"
+    assert record_figures({"at": "x", "threads_used": [4, 6]})["threads_text"] == "4, 6 threads"
+    assert record_figures({"at": "x", "threads": 6, "workers": 4, "source": "pc"})["threads_text"] == "4 × 6 threads"
+    gpu = record_figures({"at": "x", "device": "cuda", "batch": 16, "source": "pc"})
+    assert gpu["threads_text"] == "GPU, batches of 16" and gpu["where"] == "PC"
+
+    from jrwi.transcripts import compare_lines
+    a = [{"start": 1.0}, {"start": 5.0}, {"start": None}, {"start": 9.0}, {"start": 20.0}]
+    b = [{"start": 1.2}, {"start": 7.5}, {"start": 3.0}, {"start": None}, {"start": 20.0}]
+    c = compare_lines(a, b)
+    assert c == {"both": 3, "median": 0.2, "p90": 2.5, "within_1s": round(2 / 3, 3), "only_this": 1, "only_other": 1}

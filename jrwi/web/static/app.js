@@ -458,7 +458,8 @@ document.addEventListener("click", (e) => {
 });
 
 // A select that applies itself as soon as it's changed, such as Home's tag picker
-document.querySelectorAll("select[data-autosubmit]").forEach((s) => s.addEventListener("change", () => s.form.submit()));
+document.querySelectorAll("select[data-autosubmit], input[type=file][data-autosubmit]")
+  .forEach((s) => s.addEventListener("change", () => { if (s.type !== "file" || s.files.length) s.form.submit(); }));
 
 // A post's transcript under its player, with the line being spoken lit up (contract v0.23). Times are in the
 // timeline of the post whose player shows, so the video and the audio each get their own.

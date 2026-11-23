@@ -633,3 +633,4 @@ details.explain p { margin: .5rem 0; }
 table.records th:first-child, table.records td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg);
   box-shadow: 1px 0 0 var(--line-soft); }
 @media (max-width: 640px) { table.records td:first-child { min-width: 10.5rem; } }
+ol.steps { padding-left: 1.2rem; } ol.steps li { margin: .45rem 0; } ol.steps code { overflow-wrap: break-word; word-break: normal; }

@@ -62,11 +62,32 @@
     <td>{{ human_duration(e.took) }}{% if e.load %}<div class="muted">+{{ e.load | round(0) | int }} s loading</div>{% endif %}</td>
     <td>{% if e.speed %}{{ e.speed }}×{% endif %}</td>
     <td>{% if e.peak_mb %}{{ e.peak_mb }} MB{% endif %}</td>
-    <td>{% if e.model %}{{ e.model }}{% if e.threads_text %}<div class="muted">{{ e.threads_text }} thread{{ '' if e.threads_text == '1' else 's' }}</div>{% endif %}{% endif %}</td>
+    <td>{% if e.model %}{{ e.model }}{% if e.where == 'PC' %} <span class="mbadge">PC</span>{% endif %}{% if e.threads_text %}<div class="muted">{{ e.threads_text }}</div>{% endif %}{% endif %}</td>
     <td>{% if e.at %}<span data-when-at="{{ e.at }}">{{ e.at[:16] | replace('T', ' ') }}</span>{% endif %}</td>
   </tr>
   {% else %}<tr><td colspan="10" class="muted">No transcripts read yet.</td></tr>{% endfor %}
 </table>
 </div>
 {% if totals.tries %}<p class="small"><a href="/admin/transcripts.csv" download>{{ icon('download') }} Every try as a spreadsheet (CSV)</a></p>{% endif %}
+
+<div class="panel" id="pc">
+  <h3>Hearing on your PC</h3>
+  <p class="small">A faster computer can do the slow part, hearing the episodes, and send back what it heard. The
+    archiver still matches it to the transcript, so the lines come out the same way, and each try is in the record
+    above, marked PC. With an NVIDIA graphics card it's many times faster.</p>
+  <ol class="small steps">
+    <li>Install <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python</a>, then in a terminal:
+      <code>pip install faster-whisper psutil</code>. For an NVIDIA graphics card also:
+      <code>pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"</code></li>
+    <li><a href="/admin/transcripts/jrwi_hear.py" download>{{ icon('download') }} Download the PC program</a> into a folder of its own.</li>
+    <li>Run <code>python jrwi_hear.py setup</code> there: the archiver's address and its API token, from
+      <a href="/admin/settings">Settings</a>.</li>
+    <li><code>python jrwi_hear.py compare</code> hears the newest episode not timed yet with small.en and medium.en,
+      sends both and compares them; <code>compare 123</code> does that for post 123, timed or not.
+      <code>python jrwi_hear.py run</code> hears every episode not timed yet, one after another.</li>
+  </ol>
+  <p class="small muted">Without the network: <b>Export for your PC</b> on an episode's admin page gives a file with its
+    sound; <code>python jrwi_hear.py file jrwi-job-123.zip</code> writes a result file next to it, to bring back with
+    <b>Import from your PC</b> on the same page.</p>
+</div>
 {% endblock %}

@@ -88,6 +88,16 @@
     {{ human_duration(tx.timing.duration) }} of sound took {{ human_duration(tx.timing.took) }}, at most {{ tx.timing.peak_mb }} MB of
     memory ({{ tx.timing.model }}, {{ tx.timing.threads }} threads); {{ tx.timing.placed }} lines placed,
     {{ tx.timing.unplaced }} not.{% endif %}</p>
+  {% if imported %}<p class="small ok">Imported from your PC: the {{ imported }} result is the one in use now.</p>{% endif %}
+  {% if tx_error %}<p class="small bad">Not imported: {{ tx_error }}.</p>{% endif %}
+  {% set cmp = (tx.runs | selectattr('compare') | list) %}
+  {% if cmp and cmp[0].compare %}
+  {% set c = cmp[0].compare %}
+  <p class="small"><b>Compared with {{ c.model }}:</b> of the {{ c.both }} lines both placed, half start within
+    {{ c.median }} s of each other and nine in ten within {{ c.p90 }} s ({{ ((c.within_1s or 0) * 100) | round(0) | int }}% within a
+    second). {{ cmp[0].model }} placed {{ c.only_this }} line{{ '' if c.only_this == 1 else 's' }} the other didn't, and
+    {{ c.model }} {{ c.only_other }}.</p>
+  {% endif %}
   {% if tx.runs %}
   <details class="small" {% if tx.runs | length > 1 %}open{% endif %}>
     <summary>Every try ({{ tx.runs | length }})</summary>
@@ -101,7 +111,7 @@
         <td>{{ human_duration(r.took) }}{% if r.sessions and r.sessions > 1 %}<div class="muted">in {{ r.sessions }} goes</div>{% endif %}</td>
         <td>{% if r.speed %}{{ r.speed }}×{% endif %}</td>
         <td>{% if r.peak_mb %}{{ r.peak_mb }} MB{% endif %}</td>
-        <td>{{ r.model or '' }}{% if r.threads_text %}<div class="muted">{{ r.threads_text }} thread{{ '' if r.threads_text == '1' else 's' }}</div>{% endif %}</td></tr>
+        <td>{{ r.model or '' }}{% if r.where == 'PC' %} <span class="mbadge">PC</span>{% endif %}{% if r.at == tx.timing.at and r.model == tx.timing.model %} <span class="mbadge pin">in use</span>{% endif %}{% if r.threads_text %}<div class="muted">{{ r.threads_text }}</div>{% endif %}</td></tr>
       {% endfor %}
     </table></div>
   </details>
@@ -112,6 +122,15 @@
     <button>{{ 'Time it again' if tx.aligned or tx.timing.at else 'Time it now' }}</button>
     <span class="hint">Hears the episode once, in the background, alongside checks. What was heard is kept if it's paused.</span>
   </form>
+  <div class="row small">
+    <a class="btn ghost small" href="/admin/items/{{ p.id }}/transcript-job.zip" download>{{ icon('download') }} Export for your PC</a>
+    <form method="post" action="/admin/items/{{ p.id }}/transcript-import" enctype="multipart/form-data" class="inline">
+      <label class="btn ghost small">{{ icon('doc') }} Import from your PC
+        <input type="file" name="result" accept=".json,application/json" hidden data-autosubmit></label>
+    </form>
+    <span class="hint">For the <a href="/admin/transcripts#pc">PC program</a>: the export holds this episode's sound and
+      what the program needs; it writes a result file to import here.</span>
+  </div>
   {% endif %}
 </div>
 <div class="panel">

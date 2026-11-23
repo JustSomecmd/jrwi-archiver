@@ -99,6 +99,19 @@ Hearing an episode takes a while and a fair amount of memory: on one 4-thread se
 
 Since 0.13.0 it runs in a thread of its own, alongside checks, the podcast feed and Re-read, so neither waits for the other; when both want the processor, the check gets it first, as timing runs at a low priority. The two together use more memory than either alone. If a check downloads, moves or hands over the file being heard, that episode is left for the next round, without an error. **Pause transcripts** on the Admin page (in place of Time transcripts now while it runs) stops it until the next check; what's been heard is saved every ten minutes of sound, and it carries on from there.
 
+#### Hearing on your PC
+
+Hearing is the slow part, so a faster computer can do it and send back what it heard. The archiver still matches the words to the transcript, so the lines come out the same way, and every try is in Admin > Transcripts, marked PC. An NVIDIA graphics card hears many times faster than a processor.
+
+1. Install Python 3.9 or newer, then `pip install faster-whisper psutil`. For an NVIDIA card also `pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"`; the program finds those libraries itself. If the card still isn't used on Windows, put the NVIDIA libraries from Purfview's whisper-standalone-win on `PATH`, or add `--device cpu`.
+2. Download the program from **Admin > Transcripts** (`jrwi_hear.py`) into a folder of its own, and run `python jrwi_hear.py setup` there: the archiver's address and API token (Settings). They're kept in `jrwi_hear.json` next to it; keep that file to yourself.
+3. `python jrwi_hear.py compare` hears the newest episode not timed yet once with small.en and once with medium.en, each in a process of its own, sends both, and prints how they compare: words found, lines placed, time, speed and memory, and how far apart the two put each line. The archiver keeps whichever found more of the transcript's words. `compare 123` does it for post 123, timed or not; `--models small.en,medium.en,large-v3` takes any faster-whisper model.
+4. `python jrwi_hear.py run` hears every episode not timed yet, newest first, sending each as it's done (`--count 5` for five; `--models medium.en` for that model).
+
+Without the network: **Export for your PC** on an episode's admin page downloads its sound and job in one file; `python jrwi_hear.py file jrwi-job-123.zip` writes `jrwi-job-123-result.json` next to it, which **Import from your PC** on the same page takes.
+
+On a graphics card it hears in batches of 16 (`--batch`); on a processor, several ten-minute pieces at once (`--workers`, with `--threads` each), which the pieces allow as each is heard on its own. The episode's sound is downloaded to `jrwi_hear_cache` and deleted once sent (`--keep` keeps it).
+
 ## What you'll find in the folders
 
 ```

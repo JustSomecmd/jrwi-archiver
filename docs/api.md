@@ -1,4 +1,4 @@
-# JRWI archiver API (contract v0.23)
+# JRWI archiver API (contract v0.24)
 
 This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.12.0.
 
@@ -24,6 +24,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 - **v0.21:** a change (`POST`, `PUT`, `PATCH`, `DELETE`) that a browser sends from a page on another site, as its `Origin` or `Referer` says, is refused with `403` (see General rules). Apps that send neither header, as Tubedroid's do, aren't affected. A reply's `date_text` is no longer the site's text twice over ("2d 2d"), and its `date` is worked out from it. In the service since 0.10.3.
 - **v0.22:** when to mark an episode watched is a setting in the archiver (asked for by the user on 2026-11-22): a progress save may leave out `finished`, and the archiver then marks the episode watched itself once the save's position is close enough to the end of that version, by the setting (see Progress). The ping gains `watched_left`, the setting in seconds, and lists `watched`. Saves with `finished` work as before. In the service since 0.11.0.
 - **v0.23:** timed transcripts (the Tubedroid chat's suggestion 12): `GET /api/transcript/{postId}` gives the episode's transcript as lines, each with its speaker and, once the archiver has timed it, when it's said, in that post's timeline (see Transcripts). Items and posts gain `transcript`, and the ping lists `transcript`. The status gains `background`, for timing transcripts between checks. In the service since 0.12.0.
+- **v0.24:** hearing on another computer (asked for by the user on 2026-11-23): `GET /api/transcripts/jobs`, `GET /api/transcripts/jobs/{postId}` and `POST /api/transcripts/jobs/{postId}` hand an episode's sound out to be heard elsewhere and take back the words heard (see Hearing on another computer). Feature name `transcript_jobs`. In the service since 0.14.0.
 - **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there. A ping without `watched` (before 0.11.0) means a save without `finished` counts as `finished: false`, so apps keep their own rule there. A missing `transcript` means no transcript; a missing `background` means nothing runs in the background.
 
 **General rules**
@@ -38,7 +39,7 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.12.0", "contract": "0.23", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.14.0", "contract": "0.24", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/reparse` | (v0.20) Re-reads the saved pages with the current parsers, as the admin page's Re-read saved pages does: `202` with `{"started": true}`, or `409` when a check or a re-read is running. It runs as its own job, with `step` `reparse` in the status, and `POST /api/stop` stops it. |
@@ -67,6 +68,9 @@ This is the same text as the integration contract in the user's "Multimedia Serv
 | `GET /api/progress/{postId}` | `{"post_id": 300, "position": 1234.5, "duration": 11712, "finished": false, "updated_at": "..."}`, in the timeline of the post in the address (see Progress) |
 | `PUT /api/progress/{postId}` | Body `{"position": 1234.5, "duration": 11712, "finished": false}`, plus `updated_at` for progress sent later (v0.11). Since v0.22 `finished` can be left out, for the archiver to decide (see Progress). Saves progress for any video or audio post, in that post's own timeline. Returns the same as `GET`: what the archive holds after the save. |
 | `GET /api/transcript/{postId}` | (v0.23) The episode's transcript as lines, timed in this post's timeline once the archiver has timed it (Transcripts, below). `404` when it has none. |
+| `GET /api/transcripts/jobs` | (v0.24) Episodes whose transcript isn't timed yet, as jobs for another computer to hear (Hearing on another computer, below) |
+| `GET /api/transcripts/jobs/{postId}` | (v0.24) One episode's job, timed or not |
+| `POST /api/transcripts/jobs/{postId}` | (v0.24) The words another computer heard, one result per model: matched, recorded, the best kept |
 | `GET /api/events?since=<time>` | New items, hand-overs and failures since a time (default: the last 24 hours) |
 | `GET /api/problems` | Posts that couldn't be fully saved |
 | `GET /api/feed.xml?token=<key>` | Private podcast RSS of all audio |
@@ -77,14 +81,14 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.12.0", "contract": "0.23",
+{"name": "jrwi-archiver", "version": "0.14.0", "contract": "0.24",
  "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast", "watched",
-              "transcript"],
+              "transcript", "transcript_jobs"],
  "watched_left": 120.0}
 ```
 
 - **`contract`:** the version of this contract the archiver follows.
-- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`), `stats` (`GET /api/stats`), since v0.20 `reparse` (`POST /api/reparse`) and `podcast` (`GET /api/podcast` and `POST /api/podcast/read`), since v0.22 `watched` (the archiver marks episodes watched, below), and since v0.23 `transcript` (`GET /api/transcript`). Later optional parts get names of their own, and apps ignore names they don't know.
+- **`features`:** a name for each optional part it has: `post_progress` (`progress` on posts), `tags` (`GET /api/tags` and `tag`), `continue` (`GET /api/continue`), `stop` (`POST /api/stop`), `feed` (`GET /api/feed`), `stats` (`GET /api/stats`), since v0.20 `reparse` (`POST /api/reparse`) and `podcast` (`GET /api/podcast` and `POST /api/podcast/read`), since v0.22 `watched` (the archiver marks episodes watched, below), since v0.23 `transcript` (`GET /api/transcript`), and since v0.24 `transcript_jobs` (hearing on another computer). Later optional parts get names of their own, and apps ignore names they don't know.
 - **`watched_left` (v0.22):** how many seconds before the end of a version an episode counts as watched, from the archiver's Settings (2 minutes unless changed; 0 means at the very end). See Progress.
 
 **Tags (v0.17):**
@@ -164,6 +168,21 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`document`:** the PDF it was read from.
 - **`transcript`** on items, posts and feed entries: `true` when this endpoint has lines for the item, so a player can show a transcript button without asking.
 - **Size:** a three-hour episode's lines are about 250 KB of JSON, and much less compressed. Apps keep them with an offline download as they keep the post's other files.
+
+**Hearing on another computer (v0.24):** hearing an episode is the slow part of timing its transcript, so another computer can do it and send back the words it heard; the archiver matches them to the transcript as it matches its own, so the lines come out the same way. The archiver's own PC program (`jrwi_hear.py`, downloaded from Admin > Transcripts) uses this; apps don't need to.
+
+```json
+{"item_id": 300, "title": "Through the Fire | Riptide #136", "lines": 3629, "timed": false,
+ "sound": {"post_id": 298, "timeline": "audio", "size": 187654321, "duration": 11695.0, "url": "/api/audio/298",
+           "name": "Through the Fire.m4a"},
+ "hotwords": "Charlie Nate Zach", "archiver": "0.14.0",
+ "hearing": {"chunk": 600.0, "overlap": 10.0, "language": "en", "beam_size": 1, "word_timestamps": true,
+             "vad_filter": true, "condition_on_previous_text": false}}
+```
+
+- **A job:** `GET /api/transcripts/jobs` lists the episodes whose transcript isn't timed yet, newest first (`limit`, 20 by default), and `GET /api/transcripts/jobs/{postId}` gives one episode's, timed or not (any of its posts' IDs), or `404` when it has no read transcript or no archived audio or video. `sound` is what to hear, from its `url` with the token: the audio, or else the archived video. `hearing` says how the archiver hears (ten-minute pieces with ten seconds heard twice where they meet, keeping a piece's words from the middle of the overlap on), and `hotwords` the speakers' names to listen for.
+- **The result:** `POST /api/transcripts/jobs/{postId}` with `{"item_id": 300, "sound_size": 187654321, "results": [{"model": "medium.en", "words": [[1.0, 1.3, "There"], ...], "until": 11695.0, "took": 410.2, "load": 3.1, "peak_mb": 2900, "device": "cuda", "batch": 16, "host": "...", "program": "1.0"}]}`: one result per model, up to six, each word as `[start, end, word]` in seconds of the sound. `sound_size` has to be the job's, or the answer is `409` (the sound changed since). The archiver matches each result, records every one (Admin > Transcripts, marked PC), keeps the one that found the most of the transcript's words, and with two or more compares each with the first: of the lines both placed, how far apart their starts are (`median`, and `p90`, nine in ten within), the share `within_1s`, and how many lines each placed that the other didn't. It answers `{"item_id": 300, "used": "medium.en", "tries": [{"model", "found", "placed", "unplaced", "took", "speed", "peak_mb", "error", "compare", "used"}, ...]}`, or `400` with an error for a result it can't use.
+- **Feature name** `transcript_jobs` in the ping.
 
 **Finding an item by YouTube ID (v0.10):** `GET /api/items?youtube_id=CzZ13VPQOcw` lists the items with a post, of any version, that embeds that YouTube video: usually one item, or none. For a YouTube-only episode, that item's `video.youtube_id` is the ID asked for. An item whose members-only video is archived and that also embeds the YouTube version is listed too, with `video` being the archived file; apps that only want YouTube-only items can check `video.youtube_id`. `/api/posts` takes `youtube_id` the same way, listing the posts themselves.
 

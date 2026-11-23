@@ -899,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.23" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.24" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1361,8 +1361,86 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         row = db.one("SELECT * FROM transcripts WHERE item_id=300")
         assert row["aligned"] == 1 and not row["timing"].get("error")
         assert "be loaded" in web.get("/admin").text   # an apostrophe is escaped in HTML
+        db.set_setting("transcript_model", "small.en")
+        db.set_setting("transcripts_problem", "")
+        pc_program_hears_and_sends(app, client, web, tmp_path)
     finally:
         db.set_setting("transcript_model", "small.en")
         db.set_setting("transcripts_problem", "")
         db.update("posts", "id", 298, {"documents": before})
         db.x("DELETE FROM transcripts")
+
+
+def pc_program_hears_and_sends(app, client, web, tmp_path):
+    """Hearing on another computer (contract v0.24): the PC program, run for real against the running archiver,
+    with stand-in hearing (small.en mishears every fourth word)."""
+    import subprocess
+    import sys
+    import threading
+    import zipfile
+
+    import uvicorn
+    db = app.state.db
+    program = Path(__file__).resolve().parent.parent / "jrwi" / "pc" / "jrwi_hear.py"
+    assert web.get("/admin/transcripts/jrwi_hear.py").content == program.read_bytes()
+    # The job: the sound, how to hear it, the names to listen for
+    job = client.get("/api/transcripts/jobs/298").json()
+    assert job["item_id"] == 300 and job["sound"]["url"] == "/api/audio/298" and job["sound"]["size"] > 0
+    assert job["hearing"]["chunk"] == 600 and job["hotwords"] == "Charlie Nate Zach" and job["timed"]
+    assert client.get("/api/transcripts/jobs").json() == {"jobs": []}   # it's timed: nothing left to hand out
+    assert "transcript_jobs" in client.get("/api/ping").json()["features"]
+    # A result for a sound that isn't this episode's is refused
+    bad = client.post("/api/transcripts/jobs/300", json={"sound_size": 1, "results": [{"model": "x", "words": []}]})
+    assert bad.status_code == 409 and "changed" in bad.json()["error"]
+
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=8772, log_level="warning"))
+    threading.Thread(target=server.run, daemon=True).start()
+    import time as _t
+    for _ in range(50):
+        if server.started:
+            break
+        _t.sleep(0.1)
+    env = dict(os.environ, JRWI_FAKE_HEARING=str(tmp_path / "heard.json"), JRWI_SERVER="http://127.0.0.1:8772",
+               JRWI_TOKEN=db.setting("api_token"), PYTHONIOENCODING="utf-8")
+    work = tmp_path / "pc"
+    work.mkdir()
+    pc = work / "jrwi_hear.py"
+    pc.write_bytes(program.read_bytes())   # as downloaded: it keeps its cache next to itself
+    runs_before = len(db.q("SELECT * FROM transcript_runs WHERE item_id=300"))
+    try:
+        out = subprocess.run([sys.executable, str(pc), "compare", "298", "--device", "cpu"], env=env,
+                             capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert "medium.en" in out.stdout and "<- in use" in out.stdout and "lines both placed" in out.stdout, out.stdout
+        runs = db.q("SELECT * FROM transcript_runs WHERE item_id=300 ORDER BY id")[runs_before:]
+        assert [r["timing"]["model"] for r in runs] == ["small.en", "medium.en"]
+        small, medium = runs[0]["timing"], runs[1]["timing"]
+        assert small["source"] == medium["source"] == "pc" and medium["found"] > small["found"]
+        assert medium["compare"]["model"] == "small.en" and medium["compare"]["both"] >= 1
+        row = db.one("SELECT * FROM transcripts WHERE item_id=300")
+        assert row["aligned"] and row["timing"]["model"] == "medium.en" and row["timing"]["used"]
+        assert not list((work / "jrwi_hear_cache").glob("*.m4a"))   # the sound is deleted once sent
+        page = web.get("/admin/items/300").text
+        assert "Compared with small.en" in page and ">PC<" in page and "in use" in page
+        assert ">PC<" in web.get("/admin/transcripts").text
+        assert ",PC," in web.get("/admin/transcripts.csv").text
+        # Without the network: the export, a result file, and the import on the episode's admin page
+        z = web.get("/admin/items/298/transcript-job.zip")
+        assert z.status_code == 200 and z.headers["content-type"] == "application/zip"
+        (work / "job.zip").write_bytes(z.content)
+        with zipfile.ZipFile(work / "job.zip") as zf:
+            assert "job.json" in zf.namelist() and any(n.startswith("sound/") for n in zf.namelist())
+        out = subprocess.run([sys.executable, str(pc), "file", str(work / "job.zip"), "--models", "small.en"],
+                             env=dict(env, JRWI_SERVER="", JRWI_TOKEN=""), capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0, out.stdout + out.stderr
+        result = work / "job-result.json"
+        r = web.post("/admin/items/298/transcript-import", files={"result": ("job-result.json", result.read_bytes())},
+                     follow_redirects=False)
+        assert r.status_code == 303 and "imported=small.en" in r.headers["location"], r.headers
+        assert db.one("SELECT * FROM transcripts WHERE item_id=300")["timing"]["model"] == "small.en"
+        r = web.post("/admin/items/298/transcript-import", files={"result": ("x.json", b"not json")},
+                     follow_redirects=False)
+        assert "tx_error=" in r.headers["location"]
+        assert "Not imported" in web.get(r.headers["location"]).text
+    finally:
+        server.should_exit = True
