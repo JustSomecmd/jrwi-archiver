@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import hmac
+import io
 import logging
 import math
 import os
@@ -29,6 +31,7 @@ from ..config import SITE_BASE, Paths, new_token
 from ..crawler import Archiver
 from .. import files as files_mod
 from .. import handover, podcast
+from .. import transcripts as transcripts_mod
 from ..db import Db, now
 from ..tubearchivist import TaError, TubeArchivist
 from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, MAX_PICTURE, TABS, add_show, art_choices, choose_show_art,
@@ -902,6 +905,68 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         files_cache["v"] = (key, time.monotonic(), rows)
         return rows
 
+    # ------------------------------------------------------------------ the record of timing transcripts
+    RECORD_SORTS = {"at": lambda e: e.get("at") or "", "title": lambda e: (e["title"] or "").lower(),
+                    "found": lambda e: e.get("found") or 0, "placed": lambda e: e.get("placed_share") or 0,
+                    "duration": lambda e: e.get("duration") or 0, "took": lambda e: e.get("took") or 0,
+                    "speed": lambda e: e.get("speed") or 0, "peak": lambda e: e.get("peak_mb") or 0}
+
+    def transcript_records(sort: str, order: str) -> tuple[list[dict], dict]:
+        """Every episode with a transcript, with its latest try's figures, and the totals."""
+        rows = db.q("SELECT t.item_id, t.lines, t.aligned, t.timing, p.title, p.show_id FROM transcripts t "
+                    "LEFT JOIN posts p ON p.id = t.item_id")
+        tries = {r["item_id"]: r["n"] for r in db.q("SELECT item_id, COUNT(*) AS n FROM transcript_runs GROUP BY item_id")}
+        show_names = {s["id"]: s["name"] for s in db.q("SELECT id, name FROM shows")}
+        episodes = []
+        for r in rows:
+            f = transcripts_mod.record_figures(r["timing"])
+            if f["result"] == "waiting":
+                primary = db.post(r["item_id"])
+                if not (primary and transcripts.sound(ser.members(primary))):
+                    f["result"] = "no_sound"
+            episodes.append(dict(f, item_id=r["item_id"], title=r["title"] or f"Post {r['item_id']}",
+                                 show=show_names.get(r["show_id"]), lines=r["lines"], tries=tries.get(r["item_id"], 0)))
+        done = [e for e in episodes if e["result"] in ("timed", "mismatch", "error")]
+        rest = sorted((e for e in episodes if e not in done), key=lambda e: e["title"].lower())
+        done.sort(key=RECORD_SORTS.get(sort, RECORD_SORTS["at"]), reverse=(order != "asc"))
+        heard = [e for e in done if e["result"] in ("timed", "mismatch") and e.get("took")]
+        timed = [e for e in done if e["result"] == "timed"]
+        sound, took = sum(e.get("duration") or 0 for e in heard), sum(e.get("took") or 0 for e in heard)
+        lines = sum((e.get("placed") or 0) + (e.get("unplaced") or 0) for e in timed)
+        counts = {k: sum(1 for e in episodes if e["result"] == k) for k in ("timed", "mismatch", "error", "waiting", "no_sound")}
+        totals = dict(counts, episodes=len(episodes), sound=sound, took=took,
+                      speed=round(sound / took, 2) if took else None,
+                      found=(sum(e.get("found") or 0 for e in timed) / len(timed)) if timed else None,
+                      placed=(sum(e.get("placed") or 0 for e in timed) / lines) if lines else None,
+                      peak=max((e.get("peak_mb") or 0 for e in heard), default=None),
+                      tries=db.one("SELECT COUNT(*) AS n FROM transcript_runs")["n"])
+        return done + rest, totals
+
+    @app.get("/admin/transcripts", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
+    def admin_transcripts(request: Request, sort: str = "at", order: str = "desc"):
+        sort = sort if sort in RECORD_SORTS else "at"
+        order = "asc" if order == "asc" else "desc"
+        episodes, totals = transcript_records(sort, order)
+        return render(request, "admin_transcripts.html", episodes=episodes, totals=totals, sort=sort, order=order)
+
+    @app.get("/admin/transcripts.csv", dependencies=[Depends(web_auth)])
+    def admin_transcripts_csv():
+        """Every try at timing a transcript, newest first, for a spreadsheet."""
+        out = io.StringIO()
+        cols = ["item_id", "title", "at", "result", "error", "duration_s", "took_s", "speed_x", "load_s",
+                "match_took_s", "peak_mb", "model", "threads", "sessions", "started", "heard_again", "words",
+                "words_heard", "found", "lines_placed", "lines_not_placed"]
+        w = csv.writer(out)
+        w.writerow(cols)
+        for r in transcripts.runs():
+            f = transcripts_mod.record_figures(r["timing"])
+            w.writerow([r["item_id"], r["title"], r["at"], f["result"], f.get("error"), f.get("duration"), f.get("took"),
+                        f.get("speed"), f.get("load"), f.get("match_took"), f.get("peak_mb"), f.get("model"),
+                        f["threads_text"], f.get("sessions"), f.get("started"), f.get("heard_now"), f.get("words"),
+                        f.get("heard"), f.get("found"), f.get("placed"), f.get("unplaced")])
+        return Response(out.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="jrwi-transcript-timings.csv"'})
+
     @app.get("/admin/files", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def admin_files(request: Request):
         return render(request, "admin_files.html", rows=files_summary(),
@@ -1218,7 +1283,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if not row:
             return None
         return {"item_id": primary["id"], "document": row["document"], "lines": row["lines"],
-                "aligned": bool(row["aligned"]), "timing": row["timing"] or {}, "bg": background_obj()}
+                "aligned": bool(row["aligned"]), "timing": row["timing"] or {}, "bg": background_obj(),
+                "runs": [dict(transcripts_mod.record_figures(r["timing"]), at=r["at"])
+                         for r in transcripts.runs(primary["id"])]}
 
     def handover_of(p: dict) -> dict | None:
         """The hand-over to TubeArchivist of the episode this post is in: which post has (or had) the archived video,

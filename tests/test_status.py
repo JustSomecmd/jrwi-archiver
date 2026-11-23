@@ -318,3 +318,30 @@ def test_work_found_while_the_background_runs_isnt_marked_done(archiver, monkeyp
     monkeypatch.setattr(sched.transcripts, "run", lambda *a, **kw: {"read": 0, "timed": 0})
     sched._transcripts()
     assert sched.transcripts_idle and not sched.transcripts_manual and not sched._transcripts_due()
+
+
+def test_the_record_of_timings_starts_from_what_was_there(tmp_path):
+    import json
+
+    from jrwi.db import Db
+    db = Db(tmp_path / "a.db")
+    timing = {"at": "2026-11-22T21:00:00+00:00", "took": 1605.0, "duration": 11000.0, "placed": 3559, "unplaced": 70,
+              "found": 0.79, "model": "small.en", "threads": 4, "peak_mb": 1719}
+    db.x("INSERT INTO posts (id, title) VALUES (5, 'Paid In Blood | Riptide #134')")
+    db.x("INSERT INTO transcripts (item_id, lines, aligned, timing) VALUES (5, 3629, 1, ?)", (json.dumps(timing),))
+    db.x("INSERT INTO transcripts (item_id, lines, aligned, timing) VALUES (6, 10, 0, '{}')")
+    db.conn.close()
+    db = Db(tmp_path / "a.db")   # 0.13.4's first start
+    runs = db.q("SELECT * FROM transcript_runs")
+    assert len(runs) == 1 and runs[0]["item_id"] == 5 and runs[0]["title"] == "Paid In Blood | Riptide #134"
+    assert runs[0]["timing"]["took"] == 1605.0
+    db.conn.close()
+    assert len(Db(tmp_path / "a.db").q("SELECT * FROM transcript_runs")) == 1   # only once
+
+    from jrwi.transcripts import record_figures
+    f = record_figures(timing)
+    assert f["result"] == "timed" and f["speed"] == round(11000 / 1605, 2) and f["threads_text"] == "4"
+    assert round(f["placed_share"], 3) == round(3559 / 3629, 3)
+    assert record_figures({"at": "x", "error": "only 2% heard", "found": 0.02})["result"] == "mismatch"
+    assert record_figures({"at": "x", "error": "no sound"})["result"] == "error"
+    assert record_figures({})["result"] == "waiting"

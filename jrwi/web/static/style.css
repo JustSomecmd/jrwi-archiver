@@ -616,3 +616,20 @@ button.action:disabled:hover { background: var(--card); border-color: var(--line
 /* Admin: work in the background (timing transcripts), under the check's status */
 .bg-status { margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--line); }
 .status-icon.still .icon { animation: none; }
+
+/* Admin > Transcripts: the record of every episode's timing */
+.scrollx { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.records { min-width: 760px; }
+table.records td { overflow-wrap: normal; }
+table.records td:first-child { min-width: 14rem; overflow-wrap: anywhere; }
+table.records td .muted { font-size: .8rem; }
+table.records th a { color: var(--muted); white-space: nowrap; }
+table.records th a.on { color: var(--text); }
+details.explain { margin: 0 0 1rem; }
+details.explain summary { cursor: pointer; color: var(--muted); }
+details.explain p { margin: .5rem 0; }
+.bad { color: var(--bad); }
+/* The episode stays in view while the rest of the row is scrolled sideways */
+table.records th:first-child, table.records td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg);
+  box-shadow: 1px 0 0 var(--line-soft); }
+@media (max-width: 640px) { table.records td:first-child { min-width: 10.5rem; } }

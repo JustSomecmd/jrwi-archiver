@@ -65,6 +65,7 @@
   <a class="action" href="/admin/problems">{{ icon('alert') }}<b>Problems (<span data-stat="problems">{{ st.counts.problems }}</span>)</b>
     <span>Posts that didn't save completely</span></a>
   <a class="action" href="/admin/files">{{ icon('file') }}<b>Files</b><span>Which types of file the archive holds</span></a>
+  <a class="action" href="/admin/transcripts">{{ icon('doc') }}<b>Transcripts</b><span>Every episode's timing: how well it matched and how long it took</span></a>
 </div>
 <details class="check-help">
   <summary class="muted small">What do these do?</summary>
@@ -197,7 +198,7 @@
     link to.{% endif %}</p>
   {% else %}
   <p class="small">{{ tx.count }} episode{{ '' if tx.count == 1 else 's' }} with a transcript, {{ tx.aligned }} timed{% if tx.failed %},
-    {{ tx.failed }} that couldn't be{% endif %}.</p>
+    {{ tx.failed }} that couldn't be{% endif %}. <a href="/admin/transcripts">Every episode's record</a></p>
   {% endif %}
   <p class="small">Timing runs <b>{% if tx.when == 'always' %}as soon as there's something new{% elif tx.when == 'hours' %}{% if tx.start == tx.until %}all day{% else %}from {{ tx.start }} to {{ tx.until }}{% endif %}{% else %}only when you start it{% endif %}</b>
     ({{ tx.model }}, {{ tx.threads }} thread{{ '' if tx.threads == 1 else 's' }};

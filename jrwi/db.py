@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS transcripts (
     timing TEXT, updated_at TEXT
 );
 
+-- Every time an episode's transcript was timed (0.13.4), so earlier tries aren't lost when it's timed again
+CREATE TABLE IF NOT EXISTS transcript_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER NOT NULL, title TEXT, at TEXT, timing TEXT
+);
+CREATE INDEX IF NOT EXISTS transcript_runs_item ON transcript_runs(item_id, at);
+
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, started TEXT, finished TEXT, result TEXT, message TEXT,
     new_items INTEGER DEFAULT 0, archived INTEGER DEFAULT 0
@@ -130,6 +136,17 @@ class Db:
                                           "WHERE COALESCE(banner, poster) IS NOT NULL")
         # 0.8.0: a picture picked on the admin page became an override, which stays until it's turned off
         self.conn.execute("UPDATE shows SET art_source = 'override' WHERE art_source = 'picked'")
+        # 0.13.4: the record of every timing starts with what each episode's last one left
+        if not self.conn.execute("SELECT 1 FROM transcript_runs LIMIT 1").fetchone():
+            for row in self.conn.execute("SELECT t.item_id, t.timing, p.title FROM transcripts t "
+                                         "LEFT JOIN posts p ON p.id = t.item_id").fetchall():
+                try:
+                    timing = json.loads(row["timing"] or "{}")
+                except ValueError:
+                    continue
+                if timing.get("at"):
+                    self.conn.execute("INSERT INTO transcript_runs (item_id, title, at, timing) VALUES (?, ?, ?, ?)",
+                                      (row["item_id"], row["title"], timing["at"], row["timing"]))
 
     def drop_comment_raw(self) -> None:
         """Before 0.10.3 each comment's HTML was kept in the database too (up to 200 KB each), though nothing read

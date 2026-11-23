@@ -88,6 +88,24 @@
     {{ human_duration(tx.timing.duration) }} of sound took {{ human_duration(tx.timing.took) }}, at most {{ tx.timing.peak_mb }} MB of
     memory ({{ tx.timing.model }}, {{ tx.timing.threads }} threads); {{ tx.timing.placed }} lines placed,
     {{ tx.timing.unplaced }} not.{% endif %}</p>
+  {% if tx.runs %}
+  <details class="small" {% if tx.runs | length > 1 %}open{% endif %}>
+    <summary>Every try ({{ tx.runs | length }})</summary>
+    <div class="scrollx"><table class="small records">
+      <tr><th>Timed</th><th>Result</th><th>Words found</th><th>Lines placed</th><th>Hearing</th><th>Speed</th><th>Memory</th><th>Model, threads</th></tr>
+      {% for r in tx.runs %}
+      <tr><td><span data-when-at="{{ r.at }}">{{ (r.at or '')[:16] | replace('T', ' ') }}</span>{% if r.heard_now == false %}<div class="muted">matched again</div>{% endif %}</td>
+        <td class="{{ 'ok' if r.result == 'timed' else 'bad' }}" {% if r.error %}title="{{ r.error }}"{% endif %}>{{ {'timed': 'Timed', 'mismatch': "Not this episode's", 'error': "Couldn't be timed"}[r.result] or r.result }}</td>
+        <td>{% if r.found is number %}{{ (r.found * 100) | round(0) | int }}%{% endif %}</td>
+        <td>{% if r.placed is number %}{{ r.placed }} of {{ r.placed + (r.unplaced or 0) }}{% endif %}</td>
+        <td>{{ human_duration(r.took) }}{% if r.sessions and r.sessions > 1 %}<div class="muted">in {{ r.sessions }} goes</div>{% endif %}</td>
+        <td>{% if r.speed %}{{ r.speed }}×{% endif %}</td>
+        <td>{% if r.peak_mb %}{{ r.peak_mb }} MB{% endif %}</td>
+        <td>{{ r.model or '' }}{% if r.threads_text %}<div class="muted">{{ r.threads_text }} thread{{ '' if r.threads_text == '1' else 's' }}</div>{% endif %}</td></tr>
+      {% endfor %}
+    </table></div>
+  </details>
+  {% endif %}
   {% if tx.bg %}<p class="small"><b>{{ tx.bg.phase }}:</b> {{ tx.bg.detail }}</p>{% endif %}
   <form method="post" action="/admin/transcripts/time">
     <input type="hidden" name="item" value="{{ p.id }}">

@@ -2,7 +2,7 @@
 # to sit behind a VPN container such as gluetun.
 services:
   jrwi-archiver:
-    image: ghcr.io/justsomecmd/jrwi-archiver:0.13.3   # or :latest
+    image: ghcr.io/justsomecmd/jrwi-archiver:0.13.4   # or :latest
     container_name: jrwi-archiver
     restart: unless-stopped
     # Run as your own user so Jellyfin and you can read the files (find the numbers with `id`).

@@ -299,7 +299,8 @@ def match(lines: list[dict], words: list) -> dict:
             end = ends[i] if nxt is None else min(ends[i], max(starts[i], nxt))
             out[i]["start"], out[i]["end"] = round(starts[i], 2), round(end, 2)
     placed = sum(1 for x in out if x["start"] is not None)
-    return {"lines": out, "placed": placed, "unplaced": len(out) - placed, "found": round(found, 3)}
+    return {"lines": out, "placed": placed, "unplaced": len(out) - placed, "found": round(found, 3),
+            "words": len(ref)}
 
 
 # ------------------------------------------------------------------ hearing (in the child)
@@ -579,10 +580,17 @@ class Transcripts:
         heard = self._load(self.heard_file(item_id)) or {}
         if heard.get("key") != key:
             heard = {"key": key, "until": 0.0, "words": [], "took": 0.0, "peak_mb": 0}
+        heard_now = heard["until"] < total - 0.5   # or only matched again, from what was heard before
         names = sorted({l["speaker"] for l in lines if l["speaker"]})[:40]
         hot = " ".join(names)[:400] or None
         if heard["until"] < total - 0.5:
             began = time.monotonic()
+            # For the record: when hearing began, how often it was started (carrying on after a pause counts), and
+            # every thread count it ran with, as the setting can change between pieces
+            heard["started"] = heard.get("started") or _now()
+            heard["sessions"] = int(heard.get("sessions") or 0) + 1
+            if self.threads() not in heard.setdefault("threads_used", []):
+                heard["threads_used"].append(self.threads())
 
             def piece(msg: dict) -> None:
                 heard["peak_mb"] = max(heard.get("peak_mb") or 0, int(msg.get("rss_mb") or 0))
@@ -622,19 +630,24 @@ class Transcripts:
         src = self.dir / f"{item_id}.match-in.json"
         dest = self.dir / f"{item_id}.match-out.json"
         src.write_text(json.dumps(lines, ensure_ascii=False))
+        matching = time.monotonic()
         try:
             self._child(["match", str(src), str(self.heard_file(item_id)), str(dest)], None, should_yield)
             result = json.loads(dest.read_text())
+            match_took = round(time.monotonic() - matching, 1)
         finally:
             src.unlink(missing_ok=True)
             dest.unlink(missing_ok=True)
         # A transcript that isn't this episode's (a link to another one) matches next to nothing
         aligned = result["found"] >= 0.3 and result["placed"] >= 0.5 * max(1, len(lines))
         timing = {"timeline": sound["timeline"], "sound_post": sound["post_id"], "duration": round(total, 1),
-                  "sound_size": sound["size"], "model": model, "threads": self.threads(), "took": heard["took"],
-                  "load": heard.get("load"), "peak_mb": heard["peak_mb"],
-                  "heard": len(heard["words"]), "found": result["found"], "placed": result["placed"],
-                  "unplaced": result["unplaced"], "at": _now(),
+                  "sound_size": sound["size"], "model": model, "threads": (heard.get("threads_used") or
+                                                                             [self.threads()])[-1],
+                  "threads_used": heard.get("threads_used") or [self.threads()], "took": heard["took"],
+                  "load": heard.get("load"), "peak_mb": heard["peak_mb"], "started": heard.get("started"),
+                  "sessions": heard.get("sessions") or 1, "match_took": match_took, "heard_now": heard_now,
+                  "heard": len(heard["words"]), "words": result.get("words"), "found": result["found"],
+                  "placed": result["placed"], "unplaced": result["unplaced"], "at": _now(),
                   "error": None if aligned else (f"only {round(result['found'] * 100)}% of the transcript's words "
                                                  "were heard, so it doesn't seem to be this episode's")}
         self._write(self.lines_file(item_id), {"version": VERSION, "document": stored.get("document"),
@@ -643,7 +656,18 @@ class Transcripts:
                                                [dict(l, start=None, end=None) for l in lines]})
         self.db.update("transcripts", "item_id", item_id, {"aligned": int(aligned), "timing": timing,
                                                            "updated_at": _now()})
+        self.record(primary, timing)
         return timing
+
+    def record(self, primary: dict, timing: dict) -> None:
+        """Keep this try in the record of every timing (Admin > Transcripts), beside the episode's latest."""
+        self.db.x("INSERT INTO transcript_runs (item_id, title, at, timing) VALUES (?, ?, ?, ?)",
+                  (primary["id"], primary.get("title"), timing.get("at"), json.dumps(timing)))
+
+    def runs(self, item_id: int | None = None) -> list[dict]:
+        if item_id is None:
+            return self.db.q("SELECT * FROM transcript_runs ORDER BY at DESC, id DESC")
+        return self.db.q("SELECT * FROM transcript_runs WHERE item_id=? ORDER BY at DESC, id DESC", (item_id,))
 
     # what needs doing
     def to_read(self, found: list) -> list:
@@ -736,6 +760,8 @@ class Transcripts:
                     log.info("the sound of %s changed while it was heard; it's heard again next time", primary["id"])
                 except Exception as e:
                     log.warning("timing the transcript of %s failed: %s", primary["id"], e)
+                    self.record(primary, {"error": str(e)[:300], "at": _now(), "model": self.model(),
+                                          "threads": self.threads()})
                     self.db.update("transcripts", "item_id", primary["id"], {
                         "timing": {"error": str(e)[:300], "at": _now()}, "updated_at": _now()})
         return done
@@ -767,6 +793,24 @@ class Transcripts:
                 "problem": self.db.setting("transcripts_problem") or None,
                 "failed": sum(1 for r in rows if (r["timing"] or {}).get("error")),
                 "last": dict(last["timing"], item_id=last["item_id"]) if last else None}
+
+
+def record_figures(timing: dict | None) -> dict:
+    """A try's figures as the records page shows them: what came of it, how fast it heard (the episode's length over
+    the time hearing took), and the share of lines placed."""
+    tm = dict(timing or {})
+    took, duration, placed, unplaced = tm.get("took"), tm.get("duration"), tm.get("placed"), tm.get("unplaced")
+    if not tm.get("at"):
+        result = "waiting"
+    elif tm.get("error"):
+        result = "mismatch" if tm.get("found") is not None else "error"
+    else:
+        result = "timed"
+    lines = (placed or 0) + (unplaced or 0)
+    used = tm.get("threads_used") or ([tm["threads"]] if tm.get("threads") else [])
+    return dict(tm, result=result, speed=round(duration / took, 2) if took and duration else None,
+                placed_share=(placed / lines) if placed is not None and lines else None,
+                threads_text=", ".join(str(n) for n in used))
 
 
 def _same_file(sound: dict) -> bool:

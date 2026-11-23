@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}Transcripts · Admin · JRWI archive{% endblock %}
+{% set result_names = {'timed': 'Timed', 'mismatch': "Not this episode's", 'error': "Couldn't be timed",
+  'waiting': 'Not timed yet', 'no_sound': 'No sound to hear'} %}
+{% macro pct(x) %}{% if x is number %}{{ (x * 100) | round(0) | int }}%{% endif %}{% endmacro %}
+{% macro sorth(key, label) -%}
+  <a href="?sort={{ key }}&amp;order={{ 'asc' if sort == key and order == 'desc' else 'desc' }}"
+     class="{{ 'on' if sort == key }}">{{ label }}{% if sort == key %} {{ '▾' if order == 'desc' else '▴' }}{% endif %}</a>
+{%- endmacro %}
+{% block content %}
+<a class="back" href="/admin">&lsaquo; Admin</a>
+<h1>Transcripts</h1>
+<p class="muted">Every episode with a transcript, and how its latest timing went. Each try is kept, also when an episode
+  is timed again: an episode's admin page lists them all, and the download has every one.</p>
+
+<div class="stats">
+  <div class="stat"><b>{{ totals.timed }} of {{ totals.episodes }}</b><span class="muted small">episodes timed</span></div>
+  <div class="stat"><b>{{ human_duration(totals.sound) or '0:00' }}</b><span class="muted small">of sound heard</span></div>
+  <div class="stat"><b>{{ human_duration(totals.took) or '0:00' }}</b><span class="muted small">spent hearing it</span></div>
+  <div class="stat"><b>{% if totals.speed %}{{ totals.speed }}×{% else %}–{% endif %}</b><span class="muted small">as fast as it plays</span></div>
+  <div class="stat"><b>{{ pct(totals.found) or '–' }}</b><span class="muted small">of words found, on average</span></div>
+  <div class="stat"><b>{{ pct(totals.placed) or '–' }}</b><span class="muted small">of lines placed</span></div>
+  <div class="stat"><b>{% if totals.peak %}{{ totals.peak }} MB{% else %}–{% endif %}</b><span class="muted small">most memory used</span></div>
+  <div class="stat"><b>{{ totals.tries }}</b><span class="muted small">tries recorded</span></div>
+</div>
+{% if totals.mismatch or totals.error or totals.waiting or totals.no_sound %}
+<p class="small">{% if totals.waiting %}{{ totals.waiting }} not timed yet. {% endif %}{% if totals.mismatch %}<span class="bad">{{ totals.mismatch }} whose transcript
+  doesn't seem to be theirs.</span> {% endif %}{% if totals.error %}<span class="bad">{{ totals.error }} that couldn't be timed.</span> {% endif %}{% if totals.no_sound %}{{ totals.no_sound }} with no archived audio or video to hear.{% endif %}</p>
+{% endif %}
+
+<details class="small explain">
+  <summary>What the figures mean</summary>
+  <p><b>Words found:</b> the share of the transcript's words found, in order, in what the speech model heard. The
+    lines' times rest on these, so it's how well the two agree; under 30% means the transcript isn't this episode's,
+    and it isn't timed. It doesn't check the times themselves: on test episodes with a known answer, 90% of lines
+    started within 0.7 seconds of it.</p>
+  <p><b>Lines placed:</b> lines that got a time from words of their own. The rest sit right after the line before
+    them, or, next to a long gap, show untimed.</p>
+  <p><b>Hearing:</b> how long hearing the episode took, added up over pauses, without loading the model.
+    <b>Speed</b> is the episode's length over that: 6× is an hour of sound in 10 minutes.</p>
+  <p><b>Memory:</b> the most the speech model's process used. <b>Threads</b> lists each number it ran with, when the
+    setting changed while it ran.</p>
+</details>
+
+<div class="scrollx">
+<table class="small records">
+  <tr><th>{{ sorth('title', 'Episode') }}</th><th>Result</th><th>{{ sorth('found', 'Words found') }}</th>
+    <th>{{ sorth('placed', 'Lines placed') }}</th><th>{{ sorth('duration', 'Length') }}</th>
+    <th>{{ sorth('took', 'Hearing') }}</th><th>{{ sorth('speed', 'Speed') }}</th><th>{{ sorth('peak', 'Memory') }}</th>
+    <th>Model, threads</th><th>{{ sorth('at', 'Timed') }}</th></tr>
+  {% for e in episodes %}
+  <tr>
+    <td><a href="/items/{{ e.item_id }}">{{ e.title }}</a>
+      <div class="muted">{% if e.show %}{{ e.show }} · {% endif %}{{ e.lines }} lines{% if e.tries %} ·
+        <a class="muted" href="/admin/items/{{ e.item_id }}#transcripts">{{ e.tries }} tr{{ 'y' if e.tries == 1 else 'ies' }}</a>{% endif %}</div></td>
+    <td class="{{ 'ok' if e.result == 'timed' else 'bad' if e.result in ('mismatch', 'error') else 'muted' }}"
+        {% if e.error %}title="{{ e.error }}"{% endif %}>{{ result_names[e.result] }}</td>
+    <td>{{ pct(e.found) }}</td>
+    <td>{% if e.placed is number %}{{ e.placed }} of {{ e.placed + (e.unplaced or 0) }}<div class="muted">{{ pct(e.placed_share) }}</div>{% endif %}</td>
+    <td>{{ human_duration(e.duration) }}</td>
+    <td>{{ human_duration(e.took) }}{% if e.load %}<div class="muted">+{{ e.load | round(0) | int }} s loading</div>{% endif %}</td>
+    <td>{% if e.speed %}{{ e.speed }}×{% endif %}</td>
+    <td>{% if e.peak_mb %}{{ e.peak_mb }} MB{% endif %}</td>
+    <td>{% if e.model %}{{ e.model }}{% if e.threads_text %}<div class="muted">{{ e.threads_text }} thread{{ '' if e.threads_text == '1' else 's' }}</div>{% endif %}{% endif %}</td>
+    <td>{% if e.at %}<span data-when-at="{{ e.at }}">{{ e.at[:16] | replace('T', ' ') }}</span>{% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="10" class="muted">No transcripts read yet.</td></tr>{% endfor %}
+</table>
+</div>
+{% if totals.tries %}<p class="small"><a href="/admin/transcripts.csv" download>{{ icon('download') }} Every try as a spreadsheet (CSV)</a></p>{% endif %}
+{% endblock %}

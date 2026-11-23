@@ -1287,7 +1287,28 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         assert "data-transcript" in web.get("/items/298").text
         admin = web.get("/admin").text
         assert "Time one episode now" in admin and "Time transcripts now" in admin and "lines placed" in admin
-        assert "data-bg-box" in admin and 'data-had="0"' in admin
+        assert "data-bg-box" in admin and 'data-had="0"' in admin and 'href="/admin/transcripts"' in admin
+        # The record of every try: the page, each episode's tries, and the download
+        tries = db.q("SELECT * FROM transcript_runs WHERE item_id=300")
+        assert len(tries) == 1 and tries[0]["timing"]["placed"] == 5 and tries[0]["timing"]["sessions"] == 1
+        # (it was heard in the try the changed file cut short, which isn't recorded, so this one only matched)
+        assert tries[0]["timing"]["heard_now"] is False and tries[0]["timing"]["threads_used"]
+        assert tries[0]["timing"]["words"] > 0 and tries[0]["timing"]["match_took"] is not None
+        scheduler._transcripts(one=300)   # Time it again, with nothing changed: only matched again
+        assert len(db.q("SELECT * FROM transcript_runs WHERE item_id=300")) == 2
+        records = web.get("/admin/transcripts?sort=found").text
+        assert "Through the Fire | Riptide #136" in records and "Timed" in records and "5 of 5" in records
+        assert "2 tries" in records and "1 of" in records   # 1 of N episodes timed
+        # An episode whose transcript is read but not timed is listed too, under the timed ones
+        db.upsert("transcripts", "item_id", {"item_id": other, "document": "x.pdf", "doc_size": 1, "lines": 9,
+                                             "aligned": 0, "timing": {}, "updated_at": "x"})
+        records = web.get("/admin/transcripts").text
+        assert "No sound to hear" in records or "Not timed yet" in records
+        db.x("DELETE FROM transcripts WHERE item_id=?", (other,))
+        assert "Every try (2)" in web.get("/admin/items/298").text and "matched again" in web.get("/admin/items/300").text
+        csv_text = web.get("/admin/transcripts.csv").text.splitlines()
+        assert csv_text[0].startswith("item_id,title,at,result") and len(csv_text) == 3
+        assert ",timed," in csv_text[1] and ",False," in csv_text[1]   # the newest first: matched again
         # While it runs, the top of the admin page has its own bar: the episode's progress, the batch's count
         scheduler.bg.begin("transcripts", total=3, phase="Timing transcripts", running=True)
         scheduler.bg.set(done=1, current=0.42, detail="Paid In Blood · hearing, 42%, about 16 min left")
