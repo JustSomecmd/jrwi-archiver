@@ -313,23 +313,26 @@ audio { width: 100%; }
 .comments { margin-top: 2.5rem; }
 .comments > h2 { font-size: 1.4rem; margin-bottom: 1rem; }
 /* Comments, laid out like the site's */
-.comment { display: flex; gap: .9rem; padding: .9rem 0; }
-.comment .av { width: 48px; height: 48px; border-radius: 50%; background: #2a2c37 center/cover; flex: none; }
-.comment .av.initial { display: grid; place-items: center; font-weight: 700; font-size: 1.3rem; color: #fff; }
+.comment { display: flex; gap: .75rem; padding: .75rem 0; }
+.comment .av { width: 40px; height: 40px; border-radius: 50%; background: #2a2c37 center/cover; flex: none; }
+.comment .av.initial { display: grid; place-items: center; font-weight: 700; font-size: 1.1rem; color: #fff; }
 .cmain { flex: 1; min-width: 0; }
-.chead { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-height: 1.6rem; }
-.comment .who { font-weight: 700; color: var(--text); font-size: 1.02rem; }
-.comment .when { color: var(--muted); font-size: .88rem; margin-left: auto; }
-.cmenu { color: var(--muted); font-size: .9rem; letter-spacing: .08em; padding: 0 .1rem; }
+/* The name and badges wrap within the left part, so a long name can't push the date and menu down a line */
+.chead { display: flex; align-items: flex-start; gap: .5rem; }
+.cwho { flex: 1; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .4rem; min-height: 1.5rem; }
+.cside { flex: none; display: flex; align-items: center; gap: .45rem; height: 1.5rem; white-space: nowrap; }
+.comment .who { font-weight: 700; color: var(--text); font-size: .95rem; min-width: 0; overflow-wrap: anywhere; }
+.comment .when { color: var(--muted); font-size: .8rem; }
+.cmenu { color: var(--muted); font-size: .85rem; letter-spacing: .08em; padding: 0 .1rem; }
 .cmenu:hover { color: var(--text); text-decoration: none; }
-.comment .rich { margin-top: .3rem; color: var(--body-text); }
+.comment .rich { margin-top: .25rem; color: var(--body-text); font-size: .93rem; }
 .comment .rich p { margin: 0 0 .4rem; }
-.crich.clamp { max-height: 7.4rem; overflow: hidden; position: relative; }
+.crich.clamp { max-height: 6.9rem; overflow: hidden; position: relative; }
 .comments .clamp::after { background: linear-gradient(transparent, var(--bg)); }
-.comment .more-link { font-size: .95rem; margin: .1rem 0 .2rem; }
-.comment .cfoot { display: flex; gap: 1.3rem; color: var(--muted); font-size: .95rem; align-items: center; margin-top: .35rem; }
+.comment .more-link { font-size: .88rem; margin: .1rem 0 .2rem; }
+.comment .cfoot { display: flex; gap: 1.2rem; color: var(--muted); font-size: .88rem; align-items: center; margin-top: .3rem; }
 .comment .cfoot > span { display: inline-flex; align-items: center; gap: .4rem; }
-.comment .cfoot .icon { width: 1.2rem; height: 1.2rem; }
+.comment .cfoot .icon { width: 1.05rem; height: 1.05rem; }
 .cfold > summary { cursor: pointer; list-style: none; width: max-content; }
 .cfold > summary:hover { color: var(--text); }
 .cfold[open] .loadr, .cfold:not([open]) .hider { display: none; }
@@ -339,13 +342,13 @@ audio { width: 100%; }
 .sortdd .dd-menu { left: 0; transform: none; min-width: 180px; }
 .comments-head .sortdd .dd-menu { left: auto; right: 0; }
 .comment .replies { margin-top: .4rem; }
-.comment .replies .comment { padding: .6rem 0 0; }
-.comment .replies .av { width: 36px; height: 36px; font-size: 1rem; }
+.comment .replies .comment { padding: .55rem 0 0; }
+.comment .replies .av { width: 30px; height: 30px; font-size: .9rem; }
 .mbadge { display: inline-flex; align-items: center; gap: .3rem; padding: .08rem .55rem; border: 1px solid var(--line);
-  border-radius: 6px; font-size: .82rem; color: var(--body-text); line-height: 1.4; }
-.mbadge img { height: 1rem; width: auto; }
+  border-radius: 6px; font-size: .76rem; color: var(--body-text); line-height: 1.4; }
+.mbadge img { height: .9rem; width: auto; }
 .mbadge.pin { background: var(--pill); border-color: var(--pill); color: var(--pill-text); }
-.tierbadge { height: 1.05rem; width: auto; }
+.tierbadge { height: .95rem; width: auto; }
 
 /* ------------------------------------------------------------------ show page */
 .hero { position: relative; margin: -2rem 0 2.5rem; background: #0b0c14 center/cover no-repeat; min-height: 320px;

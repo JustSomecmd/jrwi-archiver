@@ -81,7 +81,7 @@ The address holds a key that's yours, so it's never shown again once saved, and 
 
 ### Transcripts
 
-Many episodes link a transcript: a Google Doc, saved as a PDF, with each speaker's name in bold on a line of its own and no times. The archiver reads it into lines, and a **Transcript** button under the episode's player shows them, with the line being spoken lit up as it plays; clicking a line plays from there. The apps get the same lines from the API.
+Many episodes link a transcript: a Google Doc, saved as a PDF, with each speaker's name in bold on a line of its own and no times. The archiver reads it into lines, and a **Transcript** button under the episode's player shows them, with the line being spoken lit up as it plays; clicking a line plays from there. That works on every version's page: the archived video, the audio, and the YouTube version, whose player the page asks where it is (through the messages YouTube's own player API uses, which YouTube doesn't document). The apps get the same lines from the API.
 
 To time the lines, the archiver hears the episode once with a speech recognizer ([faster-whisper](https://github.com/SYSTRAN/faster-whisper), on the processor) and matches the transcript's words to the words it heard. Mishearing some words doesn't matter much, as a line only needs a few of its words found; a line none of whose words were heard goes right after the line before it, or is shown without a time next to a long pause. A transcript that turns out to be another episode's (under 30% of its words heard) isn't timed.
 

@@ -1299,6 +1299,16 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
             scheduler.bg.set(running=False, step="idle", phase="idle", detail="", done=0, total=0, current=None)
         assert "only when you start it" in admin
         assert "Time it again" in web.get("/admin/items/298").text
+        # A YouTube version's page has the transcript too, following the YouTube player
+        ser = scheduler.ser
+        yt = next(r for r in db.q("SELECT * FROM posts")
+                  if (ser.post_full(r).get("video") or {}).get("youtube_id") and not ser.post_full(r).get("audio"))
+        yt_primary = ser.primary_of(yt["id"]) or yt
+        if yt_primary["id"] != 300:
+            db.upsert("transcripts", "item_id", {"item_id": yt_primary["id"], "document": "x.pdf", "doc_size": 1, "lines": 1,
+                                                 "aligned": 0, "timing": {}, "updated_at": "x"})
+        page = web.get(f"/items/{yt['id']}").text
+        assert "data-transcript-toggle" in page and "enablejsapi=1" in page and f'data-yt-post="{yt["id"]}"' in page
         settings = web.get("/admin/settings").text
         assert 'name="transcript_model"' in settings and 'name="transcripts_when"' in settings
         # The schedule: hours are kept only when they're times of day

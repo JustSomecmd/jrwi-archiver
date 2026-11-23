@@ -464,6 +464,47 @@ document.querySelectorAll("select[data-autosubmit]").forEach((s) => s.addEventLi
 // timeline of the post whose player shows, so the video and the audio each get their own.
 const tBox = document.querySelector("[data-transcript]");
 const tToggle = document.querySelector("[data-transcript-toggle]");
+// A YouTube player in the page, as a stand-in for a <video>: it reports where it is when asked to (the messages
+// YouTube's own iframe API uses), and takes seekTo and playVideo the same way
+const ytFrame = document.querySelector("iframe[data-yt-post]");
+const yt = ytFrame && {
+  dataset: { progress: ytFrame.dataset.ytPost },
+  currentTime: 0,
+  heard: false,
+  listeners: new Set(),
+  send(msg) { if (ytFrame.contentWindow) ytFrame.contentWindow.postMessage(JSON.stringify(msg), "*"); },
+  addEventListener(ev, f) { if (ev === "timeupdate") this.listeners.add(f); },
+  removeEventListener(ev, f) { this.listeners.delete(f); },
+  seek(t) {
+    this.send({ event: "command", func: "seekTo", args: [t, true] });
+    this.send({ event: "command", func: "playVideo", args: [] });
+    this.currentTime = t;
+  },
+};
+if (yt) {
+  window.addEventListener("message", (e) => {
+    if (e.source !== ytFrame.contentWindow) return;
+    let d;
+    try {
+      if (!/(^|\.)youtube(-nocookie)?\.com$/.test(new URL(e.origin).hostname)) return;
+      d = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
+    } catch (err) { return; }
+    yt.heard = true;
+    if (d && d.info && typeof d.info.currentTime === "number") {
+      yt.currentTime = d.info.currentTime;
+      yt.listeners.forEach((f) => f());
+    }
+  });
+  // Ask it to report, until it does (it may still be loading)
+  let tries = 0;
+  const listen = () => {
+    if (yt.heard || tries++ > 60) return;
+    yt.send({ event: "listening", id: 1, channel: "widget" });
+    setTimeout(listen, 1000);
+  };
+  ytFrame.addEventListener("load", () => { tries = 0; yt.heard = false; listen(); });
+  listen();
+}
 if (tBox && tToggle) {
   const linesEl = tBox.querySelector("[data-tlines]");
   const noteEl = tBox.querySelector("[data-tnote]");
@@ -472,8 +513,12 @@ if (tBox && tToggle) {
   let shown = null, media = null, starts = [], rows = [], current = -1, follow = true;
   const activeMedia = () => {
     const panes = [...document.querySelectorAll("[data-pane]")].filter((p) => !p.hidden);
-    for (const p of panes) { const m = p.querySelector("[data-progress]"); if (m) return m; }
-    return document.querySelector("audio[data-progress], video[data-progress]");
+    for (const p of panes) {
+      const m = p.querySelector("[data-progress]");
+      if (m) return m;
+      if (yt && p.contains(ytFrame)) return yt;
+    }
+    return document.querySelector("audio[data-progress], video[data-progress]") || yt;
   };
   const render = (data) => {
     linesEl.textContent = "";
@@ -547,8 +592,8 @@ if (tBox && tToggle) {
   linesEl.addEventListener("click", (e) => {
     const row = e.target.closest(".tl[data-start]");
     if (!row || !media) return;
-    media.currentTime = Number(row.dataset.start);
-    media.play().catch(() => {});
+    if (media === yt) yt.seek(Number(row.dataset.start));
+    else { media.currentTime = Number(row.dataset.start); media.play().catch(() => {}); }
     follow = true; followBtn.hidden = true;
   });
   // Scrolling the lines yourself stops them following along, until asked to again
