@@ -1167,14 +1167,15 @@ class Transcripts:
         return done
 
     # for the API
-    def lines_for(self, item_id: int, timeline: str | None, offset: float) -> dict | None:
-        """The lines, with times moved to the timeline asked for (audio = video + offset, as sync says)."""
+    def lines_for(self, item_id: int, timeline: str | None, offset: float, plus: float = 0.0) -> dict | None:
+        """The lines, with times moved to the timeline asked for (audio = video + offset, as sync says), and then by
+        plus seconds (to a YouTube upload's own timeline, say: see youtube_upload_shift)."""
         stored = self._load(self.lines_file(item_id))
         if not stored:
             return None
-        shift = 0.0
+        shift = plus
         if stored.get("aligned") and timeline and stored.get("timeline") and timeline != stored["timeline"]:
-            shift = -offset if stored["timeline"] == "audio" else offset
+            shift += -offset if stored["timeline"] == "audio" else offset
         lines = []
         for l in stored["lines"]:
             s, e = l.get("start"), l.get("end")
@@ -1214,6 +1215,32 @@ def compare_lines(a: list[dict], b: list[dict]) -> dict:
     return {"both": len(diffs), "median": at(0.5), "p90": at(0.9),
             "within_1s": round(sum(1 for d in diffs if d <= 1.0) / len(diffs), 3) if diffs else None,
             "only_this": only_a, "only_other": only_b}
+
+
+def youtube_upload_shift(post_id: int, members: list[dict]) -> float | None:
+    """For the YouTube post of an episode whose archived video is kept: how much later the same moment is in it than
+    in the archived video, as measured through TubeArchivist's copy (handover.youtube_shift), or None when that isn't
+    known (yet). Its transcript lines are then the archived video's moved by this much (0.14.8, contract v0.27)."""
+    for m in members:
+        h = m.get("handover") or {}
+        if h.get("youtube_post") == post_id and h.get("status") != "done" and h.get("yt_shift_checked") \
+                and h.get("yt_shift") is not None:
+            return float(h["yt_shift"])
+    return None
+
+
+def handed_over_shift(timing: dict | None, members: list[dict], video: dict | None) -> float:
+    """Lines heard from an archived video that has since been handed over to TubeArchivist are in that video's
+    timeline; the YouTube video now in its place is later by the gap the hand-over measured. 0 otherwise. Until
+    the episode is heard again from the YouTube video (its sound changed, so it's timed again)."""
+    sound_post = (timing or {}).get("sound_post")
+    if not sound_post or (timing or {}).get("timeline") != "video" or (video and video.get("post_id") == sound_post):
+        return 0.0
+    for m in members:
+        h = m.get("handover") or {}
+        if m["id"] == sound_post and h.get("status") == "done" and h.get("shift_checked"):
+            return float(h.get("shift") or 0.0)
+    return 0.0
 
 
 def record_figures(timing: dict | None) -> dict:

@@ -19,6 +19,9 @@ What's recorded on the post with the archived video (posts.handover):
   youtube_id, youtube_post, youtube_url, checked_at, archived_duration, ta_duration, and for "done": at, shift,
   shift_checked, freed (bytes)
   force: True when the user asked to delete it anyway
+  yt_shift, yt_shift_checked, yt_shift_for, yt_shift_at (0.14.8): while the archived video is kept, how much later the
+          same moment is in TubeArchivist's copy (youtube = archived + yt_shift), measured once per copy, so the
+          YouTube post's transcript lines can be given in its own timeline. yt_shift is None when it couldn't be told.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from .tubearchivist import TaError, TubeArchivist
 log = logging.getLogger(__name__)
 
 TOLERANCE = 10.0   # seconds the two lengths may differ by and still count as the same video
+MEASURE_PER_RUN = 10   # gaps measured for kept archived videos per check (each reads about ten minutes of both)
 STATUSES = {
     "waiting": "Waiting for TubeArchivist to download the YouTube version.",
     "differs": "TubeArchivist has the YouTube version, but its length differs, so the archived video is kept.",
@@ -86,6 +90,7 @@ def run(db: Db, paths: Paths, settings: dict, status=None, stop_event=None) -> d
     found = candidates(db, paths)
     if found and status:
         status.begin("tubearchivist", total=len(found))
+    measured = 0
     for n, c in enumerate(found):
         if stop_event is not None and stop_event.is_set():
             break
@@ -93,6 +98,16 @@ def run(db: Db, paths: Paths, settings: dict, status=None, stop_event=None) -> d
         if status:
             status.set(done=n, detail=f"{post['title'] or ''} · does TubeArchivist have it yet?")
         if h.get("status") == "keep":
+            # Kept for good: only the gap to TubeArchivist's copy is measured, once, for the YouTube post's transcript
+            if ta.configured and "yt_shift_for" not in h and measured < MEASURE_PER_RUN:
+                try:
+                    video = ta.video(c["youtube_id"])
+                except TaError as e:
+                    log.warning("TubeArchivist: %s", e)
+                    video = None
+                if video is not None:
+                    youtube_shift(db, paths, ta, c, video, h)
+                    measured += 1
             counts["keep"] = counts.get("keep", 0) + 1
             continue
         base = dict(youtube_id=c["youtube_id"], youtube_post=c["yt_post"]["id"], youtube_url=c["youtube_url"],
@@ -117,6 +132,10 @@ def run(db: Db, paths: Paths, settings: dict, status=None, stop_event=None) -> d
         theirs = TubeArchivist.duration(video)
         same = ours is not None and theirs is not None and abs(ours - theirs) <= TOLERANCE
         base.update(archived_duration=ours, ta_duration=theirs, note=None)
+        keeps = (not same and not h.get("force")) or (not settings.get("handover", True) and not h.get("force"))
+        if keeps and measured < MEASURE_PER_RUN and h.get("yt_shift_for") != shift_key(c, video, v):
+            h = youtube_shift(db, paths, ta, c, video, h)
+            measured += 1
         if not same and not h.get("force"):
             remember(db, post["id"], h, status="differs", **base)
             counts["differs"] = counts.get("differs", 0) + 1
@@ -128,6 +147,34 @@ def run(db: Db, paths: Paths, settings: dict, status=None, stop_event=None) -> d
         hand_over(db, paths, ta, c, video, ours, theirs, base)
         counts["done"] = counts.get("done", 0) + 1
     return counts
+
+
+def shift_key(c: dict, video: dict, v: dict) -> dict:
+    """What a measured gap belongs to: the YouTube video, TubeArchivist's copy of it and the archived file."""
+    return {"youtube_id": c["youtube_id"], "ta_duration": TubeArchivist.duration(video), "file_size": v.get("size")}
+
+
+def youtube_shift(db: Db, paths: Paths, ta: TubeArchivist, c: dict, video: dict, h: dict) -> dict:
+    """While the archived video is kept, how much later the same moment is in TubeArchivist's copy of the YouTube
+    version (youtube = archived + yt_shift), lined up as the hand-over does, so the YouTube post's transcript can be
+    given in its own timeline (the Tubedroid chat's suggestion 13, 0.14.8). A copy that can't be lined up with
+    confidence is remembered as such (yt_shift None) and not measured again; one that couldn't be read is tried again
+    at the next check. Returns the handover record."""
+    post = c["post"]
+    v = post["media"]["video"]
+    url = ta.file_url(video)
+    if not url:
+        return h
+    ours = v.get("duration") or probe_duration(paths.media / v["path"])
+    try:
+        r = find_offset(paths.media / v["path"], url, ours, TubeArchivist.duration(video), audio_headers=ta.headers)
+    except Exception as e:
+        log.warning("couldn't line up %s with TubeArchivist's copy: %s", post["id"], type(e).__name__)
+        return h
+    log.info("the YouTube version of %s is %s", post["id"],
+             f"{r['offset']:+.2f} s from the archived video" if r["checked"] else "not clearly lined up with it")
+    return remember(db, post["id"], h, yt_shift=round(float(r["offset"]), 2) if r["checked"] else None,
+                    yt_shift_checked=bool(r["checked"]), yt_shift_for=shift_key(c, video, v), yt_shift_at=now())
 
 
 def hand_over(db: Db, paths: Paths, ta: TubeArchivist, c: dict, video: dict, ours: float | None,

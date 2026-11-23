@@ -660,10 +660,19 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         timeline = progress._timeline(post_id, video, audio, members) or \
             progress._timeline(primary["id"], video, audio, members) or ("video" if video else "audio")
         sync = ser.sync_of(primary, video, audio)
-        out = transcripts.lines_for(primary["id"], timeline, sync["offset"] if sync else 0.0)
+        # Which timeline the lines are in (v0.27): the audio's, the item's video's, or a YouTube upload's own when
+        # the item's archived video is kept and the gap between the two has been measured
+        plus, label = 0.0, timeline
+        upload = transcripts_mod.youtube_upload_shift(post_id, members)
+        if upload is not None:
+            timeline, plus, label = "video", upload, "youtube"
+        if timeline == "video":
+            plus += transcripts_mod.handed_over_shift((transcripts.row(primary["id"]) or {}).get("timing"), members,
+                                                      video)
+        out = transcripts.lines_for(primary["id"], timeline, sync["offset"] if sync else 0.0, plus)
         if out is None:
             raise HTTPException(404, "no transcript")
-        return JSONResponse({"post_id": post_id, "aligned": out["aligned"],
+        return JSONResponse({"post_id": post_id, "aligned": out["aligned"], "timeline": label,
                              "document": files_url(out["document"]) if out["document"] else None,
                              "lines": out["lines"]}, headers={"Cache-Control": "no-store"})
 

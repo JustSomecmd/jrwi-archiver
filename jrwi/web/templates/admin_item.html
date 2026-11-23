@@ -50,6 +50,7 @@
       TubeArchivist {{ human_duration(h.ta_duration) }}{% endif %}</td></tr>{% endif %}
     {% if h.status == 'done' %}<tr><th>Deleted</th><td>{{ h.at }}{% if h.freed %}, {{ human_size(h.freed) }} freed{% endif %}.
       {% if h.shift_checked %}The YouTube video runs {{ '%.1f' | format(h.shift | abs) }} s {{ 'later' if h.shift > 0 else 'earlier' }}; saved positions were moved to match.{% else %}They were taken to line up.{% endif %}</td></tr>{% endif %}
+    {% if h.status != 'done' and h.yt_shift_for %}<tr><th>YouTube's timing</th><td>{% if h.yt_shift_checked and h.yt_shift is not none %}The YouTube video runs {{ '%.1f' | format(h.yt_shift | abs) }} s {{ 'later' if h.yt_shift > 0 else 'earlier' }} than the archived one; its transcript is moved to match.{% else %}It couldn't be lined up with the archived video, so its transcript follows the archived video's timing.{% endif %}</td></tr>{% endif %}
     {% if h.note %}<tr><th>Note</th><td>{{ h.note }}</td></tr>{% endif %}
     {% if h.checked_at %}<tr><th>Last looked</th><td>{{ h.checked_at }}</td></tr>{% endif %}
   </table>

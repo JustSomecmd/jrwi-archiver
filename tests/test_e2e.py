@@ -899,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.26" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.27" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1130,6 +1130,34 @@ def test_video_handed_over_to_tubearchivist(app, client):
                                       "recheck_days": "60", "video": "on", "audio": "on", "images": "on",
                                       "attachments": "on", "comments": "on", "public_pages": "on"})
     assert "turned the API token down" in web.post("/admin/test-ta").text
+    # Connected, with deleting turned off: the archived video is kept, and the gap to TubeArchivist's copy (3 s) is
+    # measured once, so the YouTube post's transcript comes in its own timeline (0.14.8, the Tubedroid chat's
+    # suggestion 13); the archived post's stays in the archived video's
+    import jrwi.transcripts as tr
+    web.post("/admin/settings", data={"ta_url": f"http://127.0.0.1:{PORT}/ta", "ta_token": "ta-test-token",
+                                      "recheck_days": "60", "video": "on", "audio": "on", "images": "on",
+                                      "attachments": "on", "comments": "on", "public_pages": "on"})
+    assert archiver.run_check()["result"] == "ok"
+    h = db.post(297)["handover"]
+    assert h["status"] == "ready" and old_file.is_file() and h["yt_shift_checked"], h
+    assert abs(h["yt_shift"] - 3.0) < 0.1 and h["yt_shift_for"]["youtube_id"] == "JRWI136ytAA"
+    measured_at = h["yt_shift_at"]
+    tx = app.state.scheduler.transcripts
+    tx.dir.mkdir(parents=True, exist_ok=True)
+    tx._write(tx.lines_file(297), {"version": tr.VERSION, "document": {"path": "x.pdf", "size": 1}, "aligned": True,
+                                   "timeline": "video", "lines": [{"speaker": "Grizzly", "text": "Ahoy.",
+                                                                   "start": 10.0, "end": 12.0}]})
+    db.upsert("transcripts", "item_id", {
+        "item_id": 297, "document": "x.pdf", "doc_size": 1, "lines": 1, "aligned": 1, "updated_at": "x",
+        "timing": {"at": "2026-11-23T00:00:00+00:00", "found": 0.9, "sound_post": 297, "timeline": "video",
+                   "model": "large-v3-turbo"}})
+    yt = client.get("/api/transcript/295").json()
+    assert yt["timeline"] == "youtube" and abs(yt["lines"][0]["start"] - (10.0 + h["yt_shift"])) < 0.01, yt
+    own = client.get("/api/transcript/297").json()
+    assert own["timeline"] == "video" and own["lines"][0]["start"] == 10.0
+    assert archiver.run_check()["result"] == "ok"            # not measured again for the same copy
+    assert db.post(297)["handover"]["yt_shift_at"] == measured_at
+    assert "its transcript is moved to match" in web.get("/admin/items/297").text
     web.post("/admin/settings", data={"ta_url": f"http://127.0.0.1:{PORT}/ta", "ta_token": "ta-test-token",
                                       "handover": "on", "recheck_days": "60", "video": "on", "audio": "on",
                                       "images": "on", "attachments": "on", "comments": "on", "public_pages": "on"})
@@ -1152,6 +1180,12 @@ def test_video_handed_over_to_tubearchivist(app, client):
     assert client.get("/api/video/297").status_code == 404
     assert any(e["type"] == "video_handed_over" and e["post_id"] == 297 for e in client.get("/api/events").json())
     assert "watch the YouTube version" in web.get("/items/297").text
+    # The transcript heard from the deleted video is moved by the gap measured at the hand-over, until the episode is
+    # heard again from the YouTube video
+    after = client.get("/api/transcript/295").json()
+    assert after["timeline"] == "video" and abs(after["lines"][0]["start"] - (10.0 + h["shift"])) < 0.01, after
+    tx.lines_file(297).unlink()
+    db.x("DELETE FROM transcripts WHERE item_id=297")
     assert "TubeArchivist has the same video from YouTube" in web.get("/admin/items/295").text
     # A different length: both are kept until the user says otherwise
     h = db.post(287)["handover"]
