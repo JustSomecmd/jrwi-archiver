@@ -684,10 +684,11 @@ class Transcripts:
         self.db.update("transcripts", "item_id", primary["id"], {"aligned": int(aligned), "timing": timing,
                                                                  "updated_at": _now()})
 
-    # hearing on another computer (contract v0.24)
-    def job(self, primary: dict, members: list[dict]) -> dict | None:
+    # hearing on another computer (contract v0.24, every episode since v0.25)
+    def job(self, primary: dict, members: list[dict], runs: list[dict] | None = None) -> dict | None:
         """What another computer needs to hear this episode as the archiver would: where its sound is, how to hear
-        it, and the speakers' names to listen for. None without read lines or sound."""
+        it, and the speakers' names to listen for, with which models have heard it already. None without read
+        lines or sound."""
         stored = self._load(self.lines_file(primary["id"])) or {}
         lines = stored.get("lines") or []
         sound = self.sound(members)
@@ -699,24 +700,46 @@ class Transcripts:
             duration = probe_duration(Path(sound["path"]))
         names = sorted({l["speaker"] for l in lines if l.get("speaker")})[:40]
         row = self.row(primary["id"]) or {}
+        timing = row.get("timing") or {}
+        current = timing if timing.get("at") and timing.get("sound_size") == sound["size"] else {}
         part = sound["timeline"]
         return {"item_id": primary["id"], "title": primary.get("title"), "lines": len(lines),
                 "timed": bool(row.get("aligned")),
+                "timed_with": current.get("model") if current.get("found") is not None else None,
+                "found": current.get("found"), "source": current.get("source") if current else None,
+                "heard_with": self.heard_with(primary["id"], sound["size"], runs),
                 "sound": {"post_id": sound["post_id"], "timeline": part, "size": sound["size"],
                           "duration": round(float(duration), 1) if duration else None,
                           "url": f"/api/{part}/{sound['post_id']}", "name": Path(sound["path"]).name},
                 "hotwords": " ".join(names)[:400] or None, "hearing": dict(HEARING), "archiver": VERSION}
 
-    def jobs(self, ser, limit: int = 20) -> list[dict]:
-        """Episodes not timed yet, newest first, as jobs."""
-        out = []
-        for primary, members, _ in self.to_time(self.items(ser)):
-            j = self.job(primary, members)
+    def heard_with(self, item_id: int, size: int, runs: list[dict] | None = None) -> list[str]:
+        """The models that have heard this sound to the end and been matched, here or on another computer."""
+        if runs is None:
+            runs = [r["timing"] for r in self.runs(item_id)]
+        return sorted({t["model"] for t in runs if t and t.get("model") and t.get("found") is not None
+                       and t.get("sound_size", size) == size})
+
+    def jobs(self, ser, limit: int | None = 20, every: bool = False) -> dict:
+        """Episodes as jobs, newest first: those not timed yet, or with every, every episode whose transcript has
+        been read and that has sound, timed or not. left_out says which episodes with a transcript can't be
+        jobs, and why."""
+        found = self.items(ser)
+        runs: dict[int, list] = {}
+        for r in self.db.q("SELECT item_id, timing FROM transcript_runs"):
+            runs.setdefault(r["item_id"], []).append(r["timing"])
+        out, left_out = [], []
+        for primary, members, _ in (found if every else self.to_time(found)):
+            if limit is not None and len(out) >= limit:
+                break
+            j = self.job(primary, members, runs.get(primary["id"], []))
             if j:
                 out.append(j)
-            if len(out) >= limit:
-                break
-        return out
+            elif every:
+                why = ("it has no archived audio or video to hear" if not self.sound(members) else
+                       "its transcript hasn't been read into lines yet (Settings > Transcripts > Read transcripts)")
+                left_out.append({"item_id": primary["id"], "title": primary.get("title"), "why": why})
+        return {"jobs": out, "left_out": left_out, "episodes": len(found)}
 
     def import_heard(self, primary: dict, members: list[dict], payload: dict) -> dict:
         """Time an episode with words heard on another computer: each result (one per model) is matched as the
@@ -781,20 +804,39 @@ class Transcripts:
                 c = compare_lines(base["result"]["lines"], other["result"]["lines"])
                 other["timing"]["compare"] = dict(c, model=base["timing"]["model"])
                 base["timing"].setdefault("compare", dict(c, model=other["timing"]["model"]))
+        # The timing in use now, if it was made from this same sound: each try is compared with it too, and it stays
+        # in use when it found more of the transcript's words than the best of these (v0.25)
+        row = self.row(item_id) or {}
+        current = row.get("timing") or {}
+        if not (current.get("at") and current.get("found") is not None and current.get("sound_size") == sound["size"]):
+            current = {}
+        before = None
+        if current:
+            before = {"model": current.get("model"), "source": current.get("source") or "server",
+                      "found": current["found"], "at": current.get("at")}
+            if row.get("aligned") and stored.get("aligned"):
+                for x in tries:
+                    c = compare_lines(stored.get("lines") or [], x["result"]["lines"])
+                    x["timing"]["compare_in_use"] = dict(c, model=current.get("model"), source=before["source"])
         best = max(tries, key=lambda x: (x["aligned"], x["result"]["found"]))
-        best["timing"]["used"] = True
-        self._store(primary, stored, lines, sound, best["result"], best["aligned"], best["timing"])
-        # What was heard, as if heard here, so Time it again only matches again (with the same model)
-        self._write(self.heard_file(item_id), {
-            "key": {"path": sound["path"], "size": sound["size"], "model": best["timing"]["model"]},
-            "until": best["timing"]["duration"] or 0.0, "words": best["words"], "took": best["timing"]["took"] or 0.0,
-            "peak_mb": best["timing"]["peak_mb"] or 0, "load": best["timing"]["load"], "sessions": 1,
-            "threads_used": best["timing"]["threads_used"]})
+        replaced = not current or (best["aligned"], best["result"]["found"]) >= (bool(row.get("aligned")),
+                                                                               current["found"])
+        if replaced:
+            best["timing"]["used"] = True
+            self._store(primary, stored, lines, sound, best["result"], best["aligned"], best["timing"])
+            # What was heard, as if heard here, so Time it again only matches again (with the same model)
+            self._write(self.heard_file(item_id), {
+                "key": {"path": sound["path"], "size": sound["size"], "model": best["timing"]["model"]},
+                "until": best["timing"]["duration"] or 0.0, "words": best["words"],
+                "took": best["timing"]["took"] or 0.0, "peak_mb": best["timing"]["peak_mb"] or 0,
+                "load": best["timing"]["load"], "sessions": 1, "threads_used": best["timing"]["threads_used"]})
         for x in tries:
             self.record(primary, x["timing"])
-        return {"item_id": item_id, "used": best["timing"]["model"],
+        return {"item_id": item_id, "used": best["timing"]["model"] if replaced else (before["model"] or "?"),
+                "replaced": replaced, "before": before,
                 "tries": [{k: x["timing"].get(k) for k in ("model", "device", "found", "placed", "unplaced", "took",
-                                                            "load", "duration", "peak_mb", "error", "compare", "used")}
+                                                            "load", "duration", "peak_mb", "error", "compare",
+                                                            "compare_in_use", "used")}
                           | {"speed": record_figures(x["timing"])["speed"]} for x in tries]}
 
     def record(self, primary: dict, timing: dict) -> None:

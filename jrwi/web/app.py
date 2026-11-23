@@ -598,9 +598,12 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return primary, ser.members(primary)
 
     @app.get("/api/transcripts/jobs", dependencies=[Depends(api_auth)])
-    def api_transcript_jobs(limit: int = 20):
-        """Episodes whose transcript isn't timed yet, newest first, for another computer to hear."""
-        return {"jobs": transcripts.jobs(ser, max(1, min(limit, 200)))}
+    def api_transcript_jobs(limit: int | None = None, all: bool = False):
+        """Episodes whose transcript isn't timed yet, newest first, for another computer to hear; with all=true
+        (v0.25) every episode whose transcript has been read and that has sound, timed or not."""
+        if limit is None:
+            limit = None if all else 20
+        return transcripts.jobs(ser, None if limit is None else max(1, min(limit, 5000)), every=all)
 
     @app.get("/api/transcripts/jobs/{post_id}", dependencies=[Depends(api_auth)])
     def api_transcript_job(post_id: int):
@@ -1312,13 +1315,13 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     @app.get("/admin/items/{post_id}", response_class=HTMLResponse, dependencies=[Depends(web_auth)])
     def admin_item(request: Request, post_id: int, queued: str = "", error: str = "", imported: str = "",
-                   tx_error: str = ""):
+                   tx_error: str = "", kept: str = ""):
         p = db.post(post_id)
         if not p:
             raise HTTPException(404, "No such post")
         return render(request, "admin_item.html", p=p, shows=db.q("SELECT id, name FROM shows ORDER BY sort"),
                       tabs=TABS, queued=queued, st=status_obj(), ho=handover_of(p), error=error, tx=transcript_of(p),
-                      imported=imported, tx_error=tx_error)
+                      imported=imported, tx_error=tx_error, kept=bool(kept))
 
     def transcript_of(p: dict) -> dict | None:
         """The transcript of the episode this post is in, for its admin page, or None."""
@@ -1430,7 +1433,8 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             out = await run_in_threadpool(transcripts.import_heard, primary, members, payload)
         except ValueError as e:
             return RedirectResponse(f"{back}?tx_error={quote(str(e))}#transcripts", 303)
-        return RedirectResponse(f"{back}?imported={quote(out['used'])}#transcripts", 303)
+        kept = "" if out.get("replaced", True) else "&kept=1"
+        return RedirectResponse(f"{back}?imported={quote(out['used'])}{kept}#transcripts", 303)
 
     @app.get("/admin/transcripts/jrwi_hear.py", dependencies=[Depends(web_auth)])
     def admin_pc_program():

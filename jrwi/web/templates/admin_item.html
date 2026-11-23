@@ -88,7 +88,8 @@
     {{ human_duration(tx.timing.duration) }} of sound took {{ human_duration(tx.timing.took) }}, at most {{ tx.timing.peak_mb }} MB of
     memory ({{ tx.timing.model }}, {{ tx.timing.threads }} threads); {{ tx.timing.placed }} lines placed,
     {{ tx.timing.unplaced }} not.{% endif %}</p>
-  {% if imported %}<p class="small ok">Imported from your PC: the {{ imported }} result is the one in use now.</p>{% endif %}
+  {% if imported and kept %}<p class="small">Imported from your PC. The timing in use ({{ imported }}) found more of the transcript's words, so it stays in use; the PC's tries are in the table below.</p>
+  {% elif imported %}<p class="small ok">Imported from your PC: the {{ imported }} result is the one in use now.</p>{% endif %}
   {% if tx_error %}<p class="small bad">Not imported: {{ tx_error }}.</p>{% endif %}
   {% set cmp = (tx.runs | selectattr('compare') | list) %}
   {% if cmp and cmp[0].compare %}

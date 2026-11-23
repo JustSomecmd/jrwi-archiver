@@ -81,10 +81,15 @@
       <code>pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"</code></li>
     <li><a href="/admin/transcripts/jrwi_hear.py" download>{{ icon('download') }} Download the PC program</a> into a folder of its own.</li>
     <li>Run <code>python jrwi_hear.py setup</code> there: the archiver's address and its API token, from
-      <a href="/admin/settings">Settings</a>.</li>
-    <li><code>python jrwi_hear.py compare</code> hears the newest episode not timed yet with small.en and medium.en,
-      sends both and compares them; <code>compare 123</code> does that for post 123, timed or not.
-      <code>python jrwi_hear.py run</code> hears every episode not timed yet, one after another.</li>
+      <a href="/admin/settings">Settings</a>. Then <code>python jrwi_hear.py check</code> says whether it reached the
+      archiver and can use the graphics card.</li>
+    <li><code>python jrwi_hear.py compare 123 456</code> hears those episodes (the number at the end of an episode's
+      address) with medium.en, large-v3-turbo and large-v3, sends each and compares them; <code>--models</code> picks
+      others.</li>
+    <li><code>python jrwi_hear.py run --all --models medium.en</code> hears every episode with a transcript, timed or not,
+      one after another, skipping those that model has heard already, so it carries on where it stopped. Without
+      <code>--all</code> only those not timed yet. The timing in use stays when it found more of the transcript's
+      words than the new one.</li>
   </ol>
   <p class="small muted">Without the network: <b>Export for your PC</b> on an episode's admin page gives a file with its
     sound; <code>python jrwi_hear.py file jrwi-job-123.zip</code> writes a result file next to it, to bring back with

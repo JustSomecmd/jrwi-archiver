@@ -899,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.24" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.25" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1387,7 +1387,11 @@ def pc_program_hears_and_sends(app, client, web, tmp_path):
     job = client.get("/api/transcripts/jobs/298").json()
     assert job["item_id"] == 300 and job["sound"]["url"] == "/api/audio/298" and job["sound"]["size"] > 0
     assert job["hearing"]["chunk"] == 600 and job["hotwords"] == "Charlie Nate Zach" and job["timed"]
-    assert client.get("/api/transcripts/jobs").json() == {"jobs": []}   # it's timed: nothing left to hand out
+    assert client.get("/api/transcripts/jobs").json()["jobs"] == []   # it's timed: nothing left to hand out
+    every = client.get("/api/transcripts/jobs?all=true").json()   # v0.25: every episode, timed or not
+    assert [j["item_id"] for j in every["jobs"]] == [300] and every["episodes"] >= 1
+    assert every["jobs"][0]["timed_with"] == job["timed_with"] and job["timed_with"]
+    assert job["timed_with"] in job["heard_with"]
     assert "transcript_jobs" in client.get("/api/ping").json()["features"]
     # A result for a sound that isn't this episode's is refused
     bad = client.post("/api/transcripts/jobs/300", json={"sound_size": 1, "results": [{"model": "x", "words": []}]})
@@ -1408,15 +1412,17 @@ def pc_program_hears_and_sends(app, client, web, tmp_path):
     pc.write_bytes(program.read_bytes())   # as downloaded: it keeps its cache next to itself
     runs_before = len(db.q("SELECT * FROM transcript_runs WHERE item_id=300"))
     try:
-        out = subprocess.run([sys.executable, str(pc), "compare", "298", "--device", "cpu"], env=env,
-                             capture_output=True, text=True, timeout=120)
+        out = subprocess.run([sys.executable, str(pc), "compare", "298", "--device", "cpu",
+                              "--models", "small.en,medium.en"], env=env, capture_output=True, text=True, timeout=120)
         assert out.returncode == 0, out.stdout + out.stderr
         assert "medium.en" in out.stdout and "<- in use" in out.stdout and "lines both placed" in out.stdout, out.stdout
+        assert "against the timing that was in use" in out.stdout and "In use now: medium.en" in out.stdout, out.stdout
         runs = db.q("SELECT * FROM transcript_runs WHERE item_id=300 ORDER BY id")[runs_before:]
         assert [r["timing"]["model"] for r in runs] == ["small.en", "medium.en"]
         small, medium = runs[0]["timing"], runs[1]["timing"]
         assert small["source"] == medium["source"] == "pc" and medium["found"] > small["found"]
         assert medium["compare"]["model"] == "small.en" and medium["compare"]["both"] >= 1
+        assert medium["compare_in_use"]["both"] >= 1
         row = db.one("SELECT * FROM transcripts WHERE item_id=300")
         assert row["aligned"] and row["timing"]["model"] == "medium.en" and row["timing"]["used"]
         assert not list((work / "jrwi_hear_cache").glob("*.m4a"))   # the sound is deleted once sent
@@ -1436,11 +1442,30 @@ def pc_program_hears_and_sends(app, client, web, tmp_path):
         result = work / "job-result.json"
         r = web.post("/admin/items/298/transcript-import", files={"result": ("job-result.json", result.read_bytes())},
                      follow_redirects=False)
-        assert r.status_code == 303 and "imported=small.en" in r.headers["location"], r.headers
-        assert db.one("SELECT * FROM transcripts WHERE item_id=300")["timing"]["model"] == "small.en"
+        # small.en found fewer of the transcript's words than medium.en, which is in use: medium.en stays (v0.25)
+        assert r.status_code == 303 and "imported=medium.en&kept=1" in r.headers["location"], r.headers
+        assert db.one("SELECT * FROM transcripts WHERE item_id=300")["timing"]["model"] == "medium.en"
+        assert "so it stays in use" in web.get(r.headers["location"]).text
+        assert db.q("SELECT * FROM transcript_runs WHERE item_id=300 ORDER BY id DESC")[0]["timing"]["model"] == "small.en"
         r = web.post("/admin/items/298/transcript-import", files={"result": ("x.json", b"not json")},
                      follow_redirects=False)
         assert "tx_error=" in r.headers["location"]
         assert "Not imported" in web.get(r.headers["location"]).text
+        # Every episode (v0.25): what each model has heard is skipped, so running it again carries on
+        out = subprocess.run([sys.executable, str(pc), "check"], env=env, capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0 and "can be heard" in out.stdout, out.stdout + out.stderr
+        out = subprocess.run([sys.executable, str(pc), "list", "--all"], env=env, capture_output=True, text=True,
+                             timeout=120)
+        assert out.returncode == 0 and "medium.en" in out.stdout and "small.en" in out.stdout, out.stdout + out.stderr
+        out = subprocess.run([sys.executable, str(pc), "run", "--all", "--device", "cpu"], env=env,
+                             capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0 and "0 to do, 1 already heard with medium.en" in out.stdout, out.stdout + out.stderr
+        out = subprocess.run([sys.executable, str(pc), "run", "--all", "--device", "cpu", "--models", "large-v3"],
+                             env=env, capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0 and "1 to do" in out.stdout and "In use now: large-v3" in out.stdout, \
+            out.stdout + out.stderr
+        assert "1 episode(s) heard" in out.stdout and "carries on" in out.stdout
+        assert db.one("SELECT * FROM transcripts WHERE item_id=300")["timing"]["model"] == "large-v3"
+        assert "large-v3" in client.get("/api/transcripts/jobs/300").json()["heard_with"]
     finally:
         server.should_exit = True
