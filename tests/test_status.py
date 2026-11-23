@@ -343,6 +343,11 @@ def test_the_record_of_timings_starts_from_what_was_there(tmp_path):
     assert f["result"] == "timed" and f["speed"] == round(11000 / 1605, 2) and f["threads_text"] == "4 threads"
     assert round(f["placed_share"], 3) == round(3559 / 3629, 3)
     assert record_figures({"at": "x", "error": "only 2% heard", "found": 0.02})["result"] == "mismatch"
+    # Lines placed as a colour: deep purple to 40%, the archive's yellow from 95%, white or dark text by contrast
+    from jrwi.transcripts import placed_colour
+    assert placed_colour(0.1) == placed_colour(0.4) == ("#6a00a8", "#ffffff")
+    assert placed_colour(0.95) == placed_colour(1.0) == ("#f4e434", "#1b0833")
+    assert placed_colour(0.675)[0] not in ("#6a00a8", "#f4e434")
     assert record_figures({"at": "x", "error": "no sound"})["result"] == "error"
     assert record_figures({})["result"] == "waiting"
     assert record_figures({"at": "x", "threads_used": [4, 6]})["threads_text"] == "4, 6 threads"

@@ -36,7 +36,8 @@
     and it isn't timed. It doesn't check the times themselves: on test episodes with a known answer, 90% of lines
     started within 0.7 seconds of it.</p>
   <p><b>Lines placed:</b> lines that got a time from words of their own. The rest sit right after the line before
-    them, or, next to a long gap, show untimed.</p>
+    them, or, next to a long gap, show untimed. The figure in colour before each timed episode is its share of lines
+    placed: deep purple at 40% and under, turning through pink and orange to yellow at 95% and over.</p>
   <p><b>Hearing:</b> how long hearing the episode took, added up over pauses, without loading the model.
     <b>Speed</b> is the episode's length over that: 6× is an hour of sound in 10 minutes.</p>
   <p><b>Memory:</b> the most the speech model's process used. <b>Threads</b> lists each number it ran with, when the
@@ -51,13 +52,14 @@
     <th>Model, threads</th><th>{{ sorth('at', 'Timed') }}</th></tr>
   {% for e in episodes %}
   <tr>
-    <td><a href="/items/{{ e.item_id }}">{{ e.title }}</a>
+    <td>{% if e.result == 'timed' and e.placed_share is number %}<span class="rating" style="{{ placed_style(e.placed_share) }}"
+        title="Lines placed: {{ e.placed }} of {{ e.placed + (e.unplaced or 0) }}">{{ pct(e.placed_share) }}</span> {% endif %}<a href="/items/{{ e.item_id }}">{{ e.title }}</a>
       <div class="muted">{% if e.show %}{{ e.show }} · {% endif %}{{ e.lines }} lines{% if e.tries %} ·
         <a class="muted" href="/admin/items/{{ e.item_id }}#transcripts">{{ e.tries }} tr{{ 'y' if e.tries == 1 else 'ies' }}</a>{% endif %}</div></td>
     <td class="{{ 'ok' if e.result == 'timed' else 'bad' if e.result in ('mismatch', 'error') else 'muted' }}"
         {% if e.error %}title="{{ e.error }}"{% endif %}>{{ result_names[e.result] }}</td>
     <td>{{ pct(e.found) }}</td>
-    <td>{% if e.placed is number %}{{ e.placed }} of {{ e.placed + (e.unplaced or 0) }}<div class="muted">{{ pct(e.placed_share) }}</div>{% endif %}</td>
+    <td>{% if e.placed is number %}{{ e.placed }} of {{ e.placed + (e.unplaced or 0) }}{% endif %}</td>
     <td>{{ human_duration(e.duration) }}</td>
     <td>{{ human_duration(e.took) }}{% if e.load %}<div class="muted">+{{ e.load | round(0) | int }} s loading</div>{% endif %}</td>
     <td>{% if e.speed %}{{ e.speed }}×{% endif %}</td>

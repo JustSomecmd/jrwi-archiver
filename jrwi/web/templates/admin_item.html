@@ -87,7 +87,9 @@
     {% if tx.timing.error %}<span class="bad">{{ tx.timing.error }}</span>{% elif tx.timing.took is defined and tx.timing.took is not none %}
     {{ human_duration(tx.timing.duration) }} of sound took {{ human_duration(tx.timing.took) }}, at most {{ tx.timing.peak_mb }} MB of
     memory ({{ tx.timing.model }}, {{ tx.timing.threads }} threads); {{ tx.timing.placed }} lines placed,
-    {{ tx.timing.unplaced }} not.{% endif %}</p>
+    {{ tx.timing.unplaced }} not.{% if tx.aligned and tx.timing.placed is number and (tx.timing.placed + (tx.timing.unplaced or 0)) %}
+    {% set share = tx.timing.placed / (tx.timing.placed + (tx.timing.unplaced or 0)) %}<span class="rating" style="{{ placed_style(share) }}"
+      title="Lines placed">{{ (share * 100) | round(0) | int }}%</span>{% endif %}{% endif %}</p>
   {% if imported and kept %}<p class="small">Imported from your PC. The timing in use ({{ imported }}) found more of the transcript's words, so it stays in use; the PC's tries are in the table below.</p>
   {% elif imported %}<p class="small ok">Imported from your PC: the {{ imported }} result is the one in use now.</p>{% endif %}
   {% if tx_error %}<p class="small bad">Not imported: {{ tx_error }}.</p>{% endif %}
@@ -108,7 +110,7 @@
       <tr><td><span data-when-at="{{ r.at }}">{{ (r.at or '')[:16] | replace('T', ' ') }}</span>{% if r.heard_now == false %}<div class="muted">matched again</div>{% endif %}</td>
         <td class="{{ 'ok' if r.result == 'timed' else 'bad' }}" {% if r.error %}title="{{ r.error }}"{% endif %}>{{ {'timed': 'Timed', 'mismatch': "Not this episode's", 'error': "Couldn't be timed"}[r.result] or r.result }}</td>
         <td>{% if r.found is number %}{{ (r.found * 100) | round(0) | int }}%{% endif %}</td>
-        <td>{% if r.placed is number %}{{ r.placed }} of {{ r.placed + (r.unplaced or 0) }}{% endif %}</td>
+        <td>{% if r.placed is number %}{% if r.result == 'timed' and r.placed_share is number %}<span class="rating" style="{{ placed_style(r.placed_share) }}">{{ (r.placed_share * 100) | round(0) | int }}%</span> {% endif %}{{ r.placed }} of {{ r.placed + (r.unplaced or 0) }}{% endif %}</td>
         <td>{{ human_duration(r.took) }}{% if r.sessions and r.sessions > 1 %}<div class="muted">in {{ r.sessions }} goes</div>{% endif %}</td>
         <td>{% if r.speed %}{{ r.speed }}×{% endif %}</td>
         <td>{% if r.peak_mb %}{{ r.peak_mb }} MB{% endif %}</td>

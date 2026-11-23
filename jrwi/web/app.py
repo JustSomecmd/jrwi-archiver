@@ -182,6 +182,11 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
 
     templates.env.globals["viewable"] = viewable
 
+    def placed_style(share) -> str:
+        bg, fg = transcripts_mod.placed_colour(share)
+        return f"background:{bg};color:{fg}"
+    templates.env.globals["placed_style"] = placed_style
+
     # ------------------------------------------------------------------ auth
 
     def session_ok(request: Request) -> bool:

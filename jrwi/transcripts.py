@@ -1143,6 +1143,43 @@ def record_figures(timing: dict | None) -> dict:
                 threads_text=text, where="PC" if tm.get("source") == "pc" else "server")
 
 
+# Lines placed as a colour, for the admin pages (asked for by the user on 2026-11-23): deep purple at 40% and under,
+# through the plasma colour map's magenta, pink and orange, to the archive's own yellow at 95% and over
+PLACED_STOPS = ("#6a00a8", "#8f0da4", "#b12a90", "#cc4778", "#e16462", "#f2844b", "#fca636", "#fcce25", "#f4e434")
+PLACED_LOW, PLACED_HIGH = 0.40, 0.95
+_INK = (0x1B, 0x08, 0x33)   # --accent-ink
+
+
+def _rgb(hex_colour: str) -> tuple[int, int, int]:
+    h = hex_colour.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _luminance(rgb) -> float:
+    def lin(c):
+        c = c / 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a, b) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def placed_colour(share: float) -> tuple[str, str]:
+    """(background, text) for a share of lines placed: the background along PLACED_STOPS, the text in white or the
+    archive's dark ink, whichever stands out more on it."""
+    t = min(1.0, max(0.0, (float(share) - PLACED_LOW) / (PLACED_HIGH - PLACED_LOW)))
+    pos = t * (len(PLACED_STOPS) - 1)
+    i = min(int(pos), len(PLACED_STOPS) - 2)
+    a, b = _rgb(PLACED_STOPS[i]), _rgb(PLACED_STOPS[i + 1])
+    rgb = tuple(round(x + (y - x) * (pos - i)) for x, y in zip(a, b))
+    text = "#1b0833" if _contrast(rgb, _INK) >= _contrast(rgb, (255, 255, 255)) else "#ffffff"
+    return "#%02x%02x%02x" % rgb, text
+
+
 def _same_file(sound: dict) -> bool:
     """Whether the sound being heard is still there as it was when hearing began. TubeArchivist's copy is copied
     out before hearing, and a check never changes it."""

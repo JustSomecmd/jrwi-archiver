@@ -634,3 +634,7 @@ table.records th:first-child, table.records td:first-child { position: sticky; l
   box-shadow: 1px 0 0 var(--line-soft); }
 @media (max-width: 640px) { table.records td:first-child { min-width: 10.5rem; } }
 ol.steps { padding-left: 1.2rem; } ol.steps li { margin: .45rem 0; } ol.steps code { overflow-wrap: break-word; word-break: normal; }
+
+/* Lines placed as a coloured figure on the admin pages (placed_colour in transcripts.py sets the colours) */
+.rating { display: inline-block; min-width: 2.9em; padding: .05rem .35rem; border-radius: var(--radius); text-align: center;
+  font-weight: 700; font-size: .78rem; line-height: 1.35; font-variant-numeric: tabular-nums; vertical-align: .05em; }

@@ -1299,6 +1299,9 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         records = web.get("/admin/transcripts?sort=found").text
         assert "Through the Fire | Riptide #136" in records and "Timed" in records and "5 of 5" in records
         assert "2 tries" in records and "1 of" in records   # 1 of N episodes timed
+        # Lines placed in colour next to the episode: all 5 of 5 is the archive's yellow, with dark text
+        assert '<span class="rating" style="background:#f4e434;color:#1b0833"' in records and ">100%</span>" in records
+        assert 'class="rating"' in web.get("/admin/items/300").text
         # An episode whose transcript is read but not timed is listed too, under the timed ones
         db.upsert("transcripts", "item_id", {"item_id": other, "document": "x.pdf", "doc_size": 1, "lines": 9,
                                              "aligned": 0, "timing": {}, "updated_at": "x"})
