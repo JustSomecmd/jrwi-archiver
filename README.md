@@ -60,6 +60,8 @@ http://<server>:8090/api/feed.xml?token=<API token>
 
 Some episodes are posted on the members site only as YouTube embeds. The archiver records the YouTube link, and its API tells apps the YouTube ID, but by default it doesn't download those videos. TubeArchivist is the better place for them: subscribe to the Just Roll With It channel there. Tubedroid can then play the episode from TubeArchivist's copy. If you'd rather have the archiver download them, there's a setting for that.
 
+The members site doesn't show how long a YouTube video is, so with TubeArchivist connected (Settings), each check asks it the length of every YouTube video the posts embed, and the size of its copy, until it has them. The API and the apps then show them as they do for archived videos.
+
 **Episodes that go up on YouTube later.** Riptide, and other shows at times, post an episode as a members-only video first and on YouTube some weeks later. The site then adds a post with the YouTube video and takes the members-only post down. Enter TubeArchivist's address (such as `http://tubearchivist:8000`) and its API token under **Settings > TubeArchivist**, and the archiver asks TubeArchivist about each such episode at every check. Once TubeArchivist has downloaded the YouTube version, and it's the same length within 10 seconds, the archiver deletes its own copy and the episode plays from TubeArchivist. Saved positions move with any difference in where the two start. Episodes whose lengths differ are kept and listed on the Admin page, where you can delete them anyway or keep them. The archiver only reads from TubeArchivist.
 
 ### Files

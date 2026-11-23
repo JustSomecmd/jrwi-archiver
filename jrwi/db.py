@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS transcript_runs (
 );
 CREATE INDEX IF NOT EXISTS transcript_runs_item ON transcript_runs(item_id, at);
 
+-- What TubeArchivist says about the YouTube videos posts embed (0.14.9): the members site doesn't give their length
+CREATE TABLE IF NOT EXISTS youtube_videos (
+    youtube_id TEXT PRIMARY KEY, duration REAL, size INTEGER, checked_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, started TEXT, finished TEXT, result TEXT, message TEXT,
     new_items INTEGER DEFAULT 0, archived INTEGER DEFAULT 0

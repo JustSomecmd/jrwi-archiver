@@ -32,6 +32,7 @@ log = logging.getLogger("jrwi.crawler")
 PAGES_EVERY = timedelta(hours=24)
 STOP_AFTER_KNOWN = 15
 TA_LINE_UP_PER_CHECK = 40   # YouTube-only episodes lined up through TubeArchivist per check
+YT_LENGTHS_PER_CHECK = 500   # YouTube videos whose length TubeArchivist is asked for, per check
 
 
 @dataclass
@@ -177,6 +178,7 @@ class Archiver:
             if s["comments"]:
                 self.refresh_comments()
             handover.run(self.db, self.paths, self.s, self.status, self.stop_event)
+            self.youtube_lengths()
             self.line_up()
             self.status.begin("finishing")
             organize.classify_all(self.db)
@@ -484,6 +486,46 @@ class Archiver:
                 result = {"offset": 0.0, "checked": False, "score": 0.0}
             self.db.update("posts", "id", primary["id"], {"sync": {**result, **key, "at": now()}})
         return total
+
+    def youtube_lengths(self) -> int:
+        """Ask TubeArchivist how long the YouTube videos the posts embed are, and how big its copies are, as the
+        members site doesn't show their length (asked about by the user on 2026-11-23: the YouTube videos' playing
+        time added up to nothing). Each is asked until TubeArchivist has it, newest first, up to
+        YT_LENGTHS_PER_CHECK a check: one small request each. Returns how many were found."""
+        ta = TubeArchivist.from_settings(self.s)
+        if not ta.configured:
+            return 0
+        known = {r["youtube_id"] for r in self.db.q("SELECT youtube_id FROM youtube_videos WHERE duration IS NOT NULL")}
+        wanted: dict[str, str] = {}
+        for p in self.db.q("SELECT id, title, embeds FROM posts WHERE embeds LIKE '%youtube%' "
+                           "ORDER BY published DESC, id DESC"):
+            for e in p["embeds"] or []:
+                yid = e.get("youtube_id")
+                if e.get("kind") == "youtube" and yid and yid not in known and yid not in wanted:
+                    wanted[yid] = p["title"] or yid
+        wanted = dict(list(wanted.items())[:YT_LENGTHS_PER_CHECK])
+        if not wanted:
+            return 0
+        self.status.begin("tubearchivist", total=len(wanted))
+        found = 0
+        for n, (yid, title) in enumerate(wanted.items()):
+            if self.stop_event.is_set():
+                break
+            self.status.set(done=n, detail=f"{title} · how long is it on YouTube?")
+            try:
+                video = ta.video(yid)
+            except TaError as e:
+                log.warning("TubeArchivist: %s", e)
+                break
+            duration = TubeArchivist.duration(video) if video else None
+            size = video.get("media_size") if video else None
+            self.db.x("INSERT INTO youtube_videos (youtube_id, duration, size, checked_at) VALUES (?, ?, ?, ?) "
+                      "ON CONFLICT(youtube_id) DO UPDATE SET duration=excluded.duration, size=excluded.size, "
+                      "checked_at=excluded.checked_at", (yid, duration, size if isinstance(size, int) else None, now()))
+            found += duration is not None
+        if found:
+            log.info("TubeArchivist gave the length of %d YouTube videos", found)
+        return found
 
     def grow_archive_size(self, post: dict) -> None:
         """Add a newly archived post to the archive size shown on the admin page. The full count at the end of

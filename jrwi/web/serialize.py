@@ -115,6 +115,12 @@ class Serializer:
                 if e.get("kind") == "youtube" and e.get("youtube_id"):
                     out = {"post_id": m["id"], "youtube_id": e["youtube_id"], "youtube_url": e["url"],
                            "duration": m["duration"]}
+                    # The site doesn't show a YouTube video's length; TubeArchivist does, and its copy's size (0.14.9)
+                    ta = self.db.one("SELECT duration, size FROM youtube_videos WHERE youtube_id=?", (e["youtube_id"],))
+                    if ta:
+                        out["duration"] = out["duration"] or ta["duration"]
+                        if ta["size"]:
+                            out["size"] = ta["size"]
                     # The item's archived video was deleted because TubeArchivist has this one (contract v0.15)
                     done = next((x for x in members if (x.get("handover") or {}).get("status") == "done"), None)
                     if done:

@@ -1115,6 +1115,7 @@ def test_video_handed_over_to_tubearchivist(app, client):
     web = TestClient(app)
     web.post("/login", data={"password": "test-password"})
     old_file = Path(os.environ["JRWI_MEDIA"]) / db.post(297)["media"]["video"]["path"]
+    assert client.get("/api/items/289").json()["video"].get("size") is None   # not known before TubeArchivist
     keeper_file = Path(os.environ["JRWI_MEDIA"]) / db.post(287)["media"]["video"]["path"]
     assert old_file.is_file() and keeper_file.is_file()
     client.put("/api/progress/297", json={"position": 5.0, "duration": 20.0, "finished": False})
@@ -1138,6 +1139,10 @@ def test_video_handed_over_to_tubearchivist(app, client):
                                       "recheck_days": "60", "video": "on", "audio": "on", "images": "on",
                                       "attachments": "on", "comments": "on", "public_pages": "on"})
     assert archiver.run_check()["result"] == "ok"
+    # YouTube videos get their length (and TubeArchivist's copy's size) from TubeArchivist, as the site shows none
+    yt_only = client.get("/api/items/289").json()
+    assert yt_only["video"]["youtube_id"] and yt_only["video"]["duration"] > 0 and yt_only["video"]["size"] > 0, yt_only
+    assert db.one("SELECT COUNT(*) AS n FROM youtube_videos WHERE duration IS NOT NULL")["n"] >= 1
     h = db.post(297)["handover"]
     assert h["status"] == "ready" and old_file.is_file() and h["yt_shift_checked"], h
     assert abs(h["yt_shift"] - 3.0) < 0.1 and h["yt_shift_for"]["youtube_id"] == "JRWI136ytAA"
