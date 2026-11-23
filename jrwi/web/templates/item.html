@@ -46,11 +46,19 @@
   {% endif %}
 
   {% if item.transcript and ((v and (v.url or v.youtube_id)) or a) %}
-    <div class="transcript-bar"><button class="ghost" data-transcript-toggle aria-expanded="false">Transcript</button></div>
-    <div class="transcript" data-transcript hidden>
-      <div class="tnote small muted" data-tnote></div>
-      <div class="tlines" data-tlines></div>
-      <button class="tfollow" data-tfollow hidden>Back to the line being spoken</button>
+    {# Attached to the bottom of the player: a strip that opens into the lines #}
+    <div class="tdrawer">
+      <button type="button" class="tstrip" data-transcript-toggle aria-expanded="false" aria-controls="transcript">
+        <span class="ticon">{{ icon('doc') }}</span>
+        <span class="tlabel"><b>Transcript</b>
+          {% if tx %}<span class="tmeta">{{ 'Follows along as it plays' if tx.aligned else 'Not timed yet' }} · {{ '{:,}'.format(tx.lines) }} lines</span>{% endif %}</span>
+        <span class="tchev">{{ icon('chevron') }}</span>
+      </button>
+      <div class="transcript" id="transcript" data-transcript hidden>
+        <div class="tnote small muted" data-tnote></div>
+        <div class="tlines" data-tlines></div>
+        <button type="button" class="tfollow" data-tfollow hidden>Back to the line being spoken</button>
+      </div>
     </div>
   {% endif %}
 

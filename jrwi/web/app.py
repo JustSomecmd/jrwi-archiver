@@ -865,8 +865,9 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         # The side list, like the site's "Recently uploaded": newest posts from the same show
         sql, args = item_query(show=item["show"], separate=True)
         more = [ser.post_summary(r) for r in db.q(f"SELECT * FROM ({sql}) WHERE id != ? LIMIT 8", args + [post["id"]])]
+        tx = transcripts.row(item["item_id"]) if item.get("transcript") else None
         return render(request, "item.html", item=item, comments=comments["items"], show=show, places=places,
-                      progress=audio_at,
+                      progress=audio_at, tx=tx,
                       video_progress=video_at,
                       more=more, csort=csort)
 
