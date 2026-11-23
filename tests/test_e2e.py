@@ -1324,6 +1324,21 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         assert client.get("/api/transcript/298").json()["lines"][3]["start"] == 8.0
         assert len(db.q("SELECT * FROM transcript_runs WHERE item_id=300")) == 3
         assert "transcript read again" in web.get("/admin/items/300").text
+        # Debug data (0.14.6): the transcript, its lines, the words heard and every try, and nothing secret
+        import io
+        import zipfile
+        r = web.get("/admin/items/298/transcript-debug.zip")
+        assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        assert {"about.json", "lines.json", "heard.json", "tries.json", "transcript.pdf"} <= set(z.namelist())
+        about = json.loads(z.read("about.json"))
+        assert about["item_id"] == 300 and about["heard"]["words"] > 0 and about["transcript"]["lines"] == 5
+        assert len(json.loads(z.read("tries.json"))) == 3 and len(json.loads(z.read("lines.json"))) == 5
+        assert json.loads(z.read("heard.json"))["words"]
+        blob = b"".join(z.read(n) for n in z.namelist())
+        assert b"test-password" not in blob and db.setting("api_token").encode() not in blob
+        assert "Debug data" in web.get("/admin/items/300").text
+        assert web.get("/admin/items/999999/transcript-debug.zip").status_code == 404
         # While it runs, the top of the admin page has its own bar: the episode's progress, the batch's count
         scheduler.bg.begin("transcripts", total=3, phase="Timing transcripts", running=True)
         scheduler.bg.set(done=1, current=0.42, detail="Paid In Blood · hearing, 42%, about 16 min left")

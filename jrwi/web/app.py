@@ -1440,6 +1440,58 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return FileResponse(name, media_type="application/zip", filename=f"jrwi-job-{primary['id']}.zip",
                             background=BackgroundTask(lambda: Path(name).unlink(missing_ok=True)))
 
+    @app.get("/admin/items/{post_id}/transcript-debug.zip", dependencies=[Depends(web_auth)])
+    def admin_transcript_debug_zip(post_id: int):
+        """What the archiver keeps of an episode's transcript and timing, in one file, for working out what went
+        wrong (asked for by the user on 2026-11-23): the transcript PDF, its lines as read and as timed, the words
+        heard for the timing in use with their times, and every try. No settings, tokens or passwords, and not the
+        sound itself."""
+        primary, members = job_target(post_id)
+        item_id = primary["id"]
+        stored = transcripts._load(transcripts.lines_file(item_id))
+        if not stored:
+            raise HTTPException(404, "This episode's transcript hasn't been read")
+        heard = transcripts._load(transcripts.heard_file(item_id))
+        row = transcripts.row(item_id) or {}
+        sound = transcripts.sound(members)
+        doc = stored.get("document") or {}
+        about = {
+            "item_id": item_id, "title": primary.get("title"), "archiver": VERSION,
+            "reading_version": transcripts_mod.VERSION, "made": datetime.now(timezone.utc).isoformat(),
+            "transcript": {"document": doc.get("path"), "size": doc.get("size"), "lines": row.get("lines"),
+                           "aligned": bool(row.get("aligned")), "read_version": stored.get("version"),
+                           "timeline": stored.get("timeline")},
+            "timing_in_use": row.get("timing") or {},
+            "sound": ({"post_id": sound["post_id"], "timeline": sound["timeline"], "size": sound["size"],
+                       "duration": sound.get("duration"), "name": Path(sound["path"]).name,
+                       "source": "tubearchivist" if sound.get("tubearchivist") else "archive"} if sound else None),
+            "heard": ({"model": (heard.get("key") or {}).get("model"), "size": (heard.get("key") or {}).get("size"),
+                       "until": heard.get("until"), "words": len(heard.get("words") or []), "took": heard.get("took")}
+                      if heard else None),
+            "hearing": dict(transcripts_mod.HEARING),
+            "files": {"lines.json": "the lines as read, with their times when timed",
+                      "heard.json": "the words heard for the timing in use: [start, end, word] in seconds",
+                      "tries.json": "every try at timing this episode, newest first",
+                      "transcript.pdf": "the transcript the lines were read from"}}
+        tries = [{"at": r["at"], "timing": r["timing"]} for r in transcripts.runs(item_id)]
+        tmp_dir = paths.data / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="debug-", suffix=".zip", dir=tmp_dir)
+        os.close(fd)
+        with zipfile.ZipFile(name, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("about.json", json.dumps(about, ensure_ascii=False, indent=1))
+            z.writestr("lines.json", json.dumps(stored.get("lines") or [], ensure_ascii=False, indent=0))
+            if heard:
+                z.writestr("heard.json", json.dumps({k: v for k, v in heard.items() if k != "key"} |
+                                                    {"model": (heard.get("key") or {}).get("model")},
+                                                    ensure_ascii=False))
+            z.writestr("tries.json", json.dumps(tries, ensure_ascii=False, indent=1))
+            pdf = paths.archive / doc["path"] if doc.get("path") else None
+            if pdf and pdf.is_file():
+                z.write(pdf, "transcript.pdf")
+        return FileResponse(name, media_type="application/zip", filename=f"jrwi-transcript-debug-{item_id}.zip",
+                            background=BackgroundTask(lambda: Path(name).unlink(missing_ok=True)))
+
     @app.post("/admin/items/{post_id}/transcript-import", dependencies=[Depends(web_auth)])
     async def admin_transcript_import(post_id: int, result: UploadFile = File(...)):
         """A result file the PC program wrote, imported as the API's import does."""

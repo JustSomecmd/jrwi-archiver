@@ -112,6 +112,8 @@ The archiver keeps whichever timing found more of the transcript's words: a new 
 
 Without the network: **Export for your PC** on an episode's admin page downloads its sound and job in one file; `python jrwi_hear.py file jrwi-job-123.zip` writes `jrwi-job-123-result.json` next to it, which **Import from your PC** on the same page takes.
 
+When an episode times badly, **Debug data** on its admin page downloads what the archiver kept of it in one zip: the transcript PDF, its lines as read and as timed, the words heard for the timing in use with their times, and every try. It holds no settings, tokens or passwords, and not the sound.
+
 On a graphics card it hears in batches of 16 (`--batch`); on a processor, several ten-minute pieces at once (`--workers`, with `--threads` each), which the pieces allow as each is heard on its own. The episode's sound is downloaded to `jrwi_hear_cache` and deleted once sent (`--keep` keeps it).
 
 ## What you'll find in the folders

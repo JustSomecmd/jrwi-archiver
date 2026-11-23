@@ -127,12 +127,14 @@
   </form>
   <div class="row small">
     <a class="btn ghost small" href="/admin/items/{{ p.id }}/transcript-job.zip" download>{{ icon('download') }} Export for your PC</a>
+    <a class="btn ghost small" href="/admin/items/{{ p.id }}/transcript-debug.zip" download>{{ icon('download') }} Debug data</a>
     <form method="post" action="/admin/items/{{ p.id }}/transcript-import" enctype="multipart/form-data" class="inline">
       <label class="btn ghost small">{{ icon('doc') }} Import from your PC
         <input type="file" name="result" accept=".json,application/json" hidden data-autosubmit></label>
     </form>
     <span class="hint">For the <a href="/admin/transcripts#pc">PC program</a>: the export holds this episode's sound and
-      what the program needs; it writes a result file to import here.</span>
+      what the program needs; it writes a result file to import here. Debug data holds the transcript, its lines,
+      the words heard and every try (not the sound, and no settings or passwords), for working out what went wrong.</span>
   </div>
   {% endif %}
 </div>
