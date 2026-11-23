@@ -148,3 +148,14 @@ def test_time_left_while_hearing():
     assert pace.left(0.5, now=500) is None
     assert [left_text(s) for s in (20, 95, 16 * 60, 3600, 3600 + 25 * 60)] == [
         "under a minute left", "about 2 min left", "about 16 min left", "about 1 h left", "about 1 h 25 min left"]
+
+
+def test_hearings_with_hotwords_dont_count_as_heard():
+    """Until 0.14.7 the speakers' names were given as hotwords, which the models wrote out in loops in place of what
+    was said. Those hearings don't count, so the PC program's run --all hears those episodes once more."""
+    from jrwi.transcripts import Transcripts
+    t = Transcripts.__new__(Transcripts)
+    runs = [{"model": "large-v3-turbo", "found": 0.33, "sound_size": 5},
+            {"model": "medium.en", "found": 0.5, "sound_size": 5, "no_hotwords": True},
+            {"model": "small.en", "found": 0.6, "sound_size": 4, "no_hotwords": True}]
+    assert t.heard_with(1, 5, runs) == ["medium.en"]

@@ -1416,7 +1416,7 @@ def pc_program_hears_and_sends(app, client, web, tmp_path):
     # The job: the sound, how to hear it, the names to listen for
     job = client.get("/api/transcripts/jobs/298").json()
     assert job["item_id"] == 300 and job["sound"]["url"] == "/api/audio/298" and job["sound"]["size"] > 0
-    assert job["hearing"]["chunk"] == 600 and job["hotwords"] == "Charlie Nate Zach" and job["timed"]
+    assert job["hearing"]["chunk"] == 600 and job["hotwords"] is None and job["timed"]
     assert client.get("/api/transcripts/jobs").json()["jobs"] == []   # it's timed: nothing left to hand out
     every = client.get("/api/transcripts/jobs?all=true").json()   # v0.25: every episode, timed or not
     assert [j["item_id"] for j in every["jobs"]] == [300] and every["episodes"] >= 1

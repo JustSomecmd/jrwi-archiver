@@ -57,6 +57,12 @@ OVERLAP = 10.0       # heard twice where two pieces meet, so no word is cut in h
 # same way and its words match the same way)
 HEARING = {"chunk": CHUNK, "overlap": OVERLAP, "language": "en", "beam_size": 1, "word_timestamps": True,
            "vad_filter": True, "condition_on_previous_text": False}
+# The speakers' names were handed to the model as hotwords until 0.14.7. faster-whisper puts hotwords where the
+# text said just before goes in the prompt, and the model took to writing the names out in a loop in place of what
+# was said: on the user's PC with large-v3-turbo, 79% of the words "heard" in Wonderlust #4 were "Speaker 1" over and
+# over (31 of its 57 minutes), and 26% of Unwitness Protection Program's Case File 1 (34 minutes in 973 bursts),
+# whose speech was lost there. So none are given; a misheard name costs a word or two in matching.
+HOTWORDS = False
 MAX_IMPORT_WORDS = 400_000   # far more than a long episode has (about 35,000 words in three hours)
 PACE = 0.3           # seconds a word usually takes, to go from a heard word back to its line's first
 LONG_GAP = 10.0      # a line with nothing heard, next to a longer gap, gets no time
@@ -787,13 +793,13 @@ class Transcripts:
         if not total:
             raise RuntimeError("the sound's length isn't known")
         model = self.model()
-        key = {"path": sound["path"], "size": sound["size"], "model": model}
+        # Without hotwords (0.14.7): words heard with them aren't carried on from, or matched again here
+        key = {"path": sound["path"], "size": sound["size"], "model": model, "hotwords": False}
         heard = self._load(self.heard_file(item_id)) or {}
         if heard.get("key") != key:
             heard = {"key": key, "until": 0.0, "words": [], "took": 0.0, "peak_mb": 0}
         heard_now = heard["until"] < total - 0.5   # or only matched again, from what was heard before
-        names = sorted({l["speaker"] for l in lines if l["speaker"]})[:40]
-        hot = " ".join(names)[:400] or None
+        hot = None   # no hotwords since 0.14.7: see HOTWORDS
         if heard["until"] < total - 0.5:
             began = time.monotonic()
             # For the record: when hearing began, how often it was started (carrying on after a pause counts), and
@@ -854,7 +860,7 @@ class Transcripts:
                   "sessions": heard.get("sessions") or 1, "match_took": match_took, "heard_now": heard_now,
                   "heard": len(heard["words"]), "words": result.get("words"), "found": result["found"],
                   "placed": result["placed"], "unplaced": result["unplaced"], "at": _now(),
-                  "error": None if aligned else self._mismatch(result)}
+                  "error": None if aligned else self._mismatch(result), "no_hotwords": True}
         self._store(primary, stored, lines, sound, result, aligned, timing)
         self.record(primary, timing)
         self.drop_sound(sound)
@@ -907,7 +913,6 @@ class Transcripts:
         if not duration and not sound.get("tubearchivist"):
             from .sync import probe_duration
             duration = probe_duration(Path(sound["path"]))
-        names = sorted({l["speaker"] for l in lines if l.get("speaker")})[:40]
         row = self.row(primary["id"]) or {}
         timing = row.get("timing") or {}
         current = timing if timing.get("at") and timing.get("sound_size") == sound["size"] else {}
@@ -922,13 +927,15 @@ class Transcripts:
                           "url": (f"/api/transcripts/sound/{sound['post_id']}" if sound.get("tubearchivist") else
                                   f"/api/{part}/{sound['post_id']}"), "name": Path(sound["path"]).name,
                           "source": "tubearchivist" if sound.get("tubearchivist") else "archive"},
-                "hotwords": " ".join(names)[:400] or None, "hearing": dict(HEARING), "archiver": VERSION}
+                "hotwords": None, "hearing": dict(HEARING), "archiver": VERSION}   # see HOTWORDS
 
     def heard_with(self, item_id: int, size: int, runs: list[dict] | None = None) -> list[str]:
         """The models that have heard this sound to the end and been matched, here or on another computer."""
         if runs is None:
             runs = [r["timing"] for r in self.runs(item_id)]
+        # Only hearings without hotwords count (0.14.7), so run --all hears what was heard with them once more
         return sorted({t["model"] for t in runs if t and t.get("model") and t.get("found") is not None
+                       and t.get("no_hotwords")
                        and t.get("sound_size", size) == size})
 
     def jobs(self, ser, limit: int | None = 20, every: bool = False) -> dict:
@@ -1007,7 +1014,7 @@ class Transcripts:
                       "started": None, "sessions": 1, "match_took": match_took, "heard_now": True,
                       "heard": len(words), "words": result.get("words"), "found": result["found"],
                       "placed": result["placed"], "unplaced": result["unplaced"], "at": _now(),
-                      "error": None if aligned else self._mismatch(result)}
+                      "error": None if aligned else self._mismatch(result), "no_hotwords": True}
             tries.append({"timing": timing, "result": result, "aligned": aligned, "words": words})
         if len(tries) > 1:
             base = tries[0]
@@ -1037,7 +1044,8 @@ class Transcripts:
             self._store(primary, stored, lines, sound, best["result"], best["aligned"], best["timing"])
             # What was heard, as if heard here, so Time it again only matches again (with the same model)
             self._write(self.heard_file(item_id), {
-                "key": {"path": sound["path"], "size": sound["size"], "model": best["timing"]["model"]},
+                "key": {"path": sound["path"], "size": sound["size"], "model": best["timing"]["model"],
+                        "hotwords": False},
                 "until": best["timing"]["duration"] or 0.0, "words": best["words"],
                 "took": best["timing"]["took"] or 0.0, "peak_mb": best["timing"]["peak_mb"] or 0,
                 "load": best["timing"]["load"], "sessions": 1, "threads_used": best["timing"]["threads_used"]})
