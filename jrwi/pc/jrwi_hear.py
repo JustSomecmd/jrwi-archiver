@@ -39,6 +39,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -48,7 +49,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-PROGRAM = "1.2"
+PROGRAM = "1.3"
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE / "jrwi_hear.json"
 CACHE = HERE / "jrwi_hear_cache"
@@ -212,6 +213,12 @@ def whisper_problem() -> str | None:
         import faster_whisper  # noqa: F401
         return None
     except ModuleNotFoundError as e:
+        if os.name == "nt":
+            return (f"{e.name or 'faster-whisper'} isn't installed for the Python that runs this program "
+                    f"({sys.executable}, Python {platform.python_version()}), and no other Python on this PC has it. "
+                    "Install Python 3.13 and faster-whisper into it, then start the program with py -3.13:\n"
+                    "    py install 3.13\n    py -3.13 -m pip install faster-whisper psutil\n"
+                    "    py -3.13 jrwi_hear.py check")
         return (f"{e.name or 'faster-whisper'} isn't installed for the Python that runs this program "
                 f"({sys.executable}, Python {platform.python_version()}), so pip must have put it into another "
                 f"Python. Install it into this one:\n    \"{sys.executable}\" -m pip install faster-whisper psutil")
@@ -224,6 +231,47 @@ def whisper_problem() -> str | None:
         return f"faster-whisper is installed, but couldn't be loaded ({text})."
     except Exception as e:
         return f"faster-whisper couldn't be loaded ({type(e).__name__}: {e})."
+
+
+def other_pythons() -> list[str]:
+    """The other Pythons on this Windows PC, from the Python install manager and the classic installer, newest
+    first."""
+    found: list[Path] = []
+    for base, pattern in ((os.environ.get("LOCALAPPDATA"), "Python/pythoncore-3*/python.exe"),
+                          (os.environ.get("LOCALAPPDATA"), "Programs/Python/Python3*/python.exe"),
+                          (os.environ.get("ProgramFiles"), "Python3*/python.exe")):
+        if base:
+            found += Path(base).glob(pattern)
+    me = os.path.normcase(os.path.abspath(sys.executable))
+
+    def version(p: Path) -> tuple:
+        m = re.search(r"3\.?(\d+)", p.parent.name)
+        return (int(m.group(1)) if m else 0, str(p))
+    return [str(p) for p in sorted(set(found), key=version, reverse=True)
+            if os.path.normcase(os.path.abspath(p)) != me]
+
+
+def run_with_a_python_that_has_whisper() -> None:
+    """On Windows, when this Python hasn't got faster-whisper but another one on the PC has (such as the 3.13 it was
+    installed into, while python starts the newest), start the program again with that one."""
+    if os.name != "nt" or os.environ.get("JRWI_RELAUNCHED") or os.environ.get("JRWI_FAKE_HEARING"):
+        return
+    if importlib.util.find_spec("faster_whisper") and importlib.util.find_spec("ctranslate2"):
+        return
+    for exe in other_pythons():
+        try:
+            ok = subprocess.run([exe, "-c", "import ctranslate2, faster_whisper"], capture_output=True,
+                                timeout=120).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if ok:
+            say(f"This Python ({platform.python_version()}) hasn't got faster-whisper; using {exe}, which has.")
+            try:
+                code = subprocess.call([exe, str(Path(__file__).resolve()), *sys.argv[1:]],
+                                       env=dict(os.environ, JRWI_RELAUNCHED="1"))
+            except KeyboardInterrupt:
+                code = 130
+            sys.exit(code)
 
 
 def pick_device(want: str) -> str:
@@ -802,6 +850,8 @@ def main() -> None:
     sp.add_argument("--batch", type=int, default=16)
     sub.add_parser("_probe")
     args = p.parse_args()
+    if args.cmd in ("check", "compare", "run", "file"):
+        run_with_a_python_that_has_whisper()
     if args.cmd in ("check", "compare", "run", "file", "_probe") and getattr(args, "device", "auto") != "cpu":
         use_nvidia_libraries()   # first, as on Linux it starts the program again
     try:
