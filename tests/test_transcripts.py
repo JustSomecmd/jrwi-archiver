@@ -6,7 +6,7 @@ from pathlib import Path
 
 from jrwi.transcripts import find, match, read_pdf, tokens
 
-from transcript_pdf import write
+from transcript_pdf import write, write_early
 
 TURNS = [
     ("Zach", "There's something wrong with this town and no one seems to notice. The people walk around smiling, "
@@ -28,6 +28,36 @@ def test_a_transcript_is_read_by_its_bold_names():
     # The standard font of this test file gives ’ for ', which matching treats the same
     assert [(l["speaker"], l["text"].replace("’", "'")) for l in lines[:8]] == TURNS
     assert len(lines) == len(TURNS) * 30
+
+
+EARLY = [
+    ("Grizzly", "[multiple voices layered] Ayooo! It's ya boy Grizzly! I control the whole show."),
+    (None, "[Schmove by Shady Cicada plays]"),
+    ("Condi", "I sure am, pal."),
+    ("Charlie", "Yar har har!"),
+    ("Condi", "Yar har har!"),
+    ("Grizzly", "The air is fresh but salty, and the sky is painted with the orange and purple colours of sunset, "
+                "as a large rosewood ship glides across these pink tinted waters."),
+    (None, "(Laughter)"),
+    ("Captain Rose", "(laughs) Welcome aboard the Midnight Rose."),
+]
+
+
+def test_an_early_transcript_is_read_by_name_and_colon():
+    """The early layout (asked for on 2026-11-23): a bold title over a cast list, then "Name : what they said",
+    sometimes two turns with no gap between. The bold title mustn't be taken for a speaker of everything below it."""
+    pdf = Path(tempfile.mkdtemp()) / "early.pdf"
+    head = ["Dungeon Master & NPCS: Grizzly", "Arlin James: Bizly", "Finn Tidestrider: Slimecicle (Charlie)",
+            "Prologue - The Hole in the Sea"]
+    turns = EARLY * 20
+    write_early(pdf, "Just Roll With It: Riptide", head, turns,
+                joined={k for k in range(len(turns)) if k % len(EARLY) in (4, 5)})
+    lines = read_pdf(pdf)
+    assert [(l["speaker"], l["text"]) for l in lines[:5]] == [(None, "Just Roll With It: Riptide")] + \
+        [(None, h) for h in head]
+    assert [(l["speaker"], l["text"].replace("’", "'")) for l in lines[5:5 + len(EARLY)]] == EARLY
+    assert len(lines) == 5 + len(turns)
+    assert tokens("(laughs) Welcome aboard. (Laughter)") == ["welcome", "aboard"]
 
 
 def test_a_transcript_is_found_by_its_name():

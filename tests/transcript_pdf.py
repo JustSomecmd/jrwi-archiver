@@ -19,8 +19,33 @@ def _wrap(text: str, width: int = 85) -> list[str]:
     return out + ([line] if line else [])
 
 
+def write_early(path: Path, title: str, cast: list[str], turns: list[tuple[str | None, str]],
+                joined: set[int] = frozenset()) -> None:
+    """As the early transcripts are laid out: a bold title, the cast a line each with no gap between, then
+    "Name : what they said" in plain text, a paragraph each; a turn whose index is in joined starts on the next line
+    with no gap, as Google Docs sometimes lays them out."""
+    rows = [(title, True, 0.0)] + [(c, False, 22.0 if k == 0 else 14.0) for k, c in enumerate(cast)]
+    for k, (speaker, text) in enumerate(turns):
+        first = f"{speaker} : {text}" if speaker else text
+        for n, line in enumerate(_wrap(first)):
+            rows.append((line, False, 14.0 if n or k in joined else 22.0))
+    _pdf(path, rows)
+
+
 def write(path: Path, turns: list[tuple[str | None, str]]) -> None:
     """turns: (speaker, text); a None speaker writes the text as a paragraph of its own (a note)."""
+    rows, first = [], True
+    for speaker, text in turns:
+        if speaker is not None:
+            rows.append((speaker, True, 0.0 if first else 38.0))
+        for k, line in enumerate(_wrap(text)):
+            rows.append((line, False, 22.0 if k == 0 else 14.0))
+        first = False
+    _pdf(path, rows)
+
+
+def _pdf(path: Path, rows: list[tuple[str, bool, float]]) -> None:
+    """rows: (text, bold, how far below the line before it), a page after another as they fill."""
     pages, ops, y = [], [], 740.0
 
     def put(font: str, text: str, step: float) -> None:
@@ -32,16 +57,8 @@ def write(path: Path, turns: list[tuple[str | None, str]]) -> None:
             y -= step
         ops.append(f"BT /{font} 11 Tf 1 0 0 1 72 {y:.1f} Tm ({_esc(text)}) Tj ET")
 
-    first = True
-    for speaker, text in turns:
-        if speaker is not None:
-            put("F2", speaker, 0 if first else 38)
-            step = 22
-        else:
-            step = 22
-        for k, line in enumerate(_wrap(text)):
-            put("F1", line, step if k == 0 else 14)
-        first = False
+    for text, bold, step in rows:
+        put("F2" if bold else "F1", text, step)
     pages.append(ops)
 
     objects = ["<< /Type /Catalog /Pages 2 0 R >>", None,

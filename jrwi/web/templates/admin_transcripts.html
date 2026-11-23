@@ -54,7 +54,7 @@
   <tr>
     <td>{% if e.result == 'timed' and e.placed_share is number %}<span class="rating" style="{{ placed_style(e.placed_share) }}"
         title="Lines placed: {{ e.placed }} of {{ e.placed + (e.unplaced or 0) }}">{{ pct(e.placed_share) }}</span> {% endif %}<a href="/items/{{ e.item_id }}">{{ e.title }}</a>
-      <div class="muted">{% if e.show %}{{ e.show }} · {% endif %}{{ e.lines }} lines{% if e.tries %} ·
+      <div class="muted">Post {{ e.item_id }} · {% if e.show %}{{ e.show }} · {% endif %}{{ e.lines }} lines{% if e.tries %} ·
         <a class="muted" href="/admin/items/{{ e.item_id }}#transcripts">{{ e.tries }} tr{{ 'y' if e.tries == 1 else 'ies' }}</a>{% endif %}</div></td>
     <td class="{{ 'ok' if e.result == 'timed' else 'bad' if e.result in ('mismatch', 'error') else 'muted' }}"
         {% if e.error %}title="{{ e.error }}"{% endif %}>{{ result_names[e.result] }}</td>
@@ -92,6 +92,9 @@
       one after another, skipping those that model has heard already, so it carries on where it stopped. Without
       <code>--all</code> only those not timed yet. The timing in use stays when it found more of the transcript's
       words than the new one.</li>
+    <li>To try an episode that went badly again, take its post number from the list above (sort by lines placed) and
+      hear it with another model: <code>python jrwi_hear.py compare 123 --models large-v3,medium.en</code>. The same
+      model again hears it the same way, so it would find the same words.</li>
   </ol>
   <p class="small muted">Without the network: <b>Export for your PC</b> on an episode's admin page gives a file with its
     sound; <code>python jrwi_hear.py file jrwi-job-123.zip</code> writes a result file next to it, to bring back with

@@ -42,7 +42,13 @@ NAMED = re.compile(r"transcri(?:pt|ption)", re.I)
 NOTE = re.compile(r"\[[^\]]*\]")
 NOTE_ONLY = re.compile(r"^\s*(\[[^\]]*\]\s*)+$")
 LEADING_NOTE = re.compile(r"^\s*\[[^\]]*\]")
-COLON_NAME = re.compile(r"^([A-Z][\w .'’()&-]{0,40}?):\s+(\S.*)$")
+LEADING_ASIDE = re.compile(r"^\s*(\[[^\]]*\]|\([^()]{1,60}\))")   # a note in brackets or parentheses first
+# Not spoken, so not looked for in what was heard: notes in brackets, and the short ones in parentheses the early
+# transcripts have ("(laughs)", "(Laughter)", "(interrupting)")
+UNSPOKEN = re.compile(r"\[[^\]]*\]|\([^()]{1,60}\)")
+# "Name: what they said", as the early transcripts have it, sometimes with a space before the colon ("Grizzly : ...")
+COLON_NAME = re.compile(r"^([A-Z][\w .'’()&-]{0,40}?)\s*:\s+(\S.*)$")
+LINE_NAME = re.compile(r"^([A-Z][\w .'’()&-]{0,40}?)\s*:(?:\s|$)")
 SPLIT = re.compile(r"[\s\-‐-―/]+")
 
 CHUNK = 600.0        # seconds of sound heard at a time
@@ -55,7 +61,9 @@ MAX_IMPORT_WORDS = 400_000   # far more than a long episode has (about 35,000 wo
 PACE = 0.3           # seconds a word usually takes, to go from a heard word back to its line's first
 LONG_GAP = 10.0      # a line with nothing heard, next to a longer gap, gets no time
 MODELS = ("base.en", "small.en", "medium.en")
-VERSION = 1          # of how lines are read and matched: a change re-reads, and re-matches what was heard
+# Of how lines are read and matched: a change reads every transcript again and matches the words already heard to
+# the new lines, without hearing anything again. 2 (0.14.5): the early "Name: what they said" transcripts.
+VERSION = 2
 
 
 # ------------------------------------------------------------------ finding
@@ -105,15 +113,16 @@ def _paragraphs(pdf):
             starts = True
         elif line["page"] != prev["page"]:
             # Over a page break the paragraph goes on, unless the last line ended short and this one opens with a note
-            starts = prev["x1"] < 480 and bool(LEADING_NOTE.match(line["text"]))
+            starts = prev["x1"] < 480 and bool(LEADING_ASIDE.match(line["text"]))
         else:
             starts = line["top"] - prev["bottom"] > 8
         if starts:
             if para:
                 yield para
-            para = {"text": line["text"], "bold": line["bold"]}
+            para = {"text": line["text"], "bold": line["bold"], "lines": [line["text"]]}
         else:
             para["text"] += " " + line["text"]
+            para["lines"].append(line["text"])
         prev = line
     if para:
         yield para
@@ -121,28 +130,71 @@ def _paragraphs(pdf):
 
 def read_pdf(path: Path) -> list[dict]:
     """A transcript's lines: {"speaker", "text"}, a note or a group's line ("[all the players] Whoa!") of its own
-    with speaker None. A transcript without bold names is read as "Name: what they said", or else line by line."""
+    with speaker None. Two layouts: each name in bold on a line of its own, or "Name: what they said" in plain text
+    under a title and cast list (the early transcripts, whose title is bold). Whichever there's more of decides; a
+    transcript with neither is read paragraph by paragraph."""
     import pdfplumber
     with pdfplumber.open(path) as pdf:
         paras = list(_paragraphs(pdf))
+    return read_paragraphs(paras)
+
+
+def read_paragraphs(paras: list[dict]) -> list[dict]:
+    bold = sum(1 for p in paras if p["bold"])
+    colon = sum(1 for p in paras if not p["bold"] and COLON_NAME.match(p["text"].strip()))
+    return _by_bold_names(paras) if bold > colon else _by_colon_names(paras)
+
+
+def _by_bold_names(paras: list[dict]) -> list[dict]:
     out, speaker, turn = [], None, None
-    if any(p["bold"] for p in paras):
-        for p in paras:
-            text = p["text"].strip()
-            if p["bold"]:
-                speaker, turn = text, None
-            elif NOTE_ONLY.match(text) or (turn is not None and LEADING_NOTE.match(text)):
-                out.append({"speaker": None, "text": text})
-                turn = None
-            elif turn is None:
-                turn = {"speaker": speaker, "text": text}
-                out.append(turn)
-            else:
-                turn["text"] += "\n" + text
-        return out
     for p in paras:
         text = p["text"].strip()
-        m = COLON_NAME.match(text)
+        if p["bold"]:
+            speaker, turn = text.rstrip(":").strip(), None
+        elif NOTE_ONLY.match(text) or (turn is not None and LEADING_NOTE.match(text)):
+            out.append({"speaker": None, "text": text})
+            turn = None
+        elif turn is None:
+            turn = {"speaker": speaker, "text": text}
+            out.append(turn)
+        else:
+            turn["text"] += "\n" + text
+    return out
+
+
+def _by_colon_names(paras: list[dict]) -> list[dict]:
+    # How often each name opens a line: a speaker's comes up again and again, a title's or a cast list's once
+    seen: dict[str, int] = {}
+    for p in paras:
+        for t in p.get("lines") or [p["text"]]:
+            m = LINE_NAME.match(t)
+            if m and not p["bold"]:
+                seen[m.group(1).strip()] = seen.get(m.group(1).strip(), 0) + 1
+    # Turns with no gap between them come out as one paragraph, so a paragraph is cut where a line opens with the
+    # name of someone who speaks more than once
+    pieces: list[tuple[bool, list[str]]] = []
+    for p in paras:
+        cur = None
+        for t in p.get("lines") or [p["text"]]:
+            m = None if p["bold"] else LINE_NAME.match(t)
+            if cur is None or (m and seen.get(m.group(1).strip(), 0) >= 2):
+                cur = [t]
+                pieces.append((p["bold"], cur))
+            else:
+                cur.append(t)
+
+    def speaker_of(piece) -> str | None:
+        m = None if piece[0] else COLON_NAME.match(" ".join(piece[1]).strip())
+        return m.group(1).strip() if m else None
+    # The title and cast list come before the first line of someone who speaks often: notes, a line each
+    first = next((k for k, piece in enumerate(pieces) if seen.get(speaker_of(piece) or "", 0) >= 3), 0)
+    out = []
+    for k, (is_bold, ls) in enumerate(pieces):
+        if k < first:
+            out.extend({"speaker": None, "text": t.strip()} for t in ls if t.strip())
+            continue
+        text = " ".join(ls).strip()
+        m = None if is_bold else COLON_NAME.match(text)
         out.append({"speaker": m.group(1).strip(), "text": m.group(2).strip()} if m else {"speaker": None, "text": text})
     return out
 
@@ -155,8 +207,8 @@ def norm(word: str) -> str:
 
 
 def tokens(text: str) -> list[str]:
-    """The words of a line as they'd be heard: notes in brackets aren't spoken."""
-    return [t for t in (norm(w) for w in SPLIT.split(NOTE.sub(" ", text))) if t]
+    """The words of a line as they'd be heard: notes in brackets or parentheses aren't spoken."""
+    return [t for t in (norm(w) for w in SPLIT.split(UNSPOKEN.sub(" ", text))) if t]
 
 
 def heard_tokens(words: list) -> list[tuple[str, float, float]]:
@@ -666,19 +718,55 @@ class Transcripts:
         return last
 
     # reading
-    def read(self, primary: dict, doc: dict, should_yield) -> dict:
+    def read(self, primary: dict, doc: dict, should_yield, members: list[dict] | None = None) -> dict:
+        """Read the transcript into lines. An episode that was timed keeps its timing: the words heard for the timing
+        in use are matched to the new lines, without hearing anything again. That's done before anything is written,
+        so a pause halfway loses nothing and the transcript is simply read again later."""
         tmp = self.dir / f"{primary['id']}.lines.tmp"
         self.dir.mkdir(parents=True, exist_ok=True)
         self._child(["read", str(self.paths.archive / doc["path"]), str(tmp)], None, should_yield)
         lines = json.loads(tmp.read_text())
         tmp.unlink(missing_ok=True)
+        before = (self.row(primary["id"]) or {}).get("timing") or {}
+        again = None
+        if members and lines:
+            try:
+                again = self._match_again(primary, members, lines, before, should_yield)
+            except Yielded:
+                raise
+            except Exception as e:
+                log.warning("matching the transcript of %s again failed: %s", primary["id"], e)
         self._write(self.lines_file(primary["id"]), {"version": VERSION, "document": doc, "aligned": False,
                                                      "timeline": None, "lines": [dict(l, start=None, end=None)
                                                                                  for l in lines]})
         self.db.upsert("transcripts", "item_id", {
             "item_id": primary["id"], "document": doc["path"], "doc_size": doc["size"], "lines": len(lines),
             "aligned": 0, "timing": {}, "updated_at": _now()})
-        return {"lines": len(lines)}
+        if again:
+            sound, result, aligned, timing = again
+            self._store(primary, {"document": doc}, lines, sound, result, aligned, timing)
+            self.record(primary, timing)
+        return {"lines": len(lines), "matched_again": bool(again)}
+
+    def _match_again(self, primary: dict, members: list[dict], lines: list, before: dict, should_yield):
+        """For a transcript read again: the words heard for the timing in use, matched to the new lines, as
+        (sound, result, aligned, timing). None when there's no such timing, or its sound changed since."""
+        if not (before.get("at") and before.get("found") is not None):
+            return None
+        sound = self.sound(members)
+        heard = self._load(self.heard_file(primary["id"])) or {}
+        key = heard.get("key") or {}
+        if not sound or not heard.get("words") or before.get("sound_size") != sound["size"] \
+                or key.get("size") != sound["size"] or key.get("model") != before.get("model"):
+            return None
+        lines = [{"speaker": l["speaker"], "text": l["text"]} for l in lines]
+        result, match_took = self._match(primary["id"], lines, self.heard_file(primary["id"]), should_yield)
+        aligned = self._aligned(result, lines)
+        timing = {k: v for k, v in before.items() if k not in ("compare", "compare_in_use", "used", "error")}
+        timing.update(heard_now=False, read_again=True, match_took=match_took, words=result.get("words"),
+                      found=result["found"], placed=result["placed"], unplaced=result["unplaced"], at=_now(),
+                      error=None if aligned else self._mismatch(result))
+        return sound, result, aligned, timing
 
     # timing
     def time(self, primary: dict, members: list[dict], should_yield, progress=None) -> dict:
@@ -1027,7 +1115,7 @@ class Transcripts:
             for i, (primary, members, doc) in enumerate(pending):
                 self.status.set(done=i, detail=primary["title"] or str(primary["id"]))
                 try:
-                    self.read(primary, doc, should_yield)
+                    self.read(primary, doc, should_yield, members)
                     done["read"] += 1
                 except Yielded:
                     raise

@@ -107,7 +107,7 @@
     <div class="scrollx"><table class="small records">
       <tr><th>Timed</th><th>Result</th><th>Words found</th><th>Lines placed</th><th>Hearing</th><th>Speed</th><th>Memory</th><th>Model, threads</th></tr>
       {% for r in tx.runs %}
-      <tr><td><span data-when-at="{{ r.at }}">{{ (r.at or '')[:16] | replace('T', ' ') }}</span>{% if r.heard_now == false %}<div class="muted">matched again</div>{% endif %}</td>
+      <tr><td><span data-when-at="{{ r.at }}">{{ (r.at or '')[:16] | replace('T', ' ') }}</span>{% if r.read_again %}<div class="muted">transcript read again, matched again</div>{% elif r.heard_now == false %}<div class="muted">matched again</div>{% endif %}</td>
         <td class="{{ 'ok' if r.result == 'timed' else 'bad' }}" {% if r.error %}title="{{ r.error }}"{% endif %}>{{ {'timed': 'Timed', 'mismatch': "Not this episode's", 'error': "Couldn't be timed"}[r.result] or r.result }}</td>
         <td>{% if r.found is number %}{{ (r.found * 100) | round(0) | int }}%{% endif %}</td>
         <td>{% if r.placed is number %}{% if r.result == 'timed' and r.placed_share is number %}<span class="rating" style="{{ placed_style(r.placed_share) }}">{{ (r.placed_share * 100) | round(0) | int }}%</span> {% endif %}{{ r.placed }} of {{ r.placed + (r.unplaced or 0) }}{% endif %}</td>

@@ -1299,6 +1299,7 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         records = web.get("/admin/transcripts?sort=found").text
         assert "Through the Fire | Riptide #136" in records and "Timed" in records and "5 of 5" in records
         assert "2 tries" in records and "1 of" in records   # 1 of N episodes timed
+        assert "Post 300 · " in records   # to name it to the PC program, to try it again
         # Lines placed in colour next to the episode: all 5 of 5 is the archive's yellow, with dark text
         assert '<span class="rating" style="background:#f4e434;color:#1b0833"' in records and ">100%</span>" in records
         assert 'class="rating"' in web.get("/admin/items/300").text
@@ -1312,6 +1313,17 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         csv_text = web.get("/admin/transcripts.csv").text.splitlines()
         assert csv_text[0].startswith("item_id,title,at,result") and len(csv_text) == 3
         assert ",timed," in csv_text[1] and ",False," in csv_text[1]   # the newest first: matched again
+        # A new way of reading (0.14.5) reads every transcript again and keeps its timing: the words already heard
+        # are matched to the new lines, nothing is heard again, and the try is recorded as such
+        monkeypatch.setattr(tr, "VERSION", 99)
+        done = scheduler.transcripts.run(scheduler.ser, lambda: False, timing_on=False)
+        assert done["read"] >= 1 and done["timed"] == 0
+        row = db.one("SELECT * FROM transcripts WHERE item_id=300")
+        assert row["aligned"] and row["timing"]["placed"] == 5 and row["timing"]["read_again"] is True, row
+        assert row["timing"]["heard_now"] is False and row["timing"]["error"] is None
+        assert client.get("/api/transcript/298").json()["lines"][3]["start"] == 8.0
+        assert len(db.q("SELECT * FROM transcript_runs WHERE item_id=300")) == 3
+        assert "transcript read again" in web.get("/admin/items/300").text
         # While it runs, the top of the admin page has its own bar: the episode's progress, the batch's count
         scheduler.bg.begin("transcripts", total=3, phase="Timing transcripts", running=True)
         scheduler.bg.set(done=1, current=0.42, detail="Paid In Blood · hearing, 42%, about 16 min left")
