@@ -1287,6 +1287,16 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         assert "data-transcript" in web.get("/items/298").text
         admin = web.get("/admin").text
         assert "Time one episode now" in admin and "Time transcripts now" in admin and "lines placed" in admin
+        assert "data-bg-box" in admin and 'data-had="0"' in admin
+        # While it runs, the top of the admin page has its own bar: the episode's progress, the batch's count
+        scheduler.bg.begin("transcripts", total=3, phase="Timing transcripts", running=True)
+        scheduler.bg.set(done=1, current=0.42, detail="Paid In Blood · hearing, 42%, about 16 min left")
+        try:
+            admin = web.get("/admin").text
+            assert "episode 2 of 3" in admin and "width:42.0%" in admin and "about 16 min left" in admin
+            assert client.get("/api/status").json()["background"]["progress"]["current"] == 0.42
+        finally:
+            scheduler.bg.set(running=False, step="idle", phase="idle", detail="", done=0, total=0, current=None)
         assert "only when you start it" in admin
         assert "Time it again" in web.get("/admin/items/298").text
         settings = web.get("/admin/settings").text

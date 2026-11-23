@@ -154,18 +154,27 @@ if (live) {
       set("free_bytes", humanSize(s.disk.free_bytes));
       // The last check's problem is old news once a new check is running
       if (s.running) document.querySelectorAll("[data-last-problem]").forEach((el) => { el.hidden = true; });
-      // Work between checks, such as timing transcripts (contract v0.23)
-      const bg = document.querySelector("[data-bg]");
-      if (bg) {
-        if (s.background) {
-          bg.textContent = "";
-          const b = document.createElement("b");
-          b.textContent = `${s.background.phase}: `;
-          bg.append(b, s.background.detail || "");
+      // Work in the background, alongside checks, such as timing transcripts (contract v0.23): its own bar,
+      // for the episode being timed, and the count for the whole batch
+      const box = document.querySelector("[data-bg-box]");
+      if (box) {
+        const b = s.background;
+        if (b) {
+          const bp = b.progress || {};
+          const cur = bp.current !== null && bp.current !== undefined;
+          box.querySelector("[data-bg-phase]").textContent = b.phase;
+          box.querySelector("[data-bg-detail]").textContent = b.detail || "";
+          box.querySelector("[data-bg-count]").textContent =
+            bp.total ? `${bp.unit || "step"} ${Math.min(bp.done + 1, bp.total)} of ${bp.total}` : "";
+          const bgBar = box.querySelector("[data-bg-bar]");
+          bgBar.parentElement.classList.toggle("busy", !cur && !bp.total);
+          bgBar.style.width = Math.min(100, cur ? 100 * bp.current : bp.total ? (100 * bp.done) / bp.total : 0)
+            .toFixed(1) + "%";
         }
+        box.hidden = !b;
         // It started (the tile becomes Pause) or finished (show what it found)
-        if ((bg.dataset.had === "1") !== Boolean(s.background)) location.reload();
-        bg.dataset.had = s.background ? "1" : "0";
+        if ((box.dataset.had === "1") !== Boolean(b)) location.reload();
+        box.dataset.had = b ? "1" : "0";
       }
       // A check started or ended: reload, so the buttons (Check now or Stop), counts and tables are current
       if ((live.dataset.wasRunning === "1") !== s.running) location.reload();

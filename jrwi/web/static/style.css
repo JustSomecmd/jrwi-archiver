@@ -595,3 +595,7 @@ button.action:disabled:hover { background: var(--card); border-color: var(--line
 .inline-times label { display: inline; margin: 0; }
 .inline-times input { width: auto; }
 #transcripts:has(#txwhen option[value=hours]:not(:checked)) .inline-times { display: none; }
+
+/* Admin: work in the background (timing transcripts), under the check's status */
+.bg-status { margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--line); }
+.status-icon.still .icon { animation: none; }

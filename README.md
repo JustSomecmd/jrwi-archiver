@@ -88,7 +88,7 @@ To time the lines, the archiver hears the episode once with a speech recognizer 
 Hearing an episode takes a while and a fair amount of memory: on one 4-thread server, an episode took about 27 minutes with the default model (small.en) and used at most about 1.7 GB. So it's off until you start it or choose when it runs:
 
 1. On the **Admin** page, press **Time one episode now**. It times the newest episode with a transcript, in the background. The first time, the speech model is downloaded to the data folder's `models` folder.
-2. When it's done, the Admin page says how long it took, the most memory it used, and how many lines it placed. Open the episode and try the Transcript button.
+2. While it runs, the top of the Admin page shows a bar for the episode being heard, which one of how many it is, and about how long that episode has left. When it's done, the Admin page says how long it took, the most memory it used, and how many lines it placed. Open the episode and try the Transcript button.
 3. If that suits your server, either press **Time transcripts now** on the Admin page, which times every episode not timed yet and then stops, or choose when it runs in **Settings > Transcripts > Time them**:
    - **Only when started on the Admin page** (the default).
    - **Between set hours**, such as 01:00 to 07:00 in the server's local time (`TZ` in the compose file). The hours can go past midnight. An episode that's half heard when they end carries on the next day.

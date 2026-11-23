@@ -106,3 +106,15 @@ def test_a_line_by_a_long_gap_with_nothing_heard_gets_no_time():
              [300.0, 300.2, "six"], [300.2, 300.4, "seven"], [300.4, 300.6, "eight"]]
     out = match(lines, words)["lines"]
     assert out[0]["start"] == 1.0 and out[2]["start"] == 300.0 and out[1]["start"] is None
+
+
+def test_time_left_while_hearing():
+    from jrwi.transcripts import Pace, left_text
+    pace = Pace()
+    assert pace.left(0.10, now=0) is None            # where it starts from (carried on from a saved piece)
+    assert pace.left(0.12, now=30) is None           # too soon to tell
+    assert pace.left(0.20, now=120) == 120 * 0.80 / 0.10   # 10% in 2 minutes: 80% more takes 16
+    pace.reset()
+    assert pace.left(0.5, now=500) is None
+    assert [left_text(s) for s in (20, 95, 16 * 60, 3600, 3600 + 25 * 60)] == [
+        "under a minute left", "about 2 min left", "about 16 min left", "about 1 h left", "about 1 h 25 min left"]

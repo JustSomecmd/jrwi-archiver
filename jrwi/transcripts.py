@@ -314,6 +314,41 @@ def _decode(audio: Path, start: float, length: float):
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
+PROGRESS_EVERY = 5.0   # seconds between the hearing's "how far" lines within a piece
+
+
+class Pace:
+    """How long the episode being heard has left, from how fast it has gone since hearing began (this time: an
+    episode carried on from a saved piece counts from there, and loading the model doesn't count)."""
+
+    def __init__(self) -> None:
+        self.since: float | None = None
+        self.share: float = 0.0
+
+    def reset(self) -> None:
+        self.since = None
+
+    def left(self, share: float, now: float | None = None) -> float | None:
+        now = time.monotonic() if now is None else now
+        if self.since is None:
+            self.since, self.share = now, share
+            return None
+        took, gained = now - self.since, share - self.share
+        if took < 60 or gained < 0.005:
+            return None   # too soon to tell
+        return took * (1 - share) / gained
+
+
+def left_text(seconds: float) -> str:
+    minutes = round(seconds / 60)
+    if minutes < 1:
+        return "under a minute left"
+    if minutes < 60:
+        return f"about {minutes} min left"
+    hours, minutes = divmod(minutes, 60)
+    return f"about {hours} h {minutes} min left" if minutes else f"about {hours} h left"
+
+
 def _emit(msg: dict) -> None:
     msg["rss_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
     sys.stdout.write(json.dumps(msg) + "\n")
@@ -347,11 +382,15 @@ def hear(audio: Path, total: float, start_at: float, model_name: str, threads: i
         segments, _ = model.transcribe(_decode(audio, t, length), language="en", beam_size=1, word_timestamps=True,
                                        vad_filter=True, condition_on_previous_text=False, hotwords=hotwords or None)
         words = []
-        for seg in segments:
+        told = time.monotonic()
+        for seg in segments:   # heard as they're asked for, so how far it's got can be told as it goes
             for w in seg.words or []:
                 s = t + w.start
                 if lo <= s < hi and w.word.strip():
                     words.append([round(s, 2), round(t + w.end, 2), w.word.strip()])
+            if time.monotonic() - told >= PROGRESS_EVERY:
+                _emit({"at": round(min(t + seg.end, t + CHUNK, total), 1)})
+                told = time.monotonic()
         _emit({"from": t, "to": min(t + CHUNK, total), "words": words})
         t += CHUNK
 
@@ -555,6 +594,8 @@ class Transcripts:
                     self._write(self.heard_file(item_id), heard)
                     if progress:
                         progress(heard["until"] / total, "hearing")
+                elif "at" in msg and progress:
+                    progress(max(heard["until"], float(msg["at"])) / total, "hearing")
                 elif "loading" in msg and progress:
                     progress(heard["until"] / total, "loading the speech model (downloaded once, the first time)")
                 elif "ready" in msg:
@@ -673,9 +714,18 @@ class Transcripts:
             for i, (primary, members, doc) in enumerate(work):
                 title = primary["title"] or str(primary["id"])
 
-                def progress(share: float, what: str, i=i, title=title) -> None:
-                    self.status.set(done=i, current=round(min(1.0, share), 3),
-                                    detail=f"{title} · {what}, {round(share * 100)}%")
+                pace = Pace()
+
+                def progress(share: float, what: str, i=i, title=title, pace=pace) -> None:
+                    share = min(1.0, share)
+                    detail = f"{title} · {what}, {round(share * 100)}%"
+                    if what == "hearing":
+                        left = pace.left(share)
+                        if left is not None:
+                            detail += f", {left_text(left)}"
+                    else:
+                        pace.reset()   # loading the model, or matching: not hearing
+                    self.status.set(done=i, current=round(share, 3), detail=detail)
                 try:
                     self.time(primary, members, should_yield, progress)
                     done["timed"] += 1

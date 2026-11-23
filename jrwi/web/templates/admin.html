@@ -21,6 +21,19 @@
     </div>
   </div>
   <div class="bar{% if st.running and (not st.progress.total or (st.step == 'posts' and st.progress.current is none)) %} busy{% endif %}" {% if not st.running %}hidden{% endif %}><i data-bar style="width:0"></i></div>
+  {# Work in the background, alongside checks: timing transcripts (its episode's progress; the count is the batch's) #}
+  {% set bgp = tx.bg.progress if tx.bg else {} %}
+  <div class="bg-status" data-bg-box data-had="{{ '1' if tx.bg else '0' }}" {% if not tx.bg %}hidden{% endif %}>
+    <div class="status-line">
+      <span class="status-icon on still">{{ icon('doc') }}</span>
+      <div class="status-text">
+        <b data-bg-phase>{{ tx.bg.phase if tx.bg else '' }}</b>
+        <span class="muted small" data-bg-count>{% if bgp.total %}{{ bgp.unit or 'step' }} {{ [bgp.done + 1, bgp.total] | min }} of {{ bgp.total }}{% endif %}</span>
+        <div class="small" data-bg-detail>{{ tx.bg.detail if tx.bg else '' }}</div>
+      </div>
+    </div>
+    <div class="bar{% if tx.bg and bgp.current is none and not bgp.total %} busy{% endif %}"><i data-bg-bar style="width:{% if tx.bg %}{{ '%.1f' | format((bgp.current * 100) if bgp.current is not none else ((bgp.done * 100 / bgp.total) if bgp.total else 0)) }}{% else %}0{% endif %}%"></i></div>
+  </div>
 </div>
 
 <div class="actions">
@@ -190,7 +203,7 @@
     ({{ tx.model }}, {{ tx.threads }} thread{{ '' if tx.threads == 1 else 's' }};
     <a href="/admin/settings#transcripts">Settings</a>){% if tx.manual %}; started by hand, until all are done{% endif %}.</p>
   {% if tx.problem %}<p class="small bad">{{ tx.problem }}. It's tried again after the next check.</p>{% endif %}
-  <p class="small" data-bg data-had="{{ '1' if tx.bg else '0' }}">{% if tx.bg %}<b>{{ tx.bg.phase }}:</b> {{ tx.bg.detail }}{% elif tx.paused %}Paused until the next check.{% endif %}</p>
+  {% if tx.bg %}<p class="small">Running now: see the top of this page.</p>{% elif tx.paused %}<p class="small">Paused until the next check.</p>{% endif %}
   {% if tx.last %}
   <p class="small">Last timed: <a href="/items/{{ tx.last.item_id }}">{{ tx.last.title }}</a>
     {% if tx.last.error %}<span class="bad">{{ tx.last.error }}</span>{% else %}
