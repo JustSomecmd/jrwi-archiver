@@ -10,8 +10,8 @@ Install once (Python 3.9 or newer):
     pip install faster-whisper psutil
 For an NVIDIA graphics card, which hears many times faster:
     pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
-(If the card still isn't used on Windows, put the NVIDIA libraries from Purfview's whisper-standalone-win on PATH,
-or run with --device cpu.)
+(If the card still isn't used on Windows, unpack the NVIDIA libraries from Purfview's whisper-standalone-win into a
+folder named nvidia next to this program, or run with --device cpu.)
 
 Use:
     python jrwi_hear.py setup              the archiver's address and API token (its Settings page shows the token)
@@ -154,12 +154,13 @@ def download(cfg: dict, job: dict) -> Path:
 # ------------------------------------------------------------------ the graphics card
 
 def nvidia_dirs() -> list[str]:
-    """Where pip put NVIDIA's libraries (nvidia-cublas-cu12, nvidia-cudnn-cu12), if it did."""
+    """Where NVIDIA's libraries are: a folder named nvidia next to this program (where Purfview's archive can be
+    unpacked), and where pip put nvidia-cublas-cu12 and nvidia-cudnn-cu12, if it did."""
+    out = [str(HERE / "nvidia")] if (HERE / "nvidia").is_dir() else []
     try:
         spec = importlib.util.find_spec("nvidia")
     except (ImportError, ValueError):
-        return []
-    out = []
+        return out
     for base in (spec.submodule_search_locations if spec else None) or []:
         for lib in ("cublas", "cudnn", "cuda_runtime", "cuda_nvrtc"):
             d = Path(base) / lib / ("bin" if os.name == "nt" else "lib")
