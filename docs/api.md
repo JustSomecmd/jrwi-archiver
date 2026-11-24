@@ -1,6 +1,6 @@
 # JRWI archiver API (contract v0.28)
 
-This is the same text as the integration contract in the user's "Multimedia Server" project. Everything in it is in the service since 0.12.0.
+This is the same text as the contract part of the integration docs in the user's "Multimedia Server" project, `claude/jrwi-archiver-integration-contract.md`; the index, `claude/jrwi-archiver-integration.md`, lists the other parts. Everything in it is in the service since 0.12.0.
 
 **Changes since v0.1**
 - **v0.3:** `sync` on items with both versions (the offset between the video and the audio, and whether it was checked), `duration` on the `video` and `audio` parts, and `/api/progress/{postId}` taking either post ID of an item. When the archiver isn't sure, it reports an offset of 0 rather than no `sync` at all, so positions are always shared. In the service since 0.4.0.
