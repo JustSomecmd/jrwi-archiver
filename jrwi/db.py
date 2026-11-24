@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS transcript_runs (
 );
 CREATE INDEX IF NOT EXISTS transcript_runs_item ON transcript_runs(item_id, at);
 
+-- Claims on transcript jobs (contract v0.28): a computer hearing an episode, until when, so others skip it
+CREATE TABLE IF NOT EXISTS transcript_claims (
+    item_id INTEGER PRIMARY KEY, claim TEXT, by TEXT, until TEXT, at TEXT
+);
+
 -- What TubeArchivist says about the YouTube videos posts embed (0.14.9): the members site doesn't give their length
 CREATE TABLE IF NOT EXISTS youtube_videos (
     youtube_id TEXT PRIMARY KEY, duration REAL, size INTEGER, checked_at TEXT

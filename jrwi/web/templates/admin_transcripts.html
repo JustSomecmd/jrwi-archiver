@@ -77,11 +77,15 @@
   <p class="small">A faster computer can do the slow part, hearing the episodes, and send back what it heard. The
     archiver still matches it to the transcript, so the lines come out the same way, and each try is in the record
     above, marked PC. With an NVIDIA graphics card it's many times faster.</p>
+  {% if claims %}<p class="small"><b>Being heard now:</b>
+    {% for c in claims %}<a href="/admin/items/{{ c.item_id }}">{{ c.title or c.item_id }}</a> ({{ 'the server itself' if c.by == 'server' else c.by }}{% if c.until %}, claimed until <span data-when-at="{{ c.until }}">{{ c.until[:16] | replace('T', ' ') }}</span>{% endif %}){{ '; ' if not loop.last }}{% endfor %}.
+    The server's own timing, and other computers running the PC program, skip these.</p>{% endif %}
   <ol class="small steps">
     <li>Install <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python</a>, then in a terminal:
       <code>pip install faster-whisper psutil</code>. For an NVIDIA graphics card also:
       <code>pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"</code></li>
-    <li><a href="/admin/transcripts/jrwi_hear.py" download>{{ icon('download') }} Download the PC program</a> into a folder of its own.</li>
+    <li><a href="/admin/transcripts/jrwi_hear.py" download>{{ icon('download') }} Download the PC program</a>{% if program %} (version {{ program }}){% endif %} into a folder of its own.
+      A copy you have already brings itself up to date with <code>python jrwi_hear.py update</code>.</li>
     <li>Run <code>python jrwi_hear.py setup</code> there: the archiver's address and its API token, from
       <a href="/admin/settings">Settings</a>. Then <code>python jrwi_hear.py check</code> says whether it reached the
       archiver and can use the graphics card.</li>

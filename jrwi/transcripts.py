@@ -36,6 +36,8 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote
 
+from . import VERSION as ARCHIVER
+
 log = logging.getLogger("jrwi.transcripts")
 
 NAMED = re.compile(r"transcri(?:pt|ption)", re.I)
@@ -70,6 +72,25 @@ MODELS = ("base.en", "small.en", "medium.en")
 # Of how lines are read and matched: a change reads every transcript again and matches the words already heard to
 # the new lines, without hearing anything again. 2 (0.14.5): the early "Name: what they said" transcripts.
 VERSION = 2
+# Claims on jobs (contract v0.28): how long a computer that's about to hear an episode keeps it, unless it renews
+CLAIM_MINUTES = 30
+CLAIM_MAX_MINUTES = 240
+PC_PROGRAM_FILE = Path(__file__).resolve().parent / "pc" / "jrwi_hear.py"
+
+
+def pc_program_version() -> str | None:
+    """The version of the PC program this archiver hands out (jrwi/pc/jrwi_hear.py), for the ping and the jobs."""
+    global _PC_PROGRAM
+    if _PC_PROGRAM is None:
+        try:
+            m = re.search(r'^PROGRAM = "([^"]+)"', PC_PROGRAM_FILE.read_text(encoding="utf-8"), re.M)
+            _PC_PROGRAM = m.group(1) if m else ""
+        except OSError:
+            _PC_PROGRAM = ""
+    return _PC_PROGRAM or None
+
+
+_PC_PROGRAM: str | None = None
 
 
 # ------------------------------------------------------------------ finding
@@ -498,6 +519,14 @@ class ModelProblem(Exception):
     """The speech model couldn't be downloaded or loaded: no episode is to blame, so the job stops."""
 
 
+class Claimed(Exception):
+    """Another computer, or the server, is hearing this episode (contract v0.28). claim: who, and until when."""
+
+    def __init__(self, claim: dict) -> None:
+        super().__init__(f"{claim.get('by')} is hearing it")
+        self.claim = claim
+
+
 class Transcripts:
     def __init__(self, db, paths, status) -> None:
         self.db = db
@@ -506,6 +535,8 @@ class Transcripts:
         self.dir = paths.archive / "transcripts"
         self._ta_seen: dict[str, tuple] = {}     # YouTube ID -> (when, TubeArchivist's video or None, why not, ttl)
         self._fetch_lock = threading.Lock()
+        self._claim_lock = threading.Lock()
+        self.hearing: int | None = None   # the item the server's own timing is hearing now, if any
 
     # files
     def lines_file(self, item_id: int) -> Path:
@@ -900,7 +931,8 @@ class Transcripts:
                                                                  "updated_at": _now()})
 
     # hearing on another computer (contract v0.24, every episode since v0.25)
-    def job(self, primary: dict, members: list[dict], runs: list[dict] | None = None) -> dict | None:
+    def job(self, primary: dict, members: list[dict], runs: list[dict] | None = None,
+            claims: dict | None = None) -> dict | None:
         """What another computer needs to hear this episode as the archiver would: where its sound is, how to hear
         it, and the speakers' names to listen for, with which models have heard it already. None without read
         lines or sound."""
@@ -927,7 +959,9 @@ class Transcripts:
                           "url": (f"/api/transcripts/sound/{sound['post_id']}" if sound.get("tubearchivist") else
                                   f"/api/{part}/{sound['post_id']}"), "name": Path(sound["path"]).name,
                           "source": "tubearchivist" if sound.get("tubearchivist") else "archive"},
-                "hotwords": None, "hearing": dict(HEARING), "archiver": VERSION}   # see HOTWORDS
+                "hotwords": None, "hearing": dict(HEARING), "archiver": ARCHIVER,   # see HOTWORDS
+                "program": pc_program_version(),
+                "claimed": (self.claims() if claims is None else claims).get(primary["id"])}
 
     def heard_with(self, item_id: int, size: int, runs: list[dict] | None = None) -> list[str]:
         """The models that have heard this sound to the end and been matched, here or on another computer."""
@@ -947,10 +981,11 @@ class Transcripts:
         for r in self.db.q("SELECT item_id, timing FROM transcript_runs"):
             runs.setdefault(r["item_id"], []).append(r["timing"])
         out, left_out = [], []
+        claims = self.claims()
         for primary, members, _ in (found if every else self.to_time(found)):
             if limit is not None and len(out) >= limit:
                 break
-            j = self.job(primary, members, runs.get(primary["id"], []))
+            j = self.job(primary, members, runs.get(primary["id"], []), claims)
             if j:
                 out.append(j)
             elif every:
@@ -958,6 +993,54 @@ class Transcripts:
                        "its transcript hasn't been read into lines yet (Settings > Transcripts > Read transcripts)")
                 left_out.append({"item_id": primary["id"], "title": primary.get("title"), "why": why})
         return {"jobs": out, "left_out": left_out, "episodes": len(found)}
+
+    # claims (contract v0.28): a computer about to hear an episode says so, and the server and other computers skip it
+    def claims(self) -> dict[int, dict]:
+        """Who is hearing which episode now: claims that haven't run out, and the server's own hearing."""
+        out = {r["item_id"]: {"by": r["by"], "until": r["until"]}
+               for r in self.db.q("SELECT item_id, by, until FROM transcript_claims WHERE until > ?", (_now(),))}
+        if self.hearing is not None:
+            out[self.hearing] = {"by": "server", "until": None}
+        return out
+
+    def claim(self, item_id: int, by: str, minutes: int = CLAIM_MINUTES, claim_id: str | None = None) -> dict:
+        """Claim an episode for hearing, or renew a claim (claim_id from an earlier answer). Raises Claimed when the
+        server is hearing it or another claim that hasn't run out has it."""
+        import secrets
+        from datetime import datetime, timedelta, timezone
+        minutes = max(1, min(int(minutes), CLAIM_MAX_MINUTES))
+        with self._claim_lock:
+            if self.hearing == item_id:
+                raise Claimed({"by": "server", "until": None})
+            row = self.db.one("SELECT * FROM transcript_claims WHERE item_id=?", (item_id,))
+            if row and row["until"] > _now() and (not claim_id or row["claim"] != claim_id):
+                raise Claimed({"by": row["by"], "until": row["until"]})
+            until = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+            cid = claim_id or secrets.token_urlsafe(12)
+            since = row["at"] if row and row["claim"] == cid else _now()   # a renewal keeps when it began
+            self.db.upsert("transcript_claims", "item_id", {"item_id": item_id, "claim": cid, "by": by,
+                                                            "until": until, "at": since})
+            return {"item_id": item_id, "claim": cid, "by": by, "until": until}
+
+    def release(self, item_id: int, claim_id: str | None = None) -> bool:
+        """Let go of a claim: the one given, or with None any claim on the episode (its words came in)."""
+        where, args = (("item_id=?", (item_id,)) if claim_id is None else
+                       ("item_id=? AND claim=?", (item_id, claim_id)))
+        with self._claim_lock:
+            found = self.db.one(f"SELECT 1 FROM transcript_claims WHERE {where}", args)
+            if found:
+                self.db.x(f"DELETE FROM transcript_claims WHERE {where}", args)
+        return bool(found)
+
+    def _start_hearing(self, item_id: int, respect_claims: bool) -> bool:
+        """The server's own timing takes an episode, unless another computer has claimed it (an episode asked for
+        on the admin page is heard anyway)."""
+        with self._claim_lock:
+            if respect_claims and self.db.one("SELECT 1 FROM transcript_claims WHERE item_id=? AND until > ?",
+                                              (item_id, _now())):
+                return False
+            self.hearing = item_id
+            return True
 
     def import_heard(self, primary: dict, members: list[dict], payload: dict) -> dict:
         """Time an episode with words heard on another computer: each result (one per model) is matched as the
@@ -1052,6 +1135,7 @@ class Transcripts:
         for x in tries:
             self.record(primary, x["timing"])
         self.drop_sound(sound)
+        self.release(item_id)   # heard: whoever claimed it is done with it (v0.28)
         return {"item_id": item_id, "used": best["timing"]["model"] if replaced else (before["model"] or "?"),
                 "replaced": replaced, "before": before,
                 "tries": [{k: x["timing"].get(k) for k in ("model", "device", "found", "placed", "unplaced", "took",
@@ -1095,8 +1179,11 @@ class Transcripts:
 
     def newest_untimed(self, found: list) -> int | None:
         """The newest item with a transcript that has sound to hear and hasn't been timed or tried, read or not."""
+        claimed = self.claims()
         for primary, members, doc in found:
             row = self.row(primary["id"])
+            if primary["id"] in claimed:
+                continue   # another computer is hearing it (v0.28)
             if self.sound(members) and (not row or (not row["aligned"] and not (row["timing"] or {}).get("at"))):
                 return primary["id"]
         return None
@@ -1150,6 +1237,9 @@ class Transcripts:
                     else:
                         pace.reset()   # loading the model, or matching: not hearing
                     self.status.set(done=i, current=round(share, 3), detail=detail)
+                if not self._start_hearing(primary["id"], respect_claims=one is None):
+                    log.info("transcripts: %s is being heard on another computer; skipped", primary["id"])
+                    continue
                 try:
                     self.time(primary, members, should_yield, progress)
                     done["timed"] += 1
@@ -1164,6 +1254,8 @@ class Transcripts:
                                           "threads": self.threads()})
                     self.db.update("transcripts", "item_id", primary["id"], {
                         "timing": {"error": str(e)[:300], "at": _now()}, "updated_at": _now()})
+                finally:
+                    self.hearing = None
         return done
 
     # for the API

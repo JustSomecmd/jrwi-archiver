@@ -112,6 +112,8 @@ Hearing is the slow part, so a faster computer can do it and send back what it h
 
 The archiver keeps whichever timing found more of the transcript's words: a new one, or the one in use. Every try is in the record either way. On Windows the program keeps the computer from going to sleep while it runs.
 
+Since 0.14.10 (program 1.4), `compare` and `run` claim each episode just before hearing it, renewing the claim every 10 minutes, so the archiver's own timing and other computers leave it alone; an episode another computer has claimed is skipped, and Admin > Transcripts lists what's being heard under "Being heard now". A claim ends when the words are sent, when the program stops, or 30 minutes after it was last renewed. `python jrwi_hear.py update` replaces the program with the archiver's own copy, which `check`, `compare` and `run` say when it's newer. `--json` prints every step as a JSON object on a line of its own, for a program that runs this one (Winchivist's compute box); `docs/api.md` lists the events.
+
 Without the network: **Export for your PC** on an episode's admin page downloads its sound and job in one file; `python jrwi_hear.py file jrwi-job-123.zip` writes `jrwi-job-123-result.json` next to it, which **Import from your PC** on the same page takes.
 
 When an episode times badly, **Debug data** on its admin page downloads what the archiver kept of it in one zip: the transcript PDF, its lines as read and as timed, the words heard for the timing in use with their times, and every try. It holds no settings, tokens or passwords, and not the sound.

@@ -342,7 +342,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     def api_ping():
         # What this archiver has, so apps needn't ask for each part to find out (contract v0.17)
         return {"name": NAME, "version": VERSION, "contract": CONTRACT, "features": FEATURES,
-                "watched_left": progress.watched_left()}
+                "watched_left": progress.watched_left(), "pc_program": transcripts_mod.pc_program_version()}
 
     @app.get("/api/status", dependencies=[Depends(api_auth)])
     def api_status():
@@ -621,6 +621,44 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
                 "its transcript hasn't been read into lines yet" if transcripts.sound(members) else
                 transcripts.why_no_sound(members)))
         return job
+
+    @app.post("/api/transcripts/jobs/{post_id}/claim", dependencies=[Depends(api_auth)])
+    async def api_transcript_claim(post_id: int, request: Request):
+        """(v0.28) Claim an episode before hearing it, so the server's own timing and other computers skip it, for
+        30 minutes unless another length is given; the same claim again renews it. 409 when someone else has it."""
+        primary, members = job_target(post_id)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw.strip() else {}
+            if not isinstance(body, dict):
+                raise ValueError
+            minutes = int(body.get("minutes") or transcripts_mod.CLAIM_MINUTES)
+        except (ValueError, TypeError):
+            raise HTTPException(400, 'expected {"by": "...", "minutes": 30, "claim": "..."}') from None
+        if not transcripts.job(primary, members):
+            raise HTTPException(404, "This episode can't be heard: it has no read transcript or no sound")
+        by = str(body.get("by") or "").strip()[:80] or "another computer"
+        try:
+            return transcripts.claim(primary["id"], by, minutes, str(body["claim"])[:64] if body.get("claim") else None)
+        except transcripts_mod.Claimed as e:
+            who = "The server is hearing this episode itself" if e.claim["by"] == "server" else \
+                f"{e.claim['by']} is hearing this episode, until {e.claim['until']}"
+            return JSONResponse({"error": who, "claimed": e.claim}, status_code=409)
+
+    @app.delete("/api/transcripts/jobs/{post_id}/claim", dependencies=[Depends(api_auth)])
+    def api_transcript_release(post_id: int, claim: str = ""):
+        """(v0.28) Let go of a claim, by the claim's own ID, when the episode won't be heard after all."""
+        primary, _ = job_target(post_id)
+        if not claim:
+            raise HTTPException(400, "give the claim: ?claim=<the ID the claim's answer gave>")
+        return {"item_id": primary["id"], "released": transcripts.release(primary["id"], claim[:64])}
+
+    @app.get("/api/transcripts/program", dependencies=[Depends(api_auth)])
+    def api_pc_program():
+        """(v0.28) The PC program this archiver hands out, with the API token, so a program that runs it (Winchivist)
+        can fetch it when its version (pc_program in the ping) differs from its copy's."""
+        return FileResponse(transcripts_mod.PC_PROGRAM_FILE, media_type="text/x-python", filename="jrwi_hear.py",
+                            headers={"X-Program-Version": transcripts_mod.pc_program_version() or ""})
 
     @app.get("/api/transcripts/sound/{post_id}", dependencies=[Depends(api_auth)])
     def api_transcript_sound(post_id: int):
@@ -1020,7 +1058,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         sort = sort if sort in RECORD_SORTS else "at"
         order = "asc" if order == "asc" else "desc"
         episodes, totals = transcript_records(sort, order)
-        return render(request, "admin_transcripts.html", episodes=episodes, totals=totals, sort=sort, order=order)
+        claims = [{"item_id": i, "by": c["by"], "until": c["until"], "title": (db.post(i) or {}).get("title")}
+                  for i, c in sorted(transcripts.claims().items())]
+        return render(request, "admin_transcripts.html", episodes=episodes, totals=totals, sort=sort, order=order,
+                      claims=claims, program=transcripts_mod.pc_program_version())
 
     @app.get("/admin/transcripts.csv", dependencies=[Depends(web_auth)])
     def admin_transcripts_csv():
@@ -1527,7 +1568,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
     @app.get("/admin/transcripts/jrwi_hear.py", dependencies=[Depends(web_auth)])
     def admin_pc_program():
         """The PC program, from this version of the archiver."""
-        return FileResponse(Path(__file__).resolve().parent.parent / "pc" / "jrwi_hear.py", media_type="text/x-python",
+        return FileResponse(transcripts_mod.PC_PROGRAM_FILE, media_type="text/x-python",
                             filename="jrwi_hear.py")
 
     @app.post("/admin/transcripts/time", dependencies=[Depends(web_auth)])

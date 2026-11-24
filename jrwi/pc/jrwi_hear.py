@@ -24,11 +24,16 @@ Use:
                                            (--again: those too), so running it again carries on where it stopped
     python jrwi_hear.py file JOB.zip       without the network: an "Export for your PC" file from an episode's
                                            admin page; writes a result file to import on the same page
+    python jrwi_hear.py update             replace this program with the archiver's own copy, when it's newer
 
 Options: --models medium.en,large-v3   --device auto|cuda|cpu   --batch 16 (graphics card)   --count N
          --workers 4 --threads 6 (processor: pieces heard at once, and threads for each)   --keep (keep the sound)
+         --json (one JSON object per line, for a program that runs this one; see "Hearing on another computer"
+         in the archiver's docs/api.md)
 POST is the number at the end of an episode's address in the archiver (/items/123).
 The archiver keeps whichever timing found more of the transcript's words, the one in use or a new one.
+With archiver 0.14.10 or newer, compare and run claim each episode before hearing it, so the archiver's own timing
+and other computers leave it alone, and skip an episode another computer has claimed.
 """
 
 from __future__ import annotations
@@ -43,28 +48,69 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
 
-PROGRAM = "1.3"
+PROGRAM = "1.4"
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE / "jrwi_hear.json"
 CACHE = HERE / "jrwi_hear_cache"
 MODELS = HERE / "jrwi_hear_models"
+BY = platform.node() or "a PC"   # how claims name this computer
+JSON = False   # --json: one JSON object per line on standard output, nothing else (see emit)
 
 
 # ------------------------------------------------------------------ small things
 
+def emit(event: str, **fields) -> None:
+    """With --json, an event for the program that runs this one: {"event": ..., ...} on a line of its own."""
+    if JSON:
+        print(json.dumps({"event": event, **fields}), flush=True)
+
+
 def say(*parts) -> None:
-    print(*parts, flush=True)
+    if JSON:   # what would be printed, as a "message" event
+        text = " ".join(str(x) for x in parts).replace("\r", "").strip()
+        if text:
+            emit("message", text=text)
+    else:
+        print(*parts, flush=True)
 
 
-def die(msg: str) -> None:
-    say(f"\n{msg}")
-    sys.exit(1)
+def moving(text: str, event: str, **fields) -> None:
+    """A line written over as it moves on (a download, the pieces heard); with --json the event alone."""
+    if JSON:
+        emit(event, **fields)
+    else:
+        print(f"\r{text}", end="", flush=True)
+
+
+def die(msg: str, code: int = 1) -> None:
+    if JSON:
+        emit("error", message=msg)
+    else:
+        say(f"\n{msg}")
+    sys.exit(code)
+
+
+def version_tuple(v) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except ValueError:
+        return (0,)
+
+
+def at_local(iso: str | None) -> str:
+    """A time the archiver gave, as this computer's time of day."""
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%H:%M")
+    except (TypeError, ValueError):
+        return "?"
 
 
 def clock(seconds) -> str:
@@ -121,6 +167,82 @@ def api(cfg: dict, method: str, path: str, body=None, timeout: float = 120, soft
         die(f"Couldn't reach the archiver at {cfg['server']}: {e.reason}")
 
 
+def call(cfg: dict, method: str, path: str, body=None, timeout: float = 60) -> tuple[int, dict]:
+    """The archiver's answer and its status, without stopping on an error status. Raises URLError (or OSError) when
+    the archiver can't be reached."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(cfg["server"] + path, data=data, method=method,
+                                 headers={"Authorization": f"Token {cfg['token']}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            out = json.loads(e.read() or b"{}")
+        except ValueError:
+            out = {}
+        return e.code, out if isinstance(out, dict) else {}
+
+
+class Claim:
+    """Tells the archiver (0.14.10 and newer) that this computer is hearing an episode, so its own timing and other
+    computers leave it alone. Renewed every 10 minutes while it's heard; let go of when hearing stops before the
+    words are sent, and ended by the archiver once they are."""
+    RENEW = 600
+
+    def __init__(self, cfg: dict, ping: dict, item_id: int) -> None:
+        self.cfg, self.item_id = cfg, item_id
+        self.on = "transcript_claims" in (ping.get("features") or [])
+        self.given = os.environ.get("JRWI_CLAIM") or None   # a claim held by the program that started this one
+        self.id = None
+        self.stop = threading.Event()
+
+    def take(self) -> dict | None:
+        """None when this computer has it now (or the archiver has no claims); otherwise who has it."""
+        if not self.on:
+            return None
+        body = {"by": BY, "minutes": 30, **({"claim": self.given} if self.given else {})}
+        try:
+            code, out = call(self.cfg, "POST", f"/api/transcripts/jobs/{self.item_id}/claim", body)
+        except (urllib.error.URLError, OSError) as e:
+            die(f"Couldn't reach the archiver at {self.cfg['server']}: {getattr(e, 'reason', e)}")
+        if code == 409:
+            return out.get("claimed") or {"by": "another computer", "until": None}
+        if code != 200 or not out.get("claim"):
+            return None   # it can't be claimed: heard anyway, as before claims
+        self.id = out["claim"]
+        emit("claim", item_id=self.item_id, claim=self.id, until=out.get("until"))
+        threading.Thread(target=self._renew, daemon=True).start()
+        return None
+
+    def _renew(self) -> None:
+        while not self.stop.wait(self.RENEW):
+            try:
+                call(self.cfg, "POST", f"/api/transcripts/jobs/{self.item_id}/claim",
+                     {"by": BY, "minutes": 30, "claim": self.id}, timeout=30)
+            except Exception:
+                pass   # tried again in 10 minutes; the claim lasts 30
+
+    def sent(self) -> None:
+        self.stop.set()
+        self.id = None   # the archiver let go of it when it took the words
+
+    def let_go(self) -> None:
+        self.stop.set()
+        if self.id and self.id != self.given:   # a claim handed over is its owner's to let go of
+            try:
+                call(self.cfg, "DELETE", f"/api/transcripts/jobs/{self.item_id}/claim?claim={self.id}", timeout=15)
+            except Exception:
+                pass   # it runs out by itself
+        self.id = None
+
+
+def claimed_text(who: dict) -> str:
+    if who.get("by") == "server":
+        return "the archiver is hearing it itself"
+    return f"{who.get('by')} is hearing it" + (f" (claimed until {at_local(who['until'])})" if who.get("until") else "")
+
+
 def download(cfg: dict, job: dict) -> Path:
     """The episode's sound, kept in jrwi_hear_cache until it's been sent (or for good with --keep)."""
     s = job["sound"]
@@ -132,6 +254,7 @@ def download(cfg: dict, job: dict) -> Path:
     part = dest.with_suffix(dest.suffix + ".part")
     if s.get("source") == "tubearchivist":
         say("  The archiver is copying the sound out of TubeArchivist's copy of the video (a minute or two)...")
+        emit("copying", item_id=job["item_id"])
     try:
         with urllib.request.urlopen(req, timeout=900) as r, open(part, "wb") as f:
             size = int(r.headers.get("Content-Length") or 0) or s["size"]
@@ -143,7 +266,8 @@ def download(cfg: dict, job: dict) -> Path:
                 f.write(block)
                 got += len(block)
                 if time.monotonic() - last > 0.5:
-                    print(f"\r  Downloading the sound: {got >> 20} of {size >> 20} MB", end="", flush=True)
+                    moving(f"  Downloading the sound: {got >> 20} of {size >> 20} MB", "download",
+                           item_id=job["item_id"], done=got, total=size)
                     last = time.monotonic()
     except urllib.error.HTTPError as e:
         try:
@@ -153,7 +277,10 @@ def download(cfg: dict, job: dict) -> Path:
         die(f"Couldn't download the sound: {msg or e}")
     except (urllib.error.URLError, OSError) as e:
         die(f"Couldn't download the sound: {getattr(e, 'reason', e)}")
-    print(f"\r  Downloaded the sound: {size >> 20} MB" + " " * 20, flush=True)
+    if JSON:
+        emit("downloaded", item_id=job["item_id"], size=size)
+    else:
+        print(f"\r  Downloaded the sound: {size >> 20} MB" + " " * 20, flush=True)
     if part.stat().st_size != size:
         part.unlink(missing_ok=True)
         die("The sound didn't download whole; try again.")
@@ -354,12 +481,16 @@ def hear(job: dict, audio: Path, model_name: str, opts: dict) -> dict:
         if "small" in model_name:   # a smaller model mishears more
             words = [w for i, w in enumerate(words) if i % 4 != 3]
         total = float(job["sound"].get("duration") or 0)
+        emit("hearing", item_id=job["item_id"], model=model_name, done=1, total=1, spent=0.5, left=0.0)
+        emit("heard", item_id=job["item_id"], model=model_name, length=total, took=0.5,
+             speed=round(total / 0.5, 1), words=len(words))
         return {"model": model_name, "device": device, "words": words, "until": total, "took": 0.5, "load": 0.1,
                 "decode": 0.0, "peak_mb": 100, "threads": opts["threads"], "workers": opts["workers"],
                 "batch": None, "host": platform.node(), "program": PROGRAM, "compute_type": "test"}
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     from faster_whisper import BatchedInferencePipeline, WhisperModel
     say(f"  {model_name}: loading the model (downloaded once, the first time)")
+    emit("loading", item_id=job["item_id"], model=model_name)
     compute = "float16" if device == "cuda" else "int8"
     model = WhisperModel(model_name, device=device, compute_type=compute,
                          cpu_threads=opts["threads"] if device == "cpu" else 0,
@@ -400,11 +531,14 @@ def hear(job: dict, audio: Path, model_name: str, opts: dict) -> dict:
             done += 1
             spent = time.monotonic() - started
             left = spent / done * (len(starts) - done)
-            print(f"\r  {model_name}: {done} of {len(starts)} pieces heard, {clock(spent)} so far, "
-                  f"about {clock(left)} left   ", end="", flush=True)
+            moving(f"  {model_name}: {done} of {len(starts)} pieces heard, {clock(spent)} so far, "
+                   f"about {clock(left)} left   ", "hearing", item_id=job["item_id"], model=model_name, done=done,
+                   total=len(starts), spent=round(spent, 1), left=round(left, 1))
     took = time.monotonic() - started   # decoding and hearing, not loading the model
     say(f"\r  {model_name}: heard {clock(total)} of sound in {clock(took)} ({total / took:.1f}x as fast as it plays)"
         + " " * 20)
+    emit("heard", item_id=job["item_id"], model=model_name, length=round(total, 1), took=round(took, 1),
+         speed=round(total / took, 1) if took else None, words=len(words))
     words.sort(key=lambda w: (w[0], w[1]))
     return {"model": model_name, "device": device, "compute_type": compute, "words": words, "until": round(total, 2),
             "took": round(took, 1), "load": round(load, 1), "decode": round(decode, 1), "peak_mb": peak_mb(),
@@ -420,7 +554,7 @@ def hear_in_own_process(job: dict, audio: Path, model: str, opts: dict) -> dict:
         job_file.write_text(json.dumps(job))
         cmd = [sys.executable, str(Path(__file__).resolve()), "_hear", str(job_file), str(audio), model, str(out_file),
                "--device", opts["device"], "--workers", str(opts["workers"]), "--threads", str(opts["threads"]),
-               "--batch", str(opts["batch"])]
+               "--batch", str(opts["batch"])] + (["--json"] if JSON else [])
         code = subprocess.call(cmd)
         if code != 0 or not out_file.exists():
             hint = (" If the message above mentions cudnn, cublas or CUDA, the graphics card's libraries are missing: "
@@ -483,6 +617,11 @@ def archiver(cfg: dict) -> dict:
     ping = api(cfg, "GET", "/api/ping")
     if "transcript_jobs" not in (ping.get("features") or []):
         die(f"The archiver ({ping.get('version')}) can't hand out episodes yet: update it to 0.14.1 or newer.")
+    newer = ping.get("pc_program")
+    if newer and version_tuple(newer) > version_tuple(PROGRAM):
+        say(f"The archiver has a newer version of this program ({newer}; this is {PROGRAM}). To use it:  "
+            "python jrwi_hear.py update")
+        emit("newer_program", version=newer, this=PROGRAM)
     return ping
 
 
@@ -509,9 +648,31 @@ def show_left_out(out: dict) -> None:
 
 def send(cfg: dict, job: dict, results: list[dict], soft: bool = False):
     say("  Sending what was heard; the archiver matches it to the transcript...")
-    return api(cfg, "POST", f"/api/transcripts/jobs/{job['item_id']}",
-               {"item_id": job["item_id"], "sound_size": job["sound"]["size"], "results": results}, timeout=900,
-               soft=soft)
+    emit("sending", item_id=job["item_id"])
+    out = api(cfg, "POST", f"/api/transcripts/jobs/{job['item_id']}",
+              {"item_id": job["item_id"], "sound_size": job["sound"]["size"], "results": results}, timeout=900,
+              soft=soft)
+    if out is None:
+        emit("skipped", item_id=job["item_id"], why="the archiver couldn't take what was heard: its sound changed, "
+                                                    "or the episode is gone")
+    else:   # the archiver's answer, as it gave it
+        emit("sent", item_id=job["item_id"], used=out.get("used"), replaced=out.get("replaced", True),
+             before=out.get("before"),
+             tries=[{k: t.get(k) for k in ("model", "found", "placed", "unplaced", "took", "speed", "peak_mb",
+                                           "error", "used")} for t in out.get("tries") or []])
+    return out
+
+
+def episode(job: dict, models: list[str], n: int | None = None, of: int | None = None) -> None:
+    count = f"[{n} of {of}] " if n is not None and of is not None else ""
+    say(f"\n{count}{job['title']} ({clock(job['sound'].get('duration'))}, {job['lines']} lines)")
+    emit("episode", item_id=job["item_id"], title=job["title"], duration=job["sound"].get("duration"),
+         lines=job["lines"], n=n, of=of, models=models)
+
+
+def skip_claimed(job: dict, who: dict) -> None:
+    say(f"  Skipped: {claimed_text(who)}.")
+    emit("claimed", item_id=job["item_id"], by=who.get("by"), until=who.get("until"))
 
 
 def lines_text(t: dict) -> str:
@@ -685,20 +846,32 @@ def cmd_compare(args) -> None:
     ready_to_hear()
     opts = options(args)
     stay_awake()
+    ping = archiver(cfg)
     if args.posts:
         jobs = [api(cfg, "GET", f"/api/transcripts/jobs/{p}") for p in args.posts]
     else:
-        ping = archiver(cfg)
         jobs = (all_jobs(cfg, ping) if has_all(ping) else api(cfg, "GET", "/api/transcripts/jobs?limit=1"))["jobs"][:1]
         if not jobs:
             die("No episode can be heard yet. Give post numbers:  compare 123 456")
     describe(opts, models)
     summary: dict = {m: [] for m in models}
+    heard, skipped, began = 0, 0, time.monotonic()
     for n, job in enumerate(jobs, 1):
-        say(f"\n[{n} of {len(jobs)}] {job['title']} ({clock(job['sound'].get('duration'))}, {job['lines']} lines)")
-        audio = download(cfg, job)
-        results = [hear_in_own_process(job, audio, m, opts) for m in models]
-        out = send(cfg, job, results)
+        episode(job, models, n, len(jobs))
+        claim = Claim(cfg, ping, job["item_id"])
+        who = claim.take()
+        if who:
+            skip_claimed(job, who)
+            skipped += 1
+            continue
+        try:
+            audio = download(cfg, job)
+            results = [hear_in_own_process(job, audio, m, opts) for m in models]
+            out = send(cfg, job, results)
+            claim.sent()
+        finally:
+            claim.let_go()
+        heard += 1
         show_results(out)
         for t in out["tries"]:
             summary.setdefault(t["model"], []).append(dict(t, length=job["sound"].get("duration")))
@@ -706,6 +879,10 @@ def cmd_compare(args) -> None:
             audio.unlink(missing_ok=True)
     if len(jobs) > 1:
         show_summary(summary)
+    emit("done", heard=heard, skipped=skipped, took=round(time.monotonic() - began, 1))
+    if not heard and skipped:
+        die("Nothing was heard: another computer, or the archiver itself, is hearing "
+            + ("it." if skipped == 1 else "them."), code=3)
     say("\nEach episode's admin page, and Admin > Transcripts, show the same in the archiver.")
 
 
@@ -716,8 +893,9 @@ def cmd_run(args) -> None:
     opts = options(args)
     stay_awake()
     describe(opts, models)
+    ping = archiver(cfg)
     if args.all:
-        out = all_jobs(cfg)
+        out = all_jobs(cfg, ping)
         todo = []
         for j in out["jobs"]:
             need = models if args.again else [m for m in models if m not in (j.get("heard_with") or [])]
@@ -733,6 +911,8 @@ def cmd_run(args) -> None:
     else:
         queue = None
     done, kept, heard_s, began = 0, 0, 0.0, time.monotonic()
+    tried: set[int] = set()   # once each this run, whatever happened
+    claimed_now = 0
     while not args.count or done < args.count:
         if queue is not None:
             if not queue:
@@ -746,16 +926,30 @@ def cmd_run(args) -> None:
                 continue
             left = len(queue)
         else:
-            jobs = api(cfg, "GET", "/api/transcripts/jobs?limit=1")["jobs"]
+            listed = api(cfg, "GET", "/api/transcripts/jobs?limit=50")["jobs"]
+            jobs = [j for j in listed if j["item_id"] not in tried and not j.get("claimed")]
             if not jobs:
-                say("\nEvery episode with a transcript is timed.")
+                elsewhere = claimed_now or any(j.get("claimed") for j in listed)
+                say("\nEvery episode with a transcript is timed" + (
+                    ", apart from those being heard on another computer or by the archiver." if elsewhere else "."))
                 break
             job, need, left = jobs[0], models, None
-        count = f"[{done + 1} of {done + 1 + left}] " if left is not None else ""
-        say(f"\n{count}{job['title']} ({clock(job['sound'].get('duration'))}, {job['lines']} lines)")
-        audio = download(cfg, job)
-        results = [hear_in_own_process(job, audio, m, opts) for m in need]
-        out = send(cfg, job, results, soft=True)
+        tried.add(job["item_id"])
+        episode(job, need, done + 1 if left is not None else None, done + 1 + left if left is not None else None)
+        claim = Claim(cfg, ping, job["item_id"])
+        who = claim.take()
+        if who:
+            skip_claimed(job, who)
+            claimed_now += 1
+            continue
+        try:
+            audio = download(cfg, job)
+            results = [hear_in_own_process(job, audio, m, opts) for m in need]
+            out = send(cfg, job, results, soft=True)
+            if out is not None:
+                claim.sent()
+        finally:
+            claim.let_go()
         if not args.keep:
             audio.unlink(missing_ok=True)
         if out is None:
@@ -773,7 +967,9 @@ def cmd_run(args) -> None:
             if heard_s:
                 say(f"  {clock(spent)} so far; about {clock(spent / heard_s * rest)} left for the other {len(queue)}.")
     say(f"\n{done} episode(s) heard in {clock(time.monotonic() - began)}."
-        + (f" {kept} kept the timing that was in use, which found more words." if kept else ""))
+        + (f" {kept} kept the timing that was in use, which found more words." if kept else "")
+        + (f" {claimed_now} skipped, as another computer was hearing them." if claimed_now else ""))
+    emit("done", heard=done, kept=kept, skipped=claimed_now, took=round(time.monotonic() - began, 1))
     if queue is not None:
         say("Running the same command again carries on with what's left, and skips what's done.")
 
@@ -797,6 +993,39 @@ def cmd_file(args) -> None:
     say(f"\nWrote {out}. Import it on the episode's admin page in the archiver (Import from your PC).")
 
 
+def cmd_update(args) -> None:
+    """Replace this program with the archiver's own copy (archiver 0.14.10 and newer hand it out with the token)."""
+    cfg = load_config(args)
+    ping = api(cfg, "GET", "/api/ping")
+    if "transcript_program" not in (ping.get("features") or []):
+        die(f"The archiver ({ping.get('version')}) doesn't hand this program out with its token: update the archiver "
+            "to 0.14.10 or newer, or download the program from Admin > Transcripts.")
+    req = urllib.request.Request(cfg["server"] + "/api/transcripts/program",
+                                 headers={"Authorization": f"Token {cfg['token']}"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        die("The token wasn't accepted: run  python jrwi_hear.py setup  again" if e.code == 401 else
+            f"The archiver said: {e.code} {e.reason}")
+    except (urllib.error.URLError, OSError) as e:
+        die(f"Couldn't reach the archiver at {cfg['server']}: {getattr(e, 'reason', e)}")
+    m = re.search(rb'^PROGRAM = "([^"]+)"', data, re.M)
+    if not m:
+        die("What the archiver sent isn't this program; nothing was changed.")
+    new = m.group(1).decode()
+    me = Path(__file__).resolve()
+    if data == me.read_bytes():
+        say(f"This is the archiver's own copy already (program {PROGRAM}).")
+        emit("updated", version=PROGRAM, changed=False)
+        return
+    tmp = me.with_name(me.name + ".new")
+    tmp.write_bytes(data)
+    tmp.replace(me)
+    say(f"Updated {me.name}: program {PROGRAM} is now {new}, the archiver's own copy.")
+    emit("updated", version=new, changed=True, was=PROGRAM)
+
+
 def cmd_hear(args) -> None:   # the process of its own, for one model
     if args.device == "cuda":
         use_nvidia_libraries()
@@ -815,6 +1044,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Hear JRWI episodes on this computer for the JRWI archiver.",
                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("Use:")[1])
     p.add_argument("--server", help="the archiver's address, if not the one set up")
+    p.add_argument("--json", action="store_true", help="one JSON object per line on standard output, for a program "
+                                                       "that runs this one")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def hearing_options(sp, models):
@@ -849,14 +1080,21 @@ def main() -> None:
     sp.add_argument("--threads", type=int, default=4)
     sp.add_argument("--batch", type=int, default=16)
     sub.add_parser("_probe")
+    sub.add_parser("update")
+    for sp in sub.choices.values():   # --json after the command too
+        sp.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = p.parse_args()
+    global JSON
+    JSON = bool(args.json)
+    if args.cmd not in ("_hear", "_probe"):
+        emit("start", program=PROGRAM, command=args.cmd)
     if args.cmd in ("check", "compare", "run", "file"):
         run_with_a_python_that_has_whisper()
     if args.cmd in ("check", "compare", "run", "file", "_probe") and getattr(args, "device", "auto") != "cpu":
         use_nvidia_libraries()   # first, as on Linux it starts the program again
     try:
         {"setup": cmd_setup, "check": cmd_check, "list": cmd_list, "compare": cmd_compare, "run": cmd_run,
-         "file": cmd_file, "_hear": cmd_hear, "_probe": cmd_probe}[args.cmd](args)
+         "file": cmd_file, "_hear": cmd_hear, "_probe": cmd_probe, "update": cmd_update}[args.cmd](args)
     except KeyboardInterrupt:
         die("Stopped. Nothing was sent for the episode being heard; the same command carries on where it stopped.")
 

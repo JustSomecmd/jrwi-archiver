@@ -899,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.27" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.28" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1465,6 +1465,41 @@ def pc_program_hears_and_sends(app, client, web, tmp_path):
     # A result for a sound that isn't this episode's is refused
     bad = client.post("/api/transcripts/jobs/300", json={"sound_size": 1, "results": [{"model": "x", "words": []}]})
     assert bad.status_code == 409 and "changed" in bad.json()["error"]
+    # The program with the API token, and its version in the ping and the jobs (v0.28)
+    from jrwi import VERSION
+    from fastapi.testclient import TestClient
+    ping = client.get("/api/ping").json()
+    assert {"transcript_claims", "transcript_program"} <= set(ping["features"]) and ping["pc_program"] == "1.4"
+    assert job["program"] == "1.4" and job["claimed"] is None and job["archiver"] == VERSION
+    got = client.get("/api/transcripts/program")
+    assert got.status_code == 200 and got.content == program.read_bytes() and got.headers["x-program-version"] == "1.4"
+    assert TestClient(app).get("/api/transcripts/program").status_code == 401   # only with the token
+    # Claims (v0.28): another computer skips an episode claimed by one, the claim renews, and lets go
+    c = client.post("/api/transcripts/jobs/298/claim", json={"by": "LAPTOP", "minutes": 5}).json()
+    assert c["item_id"] == 300 and c["by"] == "LAPTOP" and c["claim"] and c["until"]
+    other = client.post("/api/transcripts/jobs/300/claim", json={"by": "DESKTOP"})
+    assert other.status_code == 409 and other.json()["claimed"]["by"] == "LAPTOP", other.json()
+    assert "LAPTOP is hearing this episode" in other.json()["error"]
+    again = client.post("/api/transcripts/jobs/300/claim", json={"by": "LAPTOP", "claim": c["claim"]}).json()
+    assert again["claim"] == c["claim"] and again["until"] > c["until"]   # 30 minutes unless another length
+    assert client.get("/api/transcripts/jobs/300").json()["claimed"] == {"by": "LAPTOP", "until": again["until"]}
+    assert client.get("/api/transcripts/jobs?all=true").json()["jobs"][0]["claimed"]["by"] == "LAPTOP"
+    assert "Being heard now" in web.get("/admin/transcripts").text and "LAPTOP" in web.get("/admin/transcripts").text
+    tx = app.state.scheduler.transcripts
+    assert not tx._start_hearing(300, respect_claims=True) and tx.hearing is None   # the server's timing skips it
+    assert client.post("/api/transcripts/jobs/300/claim", content=b"[1]").status_code == 400
+    assert client.delete("/api/transcripts/jobs/300/claim").status_code == 400
+    assert client.delete("/api/transcripts/jobs/300/claim?claim=someone-else").json()["released"] is False
+    assert client.delete(f"/api/transcripts/jobs/300/claim?claim={c['claim']}").json()["released"] is True
+    assert client.get("/api/transcripts/jobs/300").json()["claimed"] is None
+    tx.hearing = 300   # while the server hears it itself, nobody else can claim it
+    try:
+        r = client.post("/api/transcripts/jobs/300/claim", json={"by": "LAPTOP"})
+        assert r.status_code == 409 and r.json()["claimed"] == {"by": "server", "until": None}
+        assert "server is hearing" in r.json()["error"]
+        assert client.get("/api/transcripts/jobs/300").json()["claimed"]["by"] == "server"
+    finally:
+        tx.hearing = None
 
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=8772, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()
@@ -1536,6 +1571,48 @@ def pc_program_hears_and_sends(app, client, web, tmp_path):
         assert "1 episode(s) heard" in out.stdout and "carries on" in out.stdout
         assert db.one("SELECT * FROM transcripts WHERE item_id=300")["timing"]["model"] == "large-v3"
         assert "large-v3" in client.get("/api/transcripts/jobs/300").json()["heard_with"]
+        # --json (program 1.4): one JSON object per line. With another computer's claim on it, nothing is heard
+        held = client.post("/api/transcripts/jobs/300/claim", json={"by": "DESKTOP"}).json()
+        out = subprocess.run([sys.executable, str(pc), "compare", "300", "--device", "cpu", "--models", "small.en",
+                              "--json"], env=env, capture_output=True, text=True, timeout=120)
+        events = [json.loads(line) for line in out.stdout.splitlines()]
+        assert out.returncode == 3, out.stdout + out.stderr
+        assert [e["event"] for e in events][:2] == ["start", "message"] and events[0]["program"] == "1.4"
+        claimed = next(e for e in events if e["event"] == "claimed")
+        assert claimed["by"] == "DESKTOP" and claimed["item_id"] == 300
+        assert events[-1]["event"] == "error" and not any(e["event"] == "sent" for e in events)
+        client.delete(f"/api/transcripts/jobs/300/claim?claim={held['claim']}")
+        runs_before = len(db.q("SELECT * FROM transcript_runs WHERE item_id=300"))
+        out = subprocess.run([sys.executable, str(pc), "--json", "compare", "300", "--device", "cpu",
+                              "--models", "small.en,distil-small.en"], env=env, capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0, out.stdout + out.stderr
+        events = [json.loads(line) for line in out.stdout.splitlines()]   # every line is JSON
+        kinds = [e["event"] for e in events]
+        for k in ("start", "episode", "claim", "downloaded", "hearing", "heard", "sending", "sent", "done"):
+            assert k in kinds, (k, kinds)
+        assert kinds.index("claim") < kinds.index("downloaded") < kinds.index("heard") < kinds.index("sent")
+        assert [e["model"] for e in events if e["event"] == "heard"] == ["small.en", "distil-small.en"]
+        sent = next(e for e in events if e["event"] == "sent")
+        assert sent["item_id"] == 300 and sent["used"] == "large-v3" and sent["replaced"] is False
+        assert {t["model"] for t in sent["tries"]} == {"small.en", "distil-small.en"}
+        assert next(e for e in events if e["event"] == "done")["heard"] == 1
+        assert any(e["event"] == "message" and "Kept the timing in use" in e["text"] for e in events)
+        assert len(db.q("SELECT * FROM transcript_runs WHERE item_id=300")) == runs_before + 2
+        assert not db.q("SELECT * FROM transcript_claims")   # sending the words ends the claim
+        # update: an older copy learns of the newer one, and replaces itself with the archiver's
+        old = work / "old"
+        old.mkdir()
+        (old / "jrwi_hear.py").write_text(program.read_text().replace('PROGRAM = "1.4"', 'PROGRAM = "1.3"'))
+        out = subprocess.run([sys.executable, str(old / "jrwi_hear.py"), "check"], env=env, capture_output=True,
+                             text=True, timeout=120)
+        assert "newer version of this program (1.4; this is 1.3)" in out.stdout, out.stdout + out.stderr
+        out = subprocess.run([sys.executable, str(old / "jrwi_hear.py"), "update"], env=env, capture_output=True,
+                             text=True, timeout=120)
+        assert out.returncode == 0 and "1.3 is now 1.4" in out.stdout, out.stdout + out.stderr
+        assert (old / "jrwi_hear.py").read_bytes() == program.read_bytes()
+        out = subprocess.run([sys.executable, str(old / "jrwi_hear.py"), "update", "--json"], env=env,
+                             capture_output=True, text=True, timeout=120)
+        assert json.loads(out.stdout.splitlines()[-1]) == {"event": "updated", "version": "1.4", "changed": False}
     finally:
         server.should_exit = True
 
