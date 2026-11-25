@@ -27,6 +27,7 @@ import os
 import queue
 import re
 import resource
+import statistics
 import subprocess
 import sys
 import threading
@@ -66,12 +67,17 @@ HEARING = {"chunk": CHUNK, "overlap": OVERLAP, "language": "en", "beam_size": 1,
 # whose speech was lost there. So none are given; a misheard name costs a word or two in matching.
 HOTWORDS = False
 MAX_IMPORT_WORDS = 400_000   # far more than a long episode has (about 35,000 words in three hours)
-PACE = 0.3           # seconds a word usually takes, to go from a heard word back to its line's first
+PACE = 0.3           # seconds a word takes, when an episode has too little running speech to measure its own
+PAUSE = 0.3          # silence before a heard word of this long or longer: it starts a stretch of speech (settle)
+SETTLE_MAX = 0.5     # the most such a word's start is moved later: a word stretched over seconds may have taken
+                     # in the silence after it rather than before, and a line a little early beats one late
+SHIFT_MAX = 30.0     # the most an episode's lines can be moved by hand on its admin page, either way (seconds)
 LONG_GAP = 10.0      # a line with nothing heard, next to a longer gap, gets no time
 MODELS = ("base.en", "small.en", "medium.en")
 # Of how lines are read and matched: a change reads every transcript again and matches the words already heard to
 # the new lines, without hearing anything again. 2 (0.14.5): the early "Name: what they said" transcripts.
-VERSION = 2
+# 3 (0.14.11): words after a pause start where they likely begin, and each episode's own pace (see settle).
+VERSION = 3
 # Claims on jobs (contract v0.28): how long a computer that's about to hear an episode keeps it, unless it renews
 CLAIM_MINUTES = 30
 CLAIM_MAX_MINUTES = 240
@@ -312,10 +318,46 @@ def _blocks(a: list[str], b: list[str]) -> list[tuple[int, int, int]]:
     return merged
 
 
+def _letters(word: str) -> int:
+    return min(sum(1 for c in word if c.isalnum()), 10)
+
+
+def settle(words: list) -> tuple[list, float]:
+    """The words heard, each one after a pause starting where it likely begins, and the episode's pace (seconds a
+    word takes in its running speech). The model stretches a word after a pause back into the silence before it: on
+    Unwitness Protection Program Empty Graves Case File 1 (Debug data the user sent on 2026-11-25), words after a
+    pause came out about 0.44 s long, against 0.16 to 0.24 s for words with as many letters in running speech, so
+    the lines that begin there (925 of its 2,110) started about 0.18 s early, and the user saw the transcript run a
+    little ahead. Such a word now starts no earlier than its end less the median length, in this episode's running
+    speech, of words with as many letters, moved by SETTLE_MAX at most. Ends aren't moved. Since 0.14.11 (reading
+    version 3)."""
+    run: dict[int, list[float]] = {}
+    prev_end = None
+    for start, end, word in words:
+        if prev_end is not None and start - prev_end <= 0.02 and end > start:
+            run.setdefault(_letters(word), []).append(end - start)
+        prev_end = end
+    every = [d for v in run.values() for d in v]
+    pace = PACE if len(every) < 200 else min(max(statistics.median(every), 0.15), 0.45)
+    usual = {n: statistics.median(v) for n, v in run.items() if len(v) >= 20}
+    out = []
+    prev_end = None
+    for start, end, word in words:
+        if usual and (prev_end is None or start - prev_end >= PAUSE):
+            n = _letters(word)
+            d = usual[n] if n in usual else usual[min(usual, key=lambda m: abs(m - n))]
+            if end - start > d:
+                start = min(end - d, start + SETTLE_MAX)
+        out.append([start, end, word])
+        prev_end = end
+    return out, pace
+
+
 def match(lines: list[dict], words: list) -> dict:
     """Each line's start and end from the words heard. Returns {"lines": [...], "placed", "unplaced", "found"}:
     "found" is the share of the transcript's words that were heard, which says whether it's this episode's."""
     ref = [(t, i) for i, line in enumerate(lines) for t in tokens(line["text"])]
+    words, pace = settle(words)
     hyp = heard_tokens(words)
     out = [dict(line, start=None, end=None) for line in lines]
     if not ref or not hyp:
@@ -347,8 +389,8 @@ def match(lines: list[dict], words: list) -> dict:
     for k, (_, i) in enumerate(ref):
         if at[k] is not None:
             if i not in first:
-                first[i] = max(0.0, at[k][0] - (k - first_ref[i]) * PACE)
-            last[i] = at[k][1] + (last_ref[i] - k) * PACE
+                first[i] = max(0.0, at[k][0] - (k - first_ref[i]) * pace)
+            last[i] = at[k][1] + (last_ref[i] - k) * pace
     n = len(out)
     starts: list[float | None] = [None] * n
     ends: list[float | None] = [None] * n
@@ -1259,13 +1301,28 @@ class Transcripts:
         return done
 
     # for the API
+    def shift(self, item_id: int) -> float:
+        """How many seconds later this episode's lines are shown, set by hand on its admin page (0.14.11)."""
+        row = self.db.one("SELECT seconds FROM transcript_shift WHERE item_id=?", (item_id,))
+        return float(row["seconds"]) if row else 0.0
+
+    def set_shift(self, item_id: int, seconds: float) -> float:
+        seconds = round(max(-SHIFT_MAX, min(SHIFT_MAX, float(seconds))), 2)
+        if seconds == 0:
+            self.db.x("DELETE FROM transcript_shift WHERE item_id=?", (item_id,))
+        else:
+            self.db.upsert("transcript_shift", "item_id", {"item_id": item_id, "seconds": seconds, "at": _now()})
+        return seconds
+
     def lines_for(self, item_id: int, timeline: str | None, offset: float, plus: float = 0.0) -> dict | None:
-        """The lines, with times moved to the timeline asked for (audio = video + offset, as sync says), and then by
-        plus seconds (to a YouTube upload's own timeline, say: see youtube_upload_shift)."""
+        """The lines, with times moved to the timeline asked for (audio = video + offset, as sync says), then by
+        plus seconds (to a YouTube upload's own timeline, say: see youtube_upload_shift), and by the episode's own
+        shift, set by hand on its admin page."""
         stored = self._load(self.lines_file(item_id))
         if not stored:
             return None
-        shift = plus
+        by_hand = self.shift(item_id)
+        shift = plus + by_hand
         if stored.get("aligned") and timeline and stored.get("timeline") and timeline != stored["timeline"]:
             shift += -offset if stored["timeline"] == "audio" else offset
         lines = []
@@ -1276,7 +1333,8 @@ class Transcripts:
             else:
                 s = e = None
             lines.append({"start": s, "end": e, "speaker": l.get("speaker"), "text": l.get("text")})
-        return {"aligned": bool(stored.get("aligned")), "lines": lines, "document": (stored.get("document") or {}).get("path")}
+        return {"aligned": bool(stored.get("aligned")), "lines": lines, "document": (stored.get("document") or {}).get("path"),
+                "shift": by_hand}
 
     def summary(self) -> dict:
         rows = self.db.q("SELECT * FROM transcripts")

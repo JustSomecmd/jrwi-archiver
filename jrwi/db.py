@@ -85,6 +85,9 @@ CREATE TABLE IF NOT EXISTS transcript_runs (
 );
 CREATE INDEX IF NOT EXISTS transcript_runs_item ON transcript_runs(item_id, at);
 
+-- How much later an episode's transcript lines are shown, set by hand on its admin page (0.14.11)
+CREATE TABLE IF NOT EXISTS transcript_shift (item_id INTEGER PRIMARY KEY, seconds REAL, at TEXT);
+
 -- Claims on transcript jobs (contract v0.28): a computer hearing an episode, until when, so others skip it
 CREATE TABLE IF NOT EXISTS transcript_claims (
     item_id INTEGER PRIMARY KEY, claim TEXT, by TEXT, until TEXT, at TEXT

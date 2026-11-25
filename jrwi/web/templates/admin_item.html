@@ -121,6 +121,14 @@
   </details>
   {% endif %}
   {% if tx.bg %}<p class="small"><b>{{ tx.bg.phase }}:</b> {{ tx.bg.detail }}</p>{% endif %}
+  <form method="post" action="/admin/items/{{ p.id }}/transcript-shift" class="row small">
+    <label for="txshift">Show the lines</label>
+    <input id="txshift" type="number" name="seconds" step="0.05" min="-30" max="30" value="{{ tx.shift }}" style="width: 6em">
+    <span>seconds later</span>
+    <button class="small">Save</button>
+    <span class="hint">For an episode whose lines come a little early or late in every app and player. Below 0 shows
+      them earlier; 0 leaves them as timed.{% if tx.shift %} <b>Moved by {{ tx.shift }} s now.</b>{% endif %}</span>
+  </form>
   <form method="post" action="/admin/transcripts/time">
     <input type="hidden" name="item" value="{{ p.id }}">
     <button>{{ 'Time it again' if tx.aligned or tx.timing.at else 'Time it now' }}</button>

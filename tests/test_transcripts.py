@@ -159,3 +159,34 @@ def test_hearings_with_hotwords_dont_count_as_heard():
             {"model": "medium.en", "found": 0.5, "sound_size": 5, "no_hotwords": True},
             {"model": "small.en", "found": 0.6, "sound_size": 4, "no_hotwords": True}]
     assert t.heard_with(1, 5, runs) == ["medium.en"]
+
+
+def test_a_word_after_a_pause_starts_where_it_likely_begins():
+    """The model stretches the first word after a pause back into the silence before it, so lines began early
+    (0.14.11): such a word starts at its end less the usual length, in this episode's running speech, of words with
+    as many letters, moved by half a second at most, and words not heard at a line's start take the episode's own
+    pace rather than a fixed 0.3 s."""
+    from jrwi.transcripts import settle
+    vocab = ["the", "town", "is", "quiet", "and", "we", "walk", "home", "slowly", "tonight"]
+    running = [vocab[k % len(vocab)] for k in range(400)]
+    words, t = [], 0.0
+    for w in running:   # running speech: a word every 0.2 s
+        words.append([round(t, 2), round(t + 0.2, 2), w])
+        t += 0.2
+    b = t + 1.0          # after a 1 s pause "hello" begins, but is heard 0.45 s early
+    words += [[b - 0.45, b + 0.2, "hello"], [b + 0.2, b + 0.4, "there"], [b + 0.4, b + 0.6, "friend"]]
+    c = b + 3.0          # after another pause, "wait" is stretched 3 s: moved half a second at most
+    words += [[c, c + 3.2, "wait"], [c + 3.2, c + 3.4, "for"], [c + 3.4, c + 3.6, "me"]]
+    d = c + 3.6          # straight on: "okay see you", its two first words not heard at all
+    words += [[d, d + 0.2, "okay"], [d + 0.2, d + 0.4, "see"], [d + 0.4, d + 0.6, "you"]]
+    settled, pace = settle(words)
+    assert abs(pace - 0.2) < 0.01
+    assert abs(settled[400][0] - b) < 0.01 and settled[400][1] == words[400][1]   # ends stay
+    assert abs(settled[403][0] - (c + 0.5)) < 0.01
+    assert settled[:400] == [list(w) for w in words[:400]]   # running speech isn't touched
+    lines = [{"speaker": "A", "text": " ".join(running)}, {"speaker": "B", "text": "Hello there friend."},
+             {"speaker": "C", "text": "Wait for me!"}, {"speaker": "D", "text": "Really truly okay, see you."}]
+    out = match(lines, words)["lines"]
+    assert abs(out[1]["start"] - b) < 0.02, out[1]
+    assert abs(out[2]["start"] - (c + 0.5)) < 0.02, out[2]
+    assert abs(out[3]["start"] - (d - 2 * 0.2)) < 0.02, out[3]   # two words before it, at the episode's pace

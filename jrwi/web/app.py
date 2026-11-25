@@ -711,6 +711,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if out is None:
             raise HTTPException(404, "no transcript")
         return JSONResponse({"post_id": post_id, "aligned": out["aligned"], "timeline": label,
+                             "shift": out["shift"],
                              "document": files_url(out["document"]) if out["document"] else None,
                              "lines": out["lines"]}, headers={"Cache-Control": "no-store"})
 
@@ -1403,6 +1404,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             return None
         return {"item_id": primary["id"], "document": row["document"], "lines": row["lines"],
                 "aligned": bool(row["aligned"]), "timing": row["timing"] or {}, "bg": background_obj(),
+                "shift": transcripts.shift(primary["id"]),
                 "runs": [dict(transcripts_mod.record_figures(r["timing"]), at=r["at"])
                          for r in transcripts.runs(primary["id"])]}
 
@@ -1490,6 +1492,24 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         return FileResponse(name, media_type="application/zip", filename=f"jrwi-job-{primary['id']}.zip",
                             background=BackgroundTask(lambda: Path(name).unlink(missing_ok=True)))
 
+    @app.post("/admin/items/{post_id}/transcript-shift", dependencies=[Depends(web_auth)])
+    def admin_transcript_shift(post_id: int, seconds: str = Form("0")):
+        """Show this episode's lines later (or, below 0, earlier) by a number of seconds, in every app (0.14.11)."""
+        p = db.post(post_id)
+        if not p:
+            raise HTTPException(404, "no such post")
+        primary = ser.primary_of(post_id) or p
+        back = f"/admin/items/{post_id}"
+        try:
+            value = float((seconds or "0").strip().replace(",", "."))
+            if not math.isfinite(value):
+                raise ValueError
+        except ValueError:
+            return RedirectResponse(f"{back}?tx_error={quote('the shift is a number of seconds, such as 0.5 or -1')}"
+                                    "#transcripts", 303)
+        transcripts.set_shift(primary["id"], value)
+        return RedirectResponse(f"{back}#transcripts", 303)
+
     @app.get("/admin/items/{post_id}/transcript-debug.zip", dependencies=[Depends(web_auth)])
     def admin_transcript_debug_zip(post_id: int):
         """What the archiver keeps of an episode's transcript and timing, in one file, for working out what went
@@ -1509,6 +1529,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             "item_id": item_id, "title": primary.get("title"), "archiver": VERSION,
             "reading_version": transcripts_mod.VERSION, "made": datetime.now(timezone.utc).isoformat(),
             "transcript": {"document": doc.get("path"), "size": doc.get("size"), "lines": row.get("lines"),
+                           "shift": transcripts.shift(item_id),
                            "aligned": bool(row.get("aligned")), "read_version": stored.get("version"),
                            "timeline": stored.get("timeline")},
             "timing_in_use": row.get("timing") or {},

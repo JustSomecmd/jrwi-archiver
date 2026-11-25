@@ -899,7 +899,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.28" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.29" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1327,6 +1327,20 @@ def test_transcripts_are_read_timed_and_served(app, client, monkeypatch, tmp_pat
         admin = web.get("/admin").text
         assert "Time one episode now" in admin and "Time transcripts now" in admin and "lines placed" in admin
         assert "data-bg-box" in admin and 'data-had="0"' in admin and 'href="/admin/transcripts"' in admin
+        # A shift by hand (0.14.11): every app gets the episode's lines later by it, in every timeline
+        assert audio["shift"] == 0
+        r = web.post("/admin/items/298/transcript-shift", data={"seconds": "0,5"}, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].endswith("#transcripts")
+        shifted = client.get("/api/transcript/298").json()
+        assert shifted["shift"] == 0.5 and shifted["lines"][3]["start"] == 8.5
+        assert abs(client.get("/api/transcript/300").json()["lines"][3]["start"] - (max(0.0, 8.0 - offset) + 0.5)) < 0.01
+        assert "Moved by 0.5 s now" in web.get("/admin/items/300").text
+        bad = web.post("/admin/items/298/transcript-shift", data={"seconds": "soon"}, follow_redirects=False)
+        assert "tx_error=" in bad.headers["location"] and client.get("/api/transcript/298").json()["shift"] == 0.5
+        web.post("/admin/items/300/transcript-shift", data={"seconds": "-99"})
+        assert client.get("/api/transcript/298").json()["shift"] == -30.0
+        web.post("/admin/items/300/transcript-shift", data={"seconds": "0"})
+        assert client.get("/api/transcript/298").json()["shift"] == 0 and not db.q("SELECT * FROM transcript_shift")
         # The record of every try: the page, each episode's tries, and the download
         tries = db.q("SELECT * FROM transcript_runs WHERE item_id=300")
         assert len(tries) == 1 and tries[0]["timing"]["placed"] == 5 and tries[0]["timing"]["sessions"] == 1
