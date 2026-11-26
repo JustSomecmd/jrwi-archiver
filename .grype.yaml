@@ -1,0 +1,9 @@
+# Findings the image scan (.github/workflows/docker.yml) leaves out of its count. They're still listed on the
+# build's page, under "Left out by .grype.yaml".
+ignore:
+  # PyAV's own copy of FFmpeg (9.0.2 in PyAV 19.0.2, 2026-11-26), which comes with faster-whisper. The server never
+  # opens a file with it: it decodes sound and video with Debian's ffmpeg and hands faster-whisper the samples
+  # (_decode in jrwi/transcripts.py). Its fixes come in with a PyAV release that carries a newer FFmpeg. The PC
+  # program does decode with PyAV, on the PC, from the user's own archive.
+  - package:
+      location: "**/site-packages/av.libs/**"

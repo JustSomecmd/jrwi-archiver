@@ -82,6 +82,7 @@ jobs:
           output-file: grype.json
           by-cve: true
           fail-build: false
+          config: .grype.yaml
 
       - uses: actions/upload-artifact@v4
         if: always()
