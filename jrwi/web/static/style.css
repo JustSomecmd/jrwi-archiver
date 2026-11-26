@@ -90,6 +90,8 @@ details > summary::-webkit-details-marker { display: none; }
 .run:hover { text-decoration: none; color: var(--text); }
 .run .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pulse 1.2s infinite; flex: none; }
 @keyframes pulse { 50% { opacity: .3; } }
+.run.upd { color: var(--accent); } .run.upd svg { width: 14px; height: 14px; flex: none; }
+.update-notice ul { margin: .4rem 0 .5rem 1.1rem; padding: 0; }
 .iconbtn { color: var(--text); display: inline-flex; padding: .35rem; font-size: 1.35rem; }
 .iconbtn:hover { color: var(--accent); }
 .mobnav { display: none; }

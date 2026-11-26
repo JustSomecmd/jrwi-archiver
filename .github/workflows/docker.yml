@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-  # Weekly rebuild, so the image picks up new yt-dlp releases
+  # Weekly rebuild from scratch, so the image picks up new yt-dlp releases, Python packages and Debian's security fixes
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
@@ -16,6 +16,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +45,8 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,format=short
 
-      - uses: docker/build-push-action@v6
+      - id: push
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -52,3 +55,48 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # The weekly build takes nothing from the cache: a cached layer keeps the packages it was built with
+          no-cache: ${{ github.event_name == 'schedule' }}
+          pull: true
+
+  # Known vulnerabilities in the image just published. A job of its own with read-only rights, so the scanner never
+  # has the token that publishes images. The action is pinned to a commit, not a tag: in March 2026 the Trivy
+  # actions' version tags were moved to code that stole CI secrets (CVE-2026-33634).
+  scan:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: image
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}@${{ needs.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - id: grype
+        uses: anchore/scan-action@82049099348cd4edcc94d22cafd8f1e9f8493321   # v7.4.3
+        with:
+          image: ${{ steps.image.outputs.ref }}
+          grype-version: v0.122.1
+          output-format: json
+          output-file: grype.json
+          by-cve: true
+          fail-build: false
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vulnerabilities
+          path: grype.json
+          if-no-files-found: ignore
+
+      # On the build's page; fails when a critical or high finding has a fix
+      - run: python3 .github/scan_summary.py grype.json
+
+      # The admin page's notice for a new version reads the registry the same way (jrwi/updates.py)
+      - name: The update notice sees this version
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        run: |
+          python3 -m pip install -q --break-system-packages requests
+          python3 -c "from jrwi import VERSION, updates; v = updates.published(); print('published:', v[-3:]); assert VERSION in v, VERSION"
+

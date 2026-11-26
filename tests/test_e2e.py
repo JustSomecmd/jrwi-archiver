@@ -3,6 +3,7 @@
 Needs ffmpeg for the test media:  sh tests/make_media.sh && python -m pytest tests
 """
 
+import html
 import json
 import re
 import os
@@ -899,7 +900,7 @@ def test_api_for_the_apps(app, client):
     """Contract v0.17: tags, the feed, Continue watching, Stop, the archive's stats, and the ping saying it has them."""
     from jrwi import CONTRACT, FEATURES
     ping = TestClient(app).get("/api/ping").json()   # needs no token
-    assert ping["contract"] == CONTRACT == "0.29" and set(ping["features"]) == set(FEATURES)
+    assert ping["contract"] == CONTRACT == "0.30" and set(ping["features"]) == set(FEATURES)
     assert {"post_progress", "tags", "continue", "stop", "feed", "stats"} <= set(ping["features"])
 
     # Tags: listed with counts, picked by name whatever the capitals, and found by q
@@ -1014,7 +1015,7 @@ def test_podcast_feed(app, client, monkeypatch):
                                       "watched_minutes_left", "transcript_threads", "transcript_model",
                                       "transcripts_when", "transcripts_from", "transcripts_until")},
             **{k: "on" for k in ("video", "audio", "images", "attachments", "comments", "google_docs",
-                                 "public_pages", "youtube_embeds", "handover", "transcripts_read") if s[k]}}
+                                 "public_pages", "youtube_embeds", "handover", "transcripts_read", "update_check") if s[k]}}
     web.post("/admin/settings", data=form)
     assert db.settings() == {**s, "podcast_feed": form["podcast_feed"], "feed_state": {}}
     assert db.setting("podcast_feed").endswith(f"/{key}/rss") and scheduler.feed_due()
@@ -1093,6 +1094,44 @@ def test_podcast_feed(app, client, monkeypatch):
     assert not bad["ok"] and "HTTP 404" in bad["error"] and key not in bad["error"]
     db.set_setting("podcast_feed", "")
     db.set_setting("feed_state", {})
+
+
+def test_update_notice(app, client, monkeypatch):
+    """A newer version that's been published shows on the admin page, next to the menu and in the status
+    (contract v0.30); switched off in Settings, none of it does."""
+    from jrwi import VERSION
+    from jrwi import updates
+    db = app.state.db
+    a, b, c = updates.parse(VERSION)
+    nxt = f"{a}.{b}.{c + 1}"
+    db.set_setting("update_state", {"latest": nxt, "checked": "2026-11-26T14:02:00+00:00", "error": None,
+                                    "notes": [{"version": VERSION, "text": "this one"},
+                                              {"version": nxt, "text": "the next one"}]})
+    u = client.get("/api/status").json()["update"]
+    assert u == {"version": VERSION, "latest": nxt, "available": True, "checked": "2026-11-26T14:02:00+00:00",
+                 "notes": [{"version": nxt, "text": "the next one"}]}
+    web = TestClient(app)
+    web.post("/login", data={"password": "test-password"})
+    page = web.get("/admin").text
+    assert f"Version {nxt} of the archiver is out" in page and "the next one" in page
+    assert html.escape(updates.COMMAND) in page   # the && as &amp;&amp;
+    assert "this one" not in page
+    assert f"Update to {nxt}" in web.get("/").text
+    asked = []
+    monkeypatch.setattr(updates, "check", lambda d: asked.append(d))
+    r = web.post("/admin/updates/check", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/admin#version" and asked == [db]
+    # Up to date
+    db.set_setting("update_state", {"latest": VERSION, "checked": "2026-11-26T14:02:00+00:00", "notes": []})
+    assert not client.get("/api/status").json()["update"]["available"]
+    page = web.get("/admin").text
+    assert "It's the newest." in page and "of the archiver is out" not in page and "Update to" not in web.get("/").text
+    # Off in Settings
+    db.set_setting("update_check", False)
+    assert client.get("/api/status").json()["update"] is None
+    assert "Looking for new versions is off" in web.get("/admin").text
+    db.set_setting("update_check", True)
+    db.set_setting("update_state", {})
 
 
 def test_feed_is_read_back_far_enough():

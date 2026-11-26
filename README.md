@@ -186,6 +186,9 @@ The archive holds your jrwishow.com login, so the web app protects itself:
   which use the API token, aren't affected.
 - After five wrong passwords in 15 minutes, logging in from that address waits until the oldest is 15 minutes old.
 - The jrwishow.com password, TubeArchivist's token and the podcast feed's address are never shown again once saved.
+- Every image is scanned for known vulnerabilities after it's built ([Grype](https://github.com/anchore/grype), in a job of
+  its own that can't publish anything). The findings are on the build's page under Actions on GitHub, and a fixable
+  critical or high one marks the build as failed.
 
 It's meant for your own network or Tailscale. Run it as your own user (`user:` in the compose file), not as root.
 
@@ -199,7 +202,12 @@ Video takes up nearly all of the space. A three-hour episode at full quality is 
 docker compose pull jrwi-archiver && docker compose up -d jrwi-archiver
 ```
 
-A new image is built for every change, and every week to pick up new yt-dlp releases.
+A new image is built for every change, and every week from scratch, to pick up new yt-dlp releases, Python packages and
+Debian's security fixes.
+
+Once a day the archiver asks GitHub's container registry whether a newer image is out. A new version shows on the admin
+page and next to the menu, with what changed, and goes once to the notification address in Settings. Settings can
+switch this off.
 
 If pulling the image fails with "denied", make the package public. On GitHub, go to your profile, then Packages, then jrwi-archiver, then Package settings. Alternatively, log in with `docker login ghcr.io`.
 

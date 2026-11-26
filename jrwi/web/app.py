@@ -38,6 +38,7 @@ from ..crawler import Archiver
 from .. import files as files_mod
 from .. import handover, podcast
 from .. import transcripts as transcripts_mod
+from .. import updates as updates_mod
 from ..db import Db, now
 from ..tubearchivist import TaError, TubeArchivist
 from ..organize import (ART_SOURCES, GENERIC_TAG_TABS, MAX_PICTURE, TABS, add_show, art_choices, choose_show_art,
@@ -229,6 +230,7 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         shows = db.q("SELECT id, name FROM shows ORDER BY sort, name")
         return templates.TemplateResponse(request, name, {
             "shows_nav": shows, "logo": files_url(db.setting("site_logo")), "status": archiver.status.snapshot(),
+            "update": updates_mod.status(db),
             **ctx})
 
     # ------------------------------------------------------------------ API
@@ -249,7 +251,13 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             "counts": {k: int(counts[k] or 0) for k in ("items", "archived", "locked", "problems")},
             "disk": scheduler.disk(),
             "background": background_obj(),
+            "update": update_obj(),
         }
+
+    def update_obj() -> dict | None:
+        """Whether a newer version of the archiver is out (contract v0.30), or None while that isn't checked."""
+        u = updates_mod.status(db)
+        return {k: u[k] for k in ("version", "latest", "available", "checked", "notes")} if u else None
 
     def background_obj() -> dict | None:
         """Work in the background, alongside checks since 0.13.0: timing transcripts (contract v0.23), or None."""
@@ -1197,8 +1205,10 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
             except ValueError:
                 pass
         for key in ("video", "audio", "images", "attachments", "comments", "google_docs", "public_pages",
-                    "youtube_embeds", "handover", "transcripts_read"):
+                    "youtube_embeds", "handover", "transcripts_read", "update_check"):
             db.set_setting(key, form.get(key) == "on")
+        if form.get("update_check") == "on" and not s.get("update_check"):
+            scheduler.updates_wake.set()   # switched on: ask now
         if form.get("transcript_model") in ("base.en", "small.en", "medium.en"):
             db.set_setting("transcript_model", form["transcript_model"])
         if form.get("transcripts_when") in ("off", "hours", "always"):
@@ -1215,6 +1225,12 @@ def create_app(paths: Paths | None = None, start_scheduler: bool = True) -> Fast
         if form.get("regenerate_token"):
             db.set_setting("api_token", new_token())
         return RedirectResponse("/admin/settings?saved=1", 303)
+
+    @app.post("/admin/updates/check", dependencies=[Depends(web_auth)])
+    def admin_updates_check():
+        """Ask now whether a newer version is out, as the archiver does once a day."""
+        updates_mod.check(db)
+        return RedirectResponse("/admin#version", 303)
 
     @app.post("/admin/test-ta", dependencies=[Depends(web_auth)])
     def admin_test_ta():

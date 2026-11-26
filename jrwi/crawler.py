@@ -219,14 +219,8 @@ class Archiver:
             lines.append(f"JRWI archiver problem ({result}): {message}")
         if not lines:
             return
-        text = "\n\n".join(lines)
-        try:
-            if "discord.com/api/webhooks" in url or "discordapp.com/api/webhooks" in url:
-                requests.post(url, json={"content": text[:1900]}, timeout=20)
-            else:
-                requests.post(url, data=text.encode(), headers={"Title": "JRWI archiver"}, timeout=20)
-        except requests.RequestException as e:
-            log.warning("notification failed: %s", e)
+        from .notify import send
+        send(url, "\n\n".join(lines))
 
     # ------------------------------------------------------------------ feed
 

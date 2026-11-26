@@ -27,6 +27,7 @@
       <a href="/admin/settings" {% if active == 'settings' %}class="on"{% endif %}>Settings</a>
     </nav>
     <div class="hright">
+      {% if update and update.available %}<a class="run upd" href="/admin#update" title="Version {{ update.latest }} is out; this is {{ update.version }}">{{ icon('download') }}<span class="label">Update to {{ update.latest }}</span></a>{% endif %}
       {% if status.running %}<a class="run" href="/admin" title="{{ status.phase }}"><span class="dot"></span><span class="label">{{ status.phase }}</span></a>{% endif %}
       <a class="iconbtn logout" href="/logout" title="Log out">{{ icon('logout') }}</a>
       <details class="mobnav">

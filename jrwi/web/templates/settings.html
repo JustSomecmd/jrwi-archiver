@@ -60,7 +60,11 @@
     <div class="hint">Used in the podcast feed: <code>/api/feed.xml?token=…</code></div>
     <label for="nu">Notification URL</label>
     <input id="nu" type="url" name="notify_url" value="{{ s.notify_url }}" placeholder="https://ntfy.sh/your-topic or a Discord webhook">
-    <div class="hint">Gets a message for new posts and for problems such as a failed login.</div>
+    <div class="hint">Gets a message for new posts, for problems such as a failed login, and once for each new
+      version of the archiver.</div>
+    <label class="check"><input type="checkbox" name="update_check" {% if s.update_check %}checked{% endif %}> Tell me when a new version of the archiver is out</label>
+    <div class="hint">Once a day the archiver asks GitHub which versions of its image there are, and what changed.
+      Nothing about the archive is sent. A new version shows on the admin page and next to the menu.</div>
     <label for="wl">Mark an episode watched with this many minutes left</label>
     <input id="wl" type="number" step="0.5" min="0" max="60" name="watched_minutes_left" value="{{ s.watched_minutes_left }}">
     <div class="hint">For the web app here, and for apps that leave it to the archive. Shorter videos are marked

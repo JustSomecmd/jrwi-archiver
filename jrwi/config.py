@@ -51,6 +51,7 @@ DEFAULTS: dict = {
     "comment_refresh_days": 30,    # re-read comments on posts newer than this every check
     "request_delay": 1.5,          # seconds between page requests to the site
     "notify_url": "",              # ntfy topic URL or Discord webhook
+    "update_check": True,          # ask GitHub once a day whether a newer version is out (since 0.14.12)
     "public_url": "",              # how the app and podcast apps reach this server, for the RSS feed
     "ta_url": "",                  # TubeArchivist, such as http://tubearchivist:8000
     "ta_token": "",                # its API token (its Settings page)

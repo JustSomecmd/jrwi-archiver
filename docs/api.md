@@ -1,4 +1,4 @@
-# JRWI archiver API (contract v0.29)
+# JRWI archiver API (contract v0.30)
 
 This is the same text as the contract part of the integration docs in the user's "Multimedia Server" project, `claude/jrwi-archiver-integration-contract.md`; the index, `claude/jrwi-archiver-integration.md`, lists the other parts. Everything in it is in the service since 0.12.0.
 
@@ -30,7 +30,8 @@ This is the same text as the contract part of the integration docs in the user's
 - **v0.27:** the transcript's answer gains `timeline`, which timeline its times are in: `audio`, `video` (the item's video, archived or on YouTube) or `youtube`. The YouTube post of an episode whose archived video is kept (not handed over) gets its lines in its own timeline, `youtube`, once the archiver has lined the two videos up through TubeArchivist's copy (the Tubedroid chat's suggestion 13, 2026-11-23); until then, and when they can't be lined up, in the archived video's, `video`, as before. Lines heard from an archived video that has since been handed over are moved by the gap the hand-over measured, until the episode is heard again from the YouTube video. In the service since 0.14.8. Since 0.14.9 a YouTube `video` gains `size`, the size of TubeArchivist's copy, and its `duration` comes from TubeArchivist when the site gives none (it never seems to), once TubeArchivist is connected and has the video; both are asked at each check.
 - **v0.28:** for computers hearing episodes (the Winchivist chat's asks, 2026-11-24). A job can be claimed before it's heard (`POST /api/transcripts/jobs/{postId}/claim`, for 30 minutes unless renewed), so the server's own timing and other computers leave it alone; jobs gain `claimed`, who is hearing them and until when, the server's own hearing included. `GET /api/transcripts/program` gives the PC program with the API token, and the ping gives its version (`pc_program`), as does each job (`program`). A job's `archiver` is the archiver's version again (from 0.14.5 to 0.14.9 it was `2`, the version of how transcripts are read). Feature names `transcript_claims` and `transcript_program`. The PC program (1.4) claims each episode it hears, prints its progress as JSON lines with `--json`, and replaces itself with the archiver's copy with `update`. In the service since 0.14.10.
 - **v0.29:** the transcript's answer gains `shift`: how many seconds later the episode's lines are shown, set by hand on its admin page for an episode whose lines run a little early or late (0 when not set); the lines come already moved. Also since 0.14.11, a line that begins after a pause starts where its first word likely begins, as the speech model often starts such a word early (it's moved half a second at most), and words not heard at the start of a line count at the episode's own pace of speech; every transcript is matched again by itself to its words already heard. In the service since 0.14.11.
-- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there. A ping without `watched` (before 0.11.0) means a save without `finished` counts as `finished: false`, so apps keep their own rule there. A missing `transcript` means no transcript; a missing `background` means nothing runs in the background. A ping without `transcript_claims` (before 0.14.10) means jobs can't be claimed and have no `claimed`; without `transcript_program`, the PC program is only on Admin > Transcripts, behind the web app's password. A missing `shift` means 0.
+- **v0.30:** the status gains `update`: whether a newer version of the archiver has been published, which the archiver asks GitHub's container registry once a day, with what changed (see Status). `null` when that's switched off in the archiver's Settings. In the service since 0.14.12.
+- **Compatibility:** apps treat a missing `sync` as an offset of 0, and a missing part `duration` as unknown. A v0.1 server still works, with positions shared at the same timestamp. A missing `season` means season 1. A missing `tabs` means just `tab`; a missing `image` means `banner`, then `poster`. A missing `seasons` means one season; a missing `places` means only `show` with `tabs`. A missing `handed_over` or `removed_from_site` means no. Before 0.9.0 the files endpoints answer `404`; apps then use the item's `images`, `attachments` and `documents`. A missing `step` or `progress.unit` means apps show `phase` and `done` of `total`, as before. A ping without `features` (before 0.9.7) means none of v0.17's endpoints are there, and `tag` would be ignored. A missing `author.id` means it isn't known. A missing `published_at` or `folder` means `null`. A ping without `reparse` or `podcast` (before 0.10.1) means those endpoints aren't there. A ping without `watched` (before 0.11.0) means a save without `finished` counts as `finished: false`, so apps keep their own rule there. A missing `transcript` means no transcript; a missing `background` means nothing runs in the background. A ping without `transcript_claims` (before 0.14.10) means jobs can't be claimed and have no `claimed`; without `transcript_program`, the PC program is only on Admin > Transcripts, behind the web app's password. A missing `shift` means 0. A missing `update` means it isn't known whether a newer version is out.
 
 **General rules**
 - **Auth:** every request needs `Authorization: Token <key>`. The token is on the web app's Settings page. Players that can't set headers can add `?token=<key>` to the address instead.
@@ -44,7 +45,7 @@ This is the same text as the contract part of the integration docs in the user's
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.14.11", "contract": "0.29", "features": [...]}` (Ping, below). Needs no token. |
+| `GET /api/ping` | `{"name": "jrwi-archiver", "version": "0.14.12", "contract": "0.30", "features": [...]}` (Ping, below). Needs no token. |
 | `GET /api/status` | Archiver state (below) |
 | `POST /api/check` | Starts a check. `?full=true` reads the whole feed. `202` when started, `409` if one is running. |
 | `POST /api/reparse` | (v0.20) Re-reads the saved pages with the current parsers, as the admin page's Re-read saved pages does: `202` with `{"started": true}`, or `409` when a check or a re-read is running. It runs as its own job, with `step` `reparse` in the status, and `POST /api/stop` stops it. |
@@ -90,7 +91,7 @@ Item lists leave out posts above the user's tier. Add `include_locked=true` to i
 **Ping (v0.17):** what the archiver has, so apps can ask for only that, once per session:
 
 ```json
-{"name": "jrwi-archiver", "version": "0.14.11", "contract": "0.29",
+{"name": "jrwi-archiver", "version": "0.14.12", "contract": "0.30",
  "features": ["post_progress", "tags", "continue", "stop", "feed", "stats", "reparse", "podcast", "watched",
               "transcript", "transcript_jobs", "transcript_claims", "transcript_program"],
  "watched_left": 120.0, "pc_program": "1.4"}
@@ -188,7 +189,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
  "timed_with": "small.en", "found": 0.794, "source": "server", "heard_with": ["small.en"],
  "sound": {"post_id": 298, "timeline": "audio", "size": 187654321, "duration": 11695.0, "url": "/api/audio/298",
            "name": "Through the Fire.m4a", "source": "archive"},
- "hotwords": null, "archiver": "0.14.11", "program": "1.4", "claimed": null,
+ "hotwords": null, "archiver": "0.14.12", "program": "1.4", "claimed": null,
  "hearing": {"chunk": 600.0, "overlap": 10.0, "language": "en", "beam_size": 1, "word_timestamps": true,
              "vad_filter": true, "condition_on_previous_text": false}}
 ```
@@ -239,7 +240,9 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
  "last_check_started": "2026-11-20T11:19:59+00:00", "last_check_finished": "2026-11-20T11:20:00+00:00",
  "next_check": "2026-11-20T15:29:00+00:00", "last_result": "ok", "message": null, "login_ok": true,
  "counts": {"items": 2104, "archived": 2001, "locked": 87, "problems": 3},
- "disk": {"archive_bytes": 912345678901, "free_bytes": 2345678901234}}
+ "disk": {"archive_bytes": 912345678901, "free_bytes": 2345678901234},
+ "update": {"version": "0.14.11", "latest": "0.14.12", "available": true, "checked": "2026-11-26T14:02:00+00:00",
+            "notes": [{"version": "0.14.12", "text": "a notice when a new version is out; the image is scanned for known vulnerabilities (contract v0.30)"}]}}
 ```
 
 - **`last_result`:** one of `ok`, `login_failed`, `blocked`, `error` or `stopped`.
@@ -248,6 +251,7 @@ Locked posts are left out unless `include_locked=true`. A page holds up to 50 po
 - **`phase` and `detail`:** the same in words, for showing as they are; the wording can change between versions. `phase` says what the check is doing, such as "Saving new and changed posts" or "Reading the whole members feed" on a full check. `detail` says which post or page, and what part of it: "Page 3: 60 posts read, 2 new", "Through the Fire | Riptide #136 · reading the post", "· downloading the video, 42% of ~4.1 GB", "· saving its comments". Since v0.16; before, they were shorter, such as "archiving posts".
 - **`progress` (`current` since v0.6, `unit` since v0.16):** `done` of `total` in the current step. `unit` says what's counted: `post`, `episode` or `page`, or `null`. The one being worked on is number `done + 1`, so the web app shows "post 3 of 12". `current` is how far the file downloading now has got, from 0 to 1, or `null`. A bar can show `(done + current) / total`. When `total` is 0 the step has no known length yet, such as while reading the feed.
 - **Re-reading saved pages** (`step` `reparse`) runs on its own, not as part of a check: by itself after an update that reads pages differently, before the next check, from the admin page, or since v0.20 with `POST /api/reparse`.
+- **`update` (v0.30):** whether a newer version of the archiver is out, or `null` while looking for one is off in the archiver's Settings (on unless changed). `version` is this archiver's, `latest` the newest whose image has been published (`null` before the first look, a minute after the archiver starts), `available` whether it's newer than `version`, `checked` when the archiver last asked (once a day), and `notes` what changed in each version since this one, oldest first, from the titles of the archiver's release commits (empty when they couldn't be read). The web app shows the same on its admin page and next to its menu, and sends it once to the notification address in Settings. Apps can show it on their archiver page; updating stays the user's job, on the server.
 - **`background` (v0.23):** work the archiver does in the background, now timing transcripts: `{"step": "transcripts", "phase": "Timing transcripts", "detail": "Paid In Blood | Riptide #134 · hearing, 42%", "progress": {...}}`, or `null`. It isn't a check: it doesn't set `running`, and Check now and `POST /api/check` work as ever. Since service 0.13.0 it carries on while a check runs, so `background` and `running: true` can come together; before, a check took over from it, and it carried on afterwards from where it was. `POST /api/stop` doesn't stop it; the admin page's Pause transcripts does, until the next check. When it runs is set in the archiver's Settings (by hand only, between set hours, or as soon as there's something new); the status only reports it.
 
 ### Show

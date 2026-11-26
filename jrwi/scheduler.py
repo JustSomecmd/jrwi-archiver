@@ -9,7 +9,7 @@ import shutil
 import threading
 from datetime import datetime, timedelta, timezone
 
-from . import memory, podcast
+from . import memory, podcast, updates
 from .crawler import Archiver, Status
 from .transcripts import ModelProblem, Transcripts, Yielded
 from .site.parse import PARSER_VERSION
@@ -51,7 +51,9 @@ class Scheduler:
         self.transcripts_paused = False      # paused by hand until the next check
         self.transcripts_manual = False      # "Time transcripts now": until all are done, whatever the schedule
         self._carry_over_switch()
+        self.updates_wake = threading.Event()   # Check for a new version, on the admin page
         self.thread = threading.Thread(target=self._loop, name="jrwi-scheduler", daemon=True)
+        self.updates_thread = threading.Thread(target=self._updates_loop, name="jrwi-updates", daemon=True)
         self.bg_thread = threading.Thread(target=self._bg_loop, name="jrwi-background", daemon=True)
 
     def start(self) -> None:
@@ -61,6 +63,7 @@ class Scheduler:
             log.info("a check was cut short when the archiver last stopped; it's recorded as stopped")
         self.thread.start()
         self.bg_thread.start()
+        self.updates_thread.start()
 
     def shut_down(self) -> None:
         """The archiver is stopping (an update, or the container stopping): a check that's running can't finish,
@@ -246,6 +249,18 @@ class Scheduler:
             except Exception:
                 log.exception("the background work failed")
                 self.bg_wake.wait(60)
+
+    def _updates_loop(self) -> None:
+        """Whether a newer version is out: a minute after starting, then once a day (since 0.14.12)."""
+        self.updates_wake.wait(60)
+        while True:
+            self.updates_wake.clear()
+            if self.db.setting("update_check"):
+                try:
+                    updates.check(self.db)
+                except Exception:
+                    log.exception("checking for a new version failed")
+            self.updates_wake.wait(updates.EVERY_HOURS * 3600 * random.uniform(0.95, 1.05))
 
     def feed_due(self) -> bool:
         minutes = float(self.db.setting("feed_minutes") or 0)

@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 
+# upgrade: Debian's security fixes since the Python image was built
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends ffmpeg poppler-utils ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 

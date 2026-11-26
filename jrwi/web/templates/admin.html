@@ -3,6 +3,13 @@
 {% block title %}Admin · JRWI archive{% endblock %}
 {% block content %}
 <h1>Admin</h1>
+{% if update and update.available %}
+  <div class="notice update-notice" id="update">
+    <b>Version {{ update.latest }} of the archiver is out.</b> This server runs {{ update.version }}.
+    {% if update.notes %}<ul class="small">{% for n in update.notes %}<li><b>{{ n.version }}</b>: {{ n.text }}</li>{% endfor %}</ul>{% endif %}
+    <div class="small">To update, run this in the folder with your compose file: <code>{{ update.command }}</code></div>
+  </div>
+{% endif %}
 {% if not configured %}
   <div class="notice">Add your jrwishow.com email and password in <a href="/admin/settings">Settings</a> before the first check.</div>
 {% endif %}
@@ -214,5 +221,15 @@
     {{ tx.last.placed }} of {{ tx.last.placed + tx.last.unplaced }} lines placed; {{ (tx.last.found * 100) | round(0) | int }}%
     of the transcript's words were heard.{% endif %}</p>
   {% endif %}
+</div>
+<div class="panel" id="version">
+  <h3>Version</h3>
+  <p class="small">This is version <b>{{ version }}</b> of the archiver.
+  {% if not update %}Looking for new versions is off in <a href="/admin/settings">Settings</a>.
+  {% elif update.available %}<b>{{ update.latest }}</b> is out: see the top of this page.
+  {% elif update.latest %}It's the newest.{% endif %}
+  {% if update and update.checked %}<span class="muted">Asked <span data-when-at="{{ update.checked }}">{{ update.checked }}</span>; asked again once a day.</span>{% endif %}</p>
+  {% if update and update.error %}<p class="small bad">{{ update.error }}</p>{% endif %}
+  <form method="post" action="/admin/updates/check"><button class="ghost">Look for a new version now</button></form>
 </div>
 {% endblock %}
